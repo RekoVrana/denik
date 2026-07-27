@@ -979,7 +979,7 @@ function pgOrganizace() {
           <td><span class="uav" style="margin-right:6px">${ini(u)}</span>${esc(fullName(u))}</td>
           <td class="muted">${esc(u.skupina || '—')}</td>
           <td><span class="badge ${a.akce === 'Příchod' ? 'b-ok' : 'b-int'}">${a.akce}</span></td>
-          <td>${esc((proj(a.pid) || {}).name || '')}</td>
+          <td>${esc((proj(a.pid) || {}).name || a.projName || '')}</td>
           <td>${fmtISO(a.date)} ${a.time}</td>
           <td>${a.gps == null ? '<span class="muted">bez GPS</span>' : a.gps > TOL ? `<b style="color:var(--red)">⚠ ${a.gps.toLocaleString('cs')} m</b>` : `<span class="muted">${a.gps} m</span>`}</td>
           <td>${a.selfie ? `<img src="${a.selfie}" style="width:34px;height:34px;border-radius:50%;object-fit:cover;cursor:pointer" onclick="openPhoto('','ověřovací foto',this.parentElement)">` : a.manual ? '<span class="badge b-wait">admin</span>' : '<b style="color:var(--red)">chybí</b>'}</td>
@@ -1143,6 +1143,7 @@ async function vpPapir(id) {
 /* ---- Reporty — hodiny z docházky ---- */
 function hoursFromAttendance(from, to) {
   // páruje Příchod/Odchod po dnech: {userDocId: {pid: {h, dni, incomplete}}}
+  const toMin = t => { const p = String(t || '').split(':').map(Number); return (p[0] || 0) * 60 + (p[1] || 0); };
   const byKey = {};
   S.attendance.filter(a => a.date >= from && a.date <= to).forEach(a => {
     const k = a.userDocId + '|' + a.pid + '|' + a.date;
@@ -1151,13 +1152,12 @@ function hoursFromAttendance(from, to) {
   const out = {};
   Object.entries(byKey).forEach(([k, recs]) => {
     const [udi, pid] = k.split('|');
-    recs.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
-    const first = recs.find(r => r.akce === 'Příchod'), last = recs.slice().reverse().find(r => r.akce === 'Odchod');
+    const prichody = recs.filter(r => r.akce === 'Příchod').map(r => toMin(r.time));
+    const odchody = recs.filter(r => r.akce === 'Odchod').map(r => toMin(r.time));
     out[udi] = out[udi] || {};
     out[udi][pid] = out[udi][pid] || { h: 0, dni: 0, incomplete: 0 };
-    if (first && last && last.time > first.time) {
-      const [h1, m1] = first.time.split(':').map(Number), [h2, m2] = last.time.split(':').map(Number);
-      out[udi][pid].h += (h2 * 60 + m2 - h1 * 60 - m1) / 60;
+    if (prichody.length && odchody.length && Math.max(...odchody) > Math.min(...prichody)) {
+      out[udi][pid].h += (Math.max(...odchody) - Math.min(...prichody)) / 60;
       out[udi][pid].dni++;
     } else { out[udi][pid].incomplete++; out[udi][pid].dni++; }
   });
