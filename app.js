@@ -253,11 +253,16 @@ function viewNotConfigured() {
 function initAuth() {
   S.authState = 'loading';
   auth.onAuthStateChanged(async u => {
+    if (S.bootstrapping) return; // založení systému právě probíhá — nechat doSetup doběhnout
     clearSubs();
     S.authUser = u; S.meAuth = null; S.me = null;
     if (u) {
       try {
-        const d = await db.collection('users_auth').doc(u.uid).get();
+        let d = await db.collection('users_auth').doc(u.uid).get();
+        if (!d.exists) { // krátké čekání — zápis role mohl ještě probíhat
+          await new Promise(r => setTimeout(r, 1500));
+          d = await db.collection('users_auth').doc(u.uid).get();
+        }
         if (d.exists) {
           S.meAuth = d.data();
           const me = await db.collection('users').doc(S.meAuth.userDocId).get();
@@ -332,15 +337,41 @@ async function doWorkerLogin() {
 async function doSetup() {
   const name = $('#su-name').value.trim(), email = $('#su-email').value.trim(), pass = $('#su-pass').value;
   if (!name || !email || pass.length < 6) { lerr('Vyplň jméno, e-mail a heslo (min. 6 znaků).'); return; }
+  S.bootstrapping = true;
   try {
-    const cred = await auth.createUserWithEmailAndPassword(email, pass);
+    let cred;
+    try {
+      cred = await auth.createUserWithEmailAndPassword(email, pass);
+    } catch (e) {
+      if (e.code === 'auth/email-already-in-use') {
+        // účet už existuje (např. z předchozího pokusu) — přihlásíme se a dokončíme založení
+        cred = await auth.signInWithEmailAndPassword(email, pass);
+      } else throw e;
+    }
     const [jmeno, ...rest] = name.split(' ');
-    const udoc = await db.collection('users').add({ jmeno, prijmeni: rest.join(' '), email, kod: '001', typ: { kanc: 1, teren: 1, inv: 0, sub: 0 }, role: 'Admin · vedení', skupina: '', active: true, authEmail: email, uid: cred.user.uid, notU: 1, notD: 1 });
-    await db.collection('users_auth').doc(cred.user.uid).set({ role: 'admin', userDocId: udoc.id, name });
-    await db.collection('roster').doc(udoc.id).set({ jmeno, prijmeni: rest.join(' '), authEmail: email, role: 'admin', popis: 'vedení' });
+    // znovupoužij případný users doc z dřívějšího pokusu (a ukliď duplicity)
+    const dup = await db.collection('users').where('email', '==', email).get();
+    let udocId;
+    if (dup.docs.length) {
+      udocId = dup.docs[0].id;
+      await db.collection('users').doc(udocId).update({ jmeno, prijmeni: rest.join(' '), authEmail: email, uid: cred.user.uid, active: true });
+      for (const d of dup.docs.slice(1)) await d.ref.delete().catch(() => {});
+    } else {
+      const udoc = await db.collection('users').add({ jmeno, prijmeni: rest.join(' '), email, kod: '001', typ: { kanc: 1, teren: 1, inv: 0, sub: 0 }, role: 'Admin · vedení', skupina: '', active: true, authEmail: email, uid: cred.user.uid, notU: 1, notD: 1 });
+      udocId = udoc.id;
+    }
+    await db.collection('users_auth').doc(cred.user.uid).set({ role: 'admin', userDocId: udocId, name });
+    await db.collection('roster').doc(udocId).set({ jmeno, prijmeni: rest.join(' '), authEmail: email, role: 'admin', popis: 'vedení' });
     await db.collection('config').doc('app').set({ setupDone: true, createdAt: FV(), version: 1 });
     toast('Systém založen ✓ Vítej!');
-  } catch (e) { lerr(e.code === 'auth/email-already-in-use' ? 'Tento e-mail už má účet — přihlas se.' : 'Chyba: ' + e.message); }
+    S.bootstrapping = false;
+    location.reload();
+  } catch (e) {
+    S.bootstrapping = false;
+    lerr(e.code === 'auth/wrong-password' || e.code === 'auth/invalid-credential'
+      ? 'Účet s tímto e-mailem už existuje, ale heslo nesedí. Zadej stejné heslo jako při prvním pokusu.'
+      : 'Chyba: ' + e.message);
+  }
 }
 function doLogout() { auth.signOut(); }
 
