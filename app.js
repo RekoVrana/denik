@@ -739,19 +739,30 @@ function gpsFromHere(pid) {
     toast('GPS nastavena podle aktuální polohy ✓');
   }, () => toast('Polohu se nepodařilo zjistit'), { enableHighAccuracy: true, timeout: 10000 });
 }
+// FIX: průběh (%) a fáze se přepočítají z milníků při každé změně.
+// Vzorec: hotový milník = plná váha, probíhající = poloviční. Fáze = první probíhající milník;
+// když jsou všechny hotové → „Dokončeno". Bez milníků se průběh nemění (zůstává ruční).
+function msRecalc(ms, p) {
+  if (!ms || !ms.length) return {};
+  const done = ms.filter(m => m.s === 'done').length, now = ms.filter(m => m.s === 'now').length;
+  const progress = Math.round((done + now * 0.5) / ms.length * 100);
+  const firstNow = ms.find(m => m.s === 'now');
+  const phase = firstNow ? firstNow.t : (done === ms.length ? 'Dokončeno' : (p.phase || ''));
+  return { progress, phase };
+}
 async function cycleMile(pid, i) {
   const p = proj(pid); const ms = (p.milestones || []).slice();
   ms[i].s = ms[i].s === 'next' ? 'now' : ms[i].s === 'now' ? 'done' : 'next';
-  await db.collection('projects').doc(pid).update({ milestones: ms });
+  await db.collection('projects').doc(pid).update({ milestones: ms, ...msRecalc(ms, p) });
 }
 async function addMile(pid) {
   const t = $('#mile-t').value.trim(); if (!t) return;
-  const p = proj(pid);
-  await db.collection('projects').doc(pid).update({ milestones: [...(p.milestones || []), { t, s: 'next' }] });
+  const p = proj(pid); const ms = [...(p.milestones || []), { t, s: 'next' }];
+  await db.collection('projects').doc(pid).update({ milestones: ms, ...msRecalc(ms, p) });
 }
 async function delMile(pid, i) {
   const p = proj(pid); const ms = (p.milestones || []).slice(); ms.splice(i, 1);
-  await db.collection('projects').doc(pid).update({ milestones: ms });
+  await db.collection('projects').doc(pid).update({ milestones: ms, ...msRecalc(ms, p) });
 }
 async function addNote(pid) {
   const t = $('#pn-t').value.trim(); if (!t) { toast('Napiš text poznámky'); return; }
@@ -1373,13 +1384,15 @@ async function saveUser() {
     typ: { kanc: typKey === 'kanc' ? 1 : 0, teren: (typKey === 'kanc' || typKey === 'teren' || typKey === 'sub') ? 1 : 0, inv: typKey === 'inv' ? 1 : 0, sub: typKey === 'sub' ? 1 : 0 },
     role: $('#nu-r').value.trim(), skupina: $('#nu-s').value === 'Bez skupiny' ? '' : $('#nu-s').value, active: edit ? edit.active !== false : true
   };
+  // FIX: sazby přečíst z formuláře PŘED zápisem do users — await níže spustí onSnapshot render(),
+  // který formulář překreslí a vyprázdní, takže se sazba nikdy neuložila (a existující se mazala).
+  const shEl = $('#nu-sh'), scEl = $('#nu-sc');
+  const shVal = shEl ? parseFloat(shEl.value) : null, scVal = scEl ? parseFloat(scEl.value) : null;
   let docId;
   if (edit) { await db.collection('users').doc(edit.id).update(data); docId = edit.id; }
   else { const ref = await db.collection('users').add({ ...data, createdAt: FV() }); docId = ref.id; }
-  const shEl = $('#nu-sh'), scEl = $('#nu-sc');
   if (shEl) {
-    const sh = parseFloat(shEl.value), sc = parseFloat(scEl.value);
-    if (sh) await db.collection('sazby').doc(docId).set(sc ? { h: sh, c: sc } : { h: sh });
+    if (shVal) await db.collection('sazby').doc(docId).set(scVal ? { h: shVal, c: scVal } : { h: shVal });
     else await db.collection('sazby').doc(docId).delete().catch(() => {});
   }
   goPage('uzivatele'); toast(edit ? 'Uživatel upraven ✓' : 'Uživatel přidán ✓ Přihlášení mu vytvoř tlačítkem 🔑');
