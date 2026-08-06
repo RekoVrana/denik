@@ -162,12 +162,12 @@ async function uploadDraftPhotos(p) {
 }
 
 /* ---------- záznamy: workflow ---------- */
-async function addEntry(pid, author, txt, persons) {
+async function addEntry(pid, author, txt, persons, date) {
   const p = proj(pid);
   const photos = await uploadDraftPhotos(p);
   const works = txt ? txt.split(/[\n]+|(?<=[.!?])\s+(?=[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ])/).map(s => s.trim().replace(/^[-•]\s*/, '')).filter(Boolean) : [];
   await db.collection('entries').add({
-    pid, date: isoToday(), createdAt: FV(), author, authorUid: S.authUser.uid,
+    pid, date: date || isoToday(), createdAt: FV(), author, authorUid: S.authUser.uid,
     persons: persons || 1, works: works.length ? works : ['(jen fotodokumentace)'],
     internal: '', client: txt || 'Fotodokumentace z průběhu prací.', status: 'pending', photos
   });
@@ -807,12 +807,26 @@ function pgDenik() {
   return `
   <div class="strip"><h1>Denní záznamy</h1><span class="sp"></span>
     ${fp ? `<div class="proj"><b>${esc(fp.name)}</b><br><small>${esc(fp.cn)}</small></div>` : ''}
+    <button class="btn ghost" onclick="S.printOpen=!S.printOpen;render()">🖨 TISK / PDF</button>
     <button class="btn amber" onclick="goPage('novy')">➕ PŘIDAT</button></div>
   <div class="sectabs">
     <div class="t active">📓 Denní záznamy</div>
     ${f ? `<div class="t" onclick="S.adminFilter=null;render()">✕ Zrušit filtr projektu</div>` : ''}
   </div>
   <main>
+    ${S.printOpen ? `
+    <div class="card">
+      <h3>🖨 Tisk / export deníku do PDF</h3>
+      <div class="frow">
+        <div><label>Projekt</label><select id="pr-p">${S.projects.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', 'cs')).map(p => `<option value="${p.id}" ${(f || '') === p.id ? 'selected' : ''}>${esc(p.name)} (${esc(p.cn)})</option>`).join('')}</select></div>
+        <div><label>Verze</label><select id="pr-v"><option value="klient">Klientská — jen schválené zápisy</option><option value="komplet">Kompletní — vše včetně interních</option></select></div>
+      </div>
+      <div class="frow">
+        <div><label>Od (nepovinné)</label><input type="date" id="pr-f"></div>
+        <div><label>Do (nepovinné)</label><input type="date" id="pr-t"></div>
+      </div>
+      <div class="aprv"><button class="btn amber" onclick="printDenik()">🖨 Vygenerovat</button><span class="muted" style="align-self:center">otevře se náhled — ulož jako PDF nebo vytiskni</span></div>
+    </div>` : ''}
     <div class="tablecard">
       <div class="tabletools"><div class="search"><input placeholder="Hledat v záznamech" value="${esc(S.searchQ)}" oninput="S.searchQ=this.value;render();this.focus();this.setSelectionRange(this.value.length,this.value.length)"></div></div>
       <div style="overflow-x:auto"><table>
@@ -926,6 +940,63 @@ function pgSchvaleni() {
   </main>`;
 }
 
+/* ---- Tisk / PDF export deníku ---- */
+function printDenik() {
+  const pid = $('#pr-p').value, verze = $('#pr-v').value, from = $('#pr-f').value, to = $('#pr-t').value;
+  const p = proj(pid); if (!p) { toast('Vyber projekt'); return; }
+  let list = S.entries.filter(e => e.pid === pid);
+  if (verze === 'klient') list = list.filter(e => e.status === 'approved');
+  if (from) list = list.filter(e => e.date >= from);
+  if (to) list = list.filter(e => e.date <= to);
+  list.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  if (!list.length) { toast('Žádné záznamy pro zvolený výběr'); return; }
+  const perioda = (from || to) ? `${from ? fmtISO(from) : '…'} – ${to ? fmtISO(to) : '…'}` : `${fmtISO(list[0].date)} – ${fmtISO(list[list.length - 1].date)}`;
+  const bloky = list.map(e => `
+    <div class="zaznam">
+      <div class="zhead"><b>${fmtISOFull(e.date)}</b><span>${esc(e.author)}${e.persons ? ' · osob na staveništi: ' + e.persons : ''}${e.status === 'approved' ? '' : e.status === 'internal' ? ' · INTERNÍ' : ' · neschváleno'}</span></div>
+      <ul>${(e.works || []).map(w => `<li>${esc(w)}</li>`).join('')}</ul>
+      ${verze === 'komplet' && e.internal ? `<div class="interni">Interní poznámka: ${esc(e.internal)}</div>` : ''}
+      ${(e.photos || []).filter(ph => verze === 'komplet' || ph.status === 'approved').length ? `<div class="fotky">${(e.photos || []).filter(ph => verze === 'komplet' || ph.status === 'approved').map(ph => `<img src="${ph.thumb}">`).join('')}</div>` : ''}
+    </div>`).join('');
+  const html = `<!DOCTYPE html><html lang="cs"><head><meta charset="utf-8"><title>Stavební deník — ${esc(p.name)}</title>
+  <style>
+    body{font-family:Georgia,'Times New Roman',serif;color:#111;margin:40px;font-size:13px;line-height:1.45}
+    h1{font-size:20px;margin:0 0 2px}h2{font-size:14px;font-weight:normal;margin:0 0 18px;color:#444}
+    .hlava{display:flex;justify-content:space-between;border-bottom:3px solid #1a3c5e;padding-bottom:12px;margin-bottom:6px}
+    .hlava .firma{text-align:right;font-size:11px;color:#333}
+    table.info{width:100%;border-collapse:collapse;margin:10px 0 20px;font-size:12px}
+    table.info td{border:1px solid #bbb;padding:5px 8px}table.info td:first-child{background:#f2f5f8;width:160px;font-weight:bold}
+    .zaznam{border:1px solid #ccc;border-radius:4px;padding:10px 14px;margin-bottom:10px;page-break-inside:avoid}
+    .zhead{display:flex;justify-content:space-between;border-bottom:1px solid #ddd;padding-bottom:5px;margin-bottom:6px}
+    .zhead span{color:#555;font-size:11.5px}
+    ul{margin:4px 0 4px 18px;padding:0}li{margin-bottom:2px}
+    .interni{background:#fdf6e3;border-left:3px solid #c9a227;padding:5px 8px;margin-top:6px;font-size:12px;white-space:pre-wrap}
+    .fotky{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}.fotky img{height:85px;border:1px solid #ccc;border-radius:3px}
+    .podpisy{display:flex;justify-content:space-between;margin-top:50px;page-break-inside:avoid}
+    .podpisy div{width:42%;border-top:1px solid #333;padding-top:6px;font-size:12px;text-align:center}
+    .pata{margin-top:26px;font-size:10px;color:#777;text-align:center}
+    @media print{body{margin:12mm}}
+  </style></head><body>
+  <div class="hlava">
+    <div><h1>STAVEBNÍ DENÍK${verze === 'klient' ? '' : ' — kompletní interní verze'}</h1><h2>${esc(p.name)} · zakázka ${esc(p.cn || '')}</h2></div>
+    <div class="firma"><b>Rekonstrukce Vrána s.r.o.</b><br>IČ: 198 53 572<br>Ještědská 121, Kunratice, 148 00 Praha 4<br>tel. 702 111 001 · info@rekovrana.cz</div>
+  </div>
+  <table class="info">
+    <tr><td>Stavba / adresa</td><td>${esc(p.address || '')}</td></tr>
+    <tr><td>Investor</td><td>${esc(p.client || '')}</td></tr>
+    <tr><td>Typ projektu</td><td>${esc(p.type || '')}</td></tr>
+    <tr><td>Období</td><td>${perioda} · ${list.length} denních záznamů</td></tr>
+  </table>
+  ${bloky}
+  <div class="podpisy"><div>za zhotovitele<br>(Rekonstrukce Vrána s.r.o.)</div><div>za objednatele<br>(${esc(p.client || 'investor')})</div></div>
+  <div class="pata">Vygenerováno ze systému Deník staveb Rekonstrukce Vrána · ${fmtISOFull(isoToday())}</div>
+  <script>window.addEventListener('load',()=>setTimeout(()=>window.print(),400))<\/script>
+  </body></html>`;
+  const w = window.open('', '_blank');
+  if (!w) { toast('Prohlížeč zablokoval nové okno — povol vyskakovací okna'); return; }
+  w.document.write(html); w.document.close();
+}
+
 /* ---- Nový záznam (admin) ---- */
 function pgNovy() {
   return `
@@ -936,8 +1007,11 @@ function pgNovy() {
       <select id="np">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)} (${esc(p.cn)})</option>`).join('')}</select>
       <label>Autor zápisu</label>
       <select id="na">${S.users.filter(u => u.active !== false && u.typ && (u.typ.teren || u.typ.kanc)).map(u => `<option ${S.me && u.id === S.me.id ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}</select>
-      <label>Počet osob na staveništi</label><input type="number" id="npers" value="1" min="1">
-      <label>Provedené práce — ${fmtISOFull(isoToday())}</label>
+      <div class="frow">
+        <div><label>Datum zápisu</label><input type="date" id="nd" value="${isoToday()}" max="${isoToday()}"></div>
+        <div><label>Počet osob na staveništi</label><input type="number" id="npers" value="1" min="1"></div>
+      </div>
+      <label>Provedené práce</label>
       <textarea id="nt" placeholder="Každá věta / řádek = jedna odrážka zápisu…"></textarea>
       <label>Fotky</label>
       <input type="file" id="nph" accept="image/*" multiple onchange="processPhotos(this.files)">
@@ -948,11 +1022,13 @@ function pgNovy() {
 }
 async function submitNew() {
   const pid = $('#np').value, author = $('#na').value, txt = $('#nt').value.trim(), pers = parseInt($('#npers').value) || 1;
+  const date = $('#nd') ? ($('#nd').value || isoToday()) : isoToday();
   if (!pid) { toast('Není vybraný projekt'); return; }
+  if (date > isoToday()) { toast('Datum zápisu nemůže být v budoucnosti'); return; }
   if (!txt && !S.draftPhotos.length) { toast('Napiš text nebo přidej fotku'); return; }
   $('#save-entry').disabled = true;
-  await addEntry(pid, author, txt, pers);
-  goPage('denik'); toast('Záznam uložen — čeká na schválení ✓');
+  await addEntry(pid, author, txt, pers, date);
+  goPage('denik'); toast(date === isoToday() ? 'Záznam uložen — čeká na schválení ✓' : 'Záznam za ' + fmtISO(date) + ' uložen — čeká na schválení ✓');
 }
 
 /* ---- Organizace — docházka ---- */
