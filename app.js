@@ -961,6 +961,12 @@ function pgOrganizace() {
   const f = S.orgFilter;
   let rows = S.attendance.slice();
   if (f === 'gps') rows = rows.filter(a => a.gps > TOL);
+  // filtr podle pracovníka a projektu
+  if (S.orgUser) rows = rows.filter(a => a.userDocId === S.orgUser);
+  if (S.orgProj) rows = rows.filter(a => a.pid === S.orgProj);
+  const attIds = new Set(S.attendance.map(a => a.userDocId));
+  const filtUsers = S.users.filter(u => (u.typ && u.typ.teren) || attIds.has(u.id))
+    .sort((a, b) => fullName(a).localeCompare(fullName(b), 'cs'));
   return `
   <div class="strip"><h1>Organizace — Záznamy docházky</h1><span class="sp"></span>
     <button class="btn amber" onclick="S.attFormOpen=!S.attFormOpen;render()">➕ PŘIDAT PRACOVNÍ DEN</button></div>
@@ -982,6 +988,19 @@ function pgOrganizace() {
       </div>
       <div class="aprv"><button class="btn amber" onclick="addAtt()">💾 ULOŽIT</button><span class="muted" style="align-self:center">označí se „opraveno administrátorem"</span></div>
     </div>` : ''}
+    <div class="card">
+      <div class="frow">
+        <div><label>Filtr — pracovník</label><select onchange="S.orgUser=this.value;render()">
+          <option value="">Všichni pracovníci</option>
+          ${filtUsers.map(u => `<option value="${u.id}" ${S.orgUser === u.id ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}
+        </select></div>
+        <div><label>Filtr — projekt</label><select onchange="S.orgProj=this.value;render()">
+          <option value="">Všechny projekty</option>
+          ${S.projects.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', 'cs')).map(p => `<option value="${p.id}" ${S.orgProj === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+        </select></div>
+      </div>
+      ${(S.orgUser || S.orgProj) ? `<div class="aprv"><button class="btn ghost sm" onclick="S.orgUser='';S.orgProj='';render()">✕ Zrušit filtr</button><span class="muted" style="align-self:center">zobrazeno ${rows.length} z ${S.attendance.length} záznamů</span></div>` : ''}
+    </div>
     <div class="tablecard">
       <div style="overflow-x:auto"><table>
         <tr><th>Terénní pracovník</th><th>Skupina</th><th>Činnost</th><th>Na projektu</th><th>Datum a čas</th><th>GPS odchylka</th><th>Foto</th></tr>
