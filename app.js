@@ -53,7 +53,7 @@ const S = {
   projDetailId: null, projDetailTab: 'info', newUserType: null, editUserId: null,
   ukolyView: 'seznam', orgFilter: 'vse', taskFormOpen: false, attFormOpen: false, vpFormOpen: false,
   repWorkers: [], repProjects: [], repLoaded: false, repFrom: isoToday().slice(0, 8) + '01', repTo: isoToday(),
-  workerProject: null, draftPhotos: [], uploading: 0,
+  workerProject: null, draftPhotos: [], draftAtts: [], uploading: 0, signFor: null, tplOpen: false,
   loginMode: 'teren', loginWorker: null,
   online: navigator.onLine, unsub: [],
   denikTab: 'zaznamy', searchQ: ''
@@ -103,7 +103,7 @@ const proj = id => S.projects.find(p => p.id === id);
 const userById = id => S.users.find(u => u.id === id);
 function entriesOf(pid) { return S.entries.filter(e => e.pid === pid); }
 function pendingEntries() { return S.entries.filter(e => e.status === 'pending'); }
-function isOverdue(t) { return t.stav !== 'hotovo' && t.term && t.term < isoToday(); }
+function isOverdue(t) { return t.stav !== 'hotovo' && t.stav !== 'sablona' && t.term && t.term < isoToday(); }
 const STAVY = { nove: 'Nové', probiha: 'Probíhá', kontrola: 'Ke kontrole', hotovo: 'Hotovo' };
 const STAVCOLOR = { nove: 'b-int', probiha: 'b-wait', kontrola: 'b-wait', hotovo: 'b-ok' };
 const VPSTAV = { navrh: ['b-int', '✏️ čeká na nacenění'], u_investora: ['b-wait', '⏳ u investora'], schvaleno: ['b-ok', '✓ schváleno'], zamitnuto: ['b-red', '✕ zamítnuto'], papir: ['b-ok', '✓ schváleno papírově'] };
@@ -161,16 +161,84 @@ async function uploadDraftPhotos(p) {
   return out;
 }
 
+/* ---------- přílohy záznamu ---------- */
+function processAtts(files) {
+  [...files].forEach(f => {
+    if (f.size > 15 * 1024 * 1024) { toast('Příloha ' + f.name + ' je moc velká (max 15 MB)'); return; }
+    const rd = new FileReader();
+    rd.onload = () => { (S.draftAtts = S.draftAtts || []).push({ name: f.name, mime: f.type || '', data: rd.result }); render(); };
+    rd.readAsDataURL(f);
+  });
+}
+async function uploadDraftAtts(p) {
+  const out = [];
+  for (const at of (S.draftAtts || [])) {
+    if (!CFG.scriptUrl || !S.online) { toast('⚠ Příloha ' + at.name + ' se nenahrála — Drive most / offline'); continue; }
+    try {
+      S.uploading++; render();
+      const j = await driveCall({ action: 'upload', folderId: p.driveFolderId || '', rootId: CFG.driveRootFolderId, cn: p.cn, client: p.client, date: isoToday(), name: at.name, data: at.data.split(',')[1], mime: at.mime || 'application/octet-stream' });
+      out.push({ name: at.name, driveId: j.fileId, mime: at.mime || '' });
+    } catch (e) { console.warn(e); toast('⚠ Příloha ' + at.name + ' se na Drive nenahrála'); }
+    finally { S.uploading--; }
+  }
+  S.draftAtts = [];
+  return out;
+}
+async function addAttsToEntry(eid, files) {
+  const list = [...files]; if (!list.length) return;
+  for (const f of list) {
+    const e = S.entries.find(x => x.id === eid); if (!e) return;
+    const p = proj(e.pid) || {};
+    if (f.size > 15 * 1024 * 1024) { toast('Moc velké (max 15 MB): ' + f.name); continue; }
+    const data = await new Promise(ok => { const r = new FileReader(); r.onload = () => ok(r.result); r.readAsDataURL(f); });
+    try {
+      S.uploading++; render();
+      const j = await driveCall({ action: 'upload', folderId: p.driveFolderId || '', rootId: CFG.driveRootFolderId, cn: p.cn, client: p.client, date: e.date, name: f.name, data: data.split(',')[1], mime: f.type || 'application/octet-stream' });
+      await db.collection('entries').doc(eid).update({ attachments: [...(e.attachments || []), { name: f.name, driveId: j.fileId, mime: f.type || '' }] });
+    } catch (err) { console.warn(err); toast('⚠ ' + f.name + ' se nenahrál (Drive most)'); }
+    finally { S.uploading--; render(); }
+  }
+}
+
+/* ---------- počasí (Open-Meteo, dle GPS projektu) ---------- */
+const WMO = { 0: 'jasno ☀️', 1: 'převážně jasno 🌤', 2: 'polojasno ⛅', 3: 'zataženo ☁️', 45: 'mlha 🌫', 48: 'mlha 🌫', 51: 'mrholení 🌦', 53: 'mrholení 🌦', 55: 'mrholení 🌧', 61: 'slabý déšť 🌦', 63: 'déšť 🌧', 65: 'silný déšť 🌧', 66: 'mrznoucí déšť 🌧', 67: 'mrznoucí déšť 🌧', 71: 'slabé sněžení 🌨', 73: 'sněžení 🌨', 75: 'silné sněžení ❄️', 77: 'sněhová zrna 🌨', 80: 'přeháňky 🌦', 81: 'přeháňky 🌧', 82: 'silné přeháňky ⛈', 85: 'sněhové přeháňky 🌨', 86: 'sněhové přeháňky ❄️', 95: 'bouřky ⛈', 96: 'bouřky s kroupami ⛈', 99: 'bouřky s kroupami ⛈' };
+async function fetchWeather(p, date) {
+  if (!p || !p.gps || !p.gps.lat || !S.online) return null;
+  try {
+    const u = 'https://api.open-meteo.com/v1/forecast?latitude=' + p.gps.lat + '&longitude=' + p.gps.lng + '&daily=weather_code,temperature_2m_min,temperature_2m_max,precipitation_sum&timezone=Europe%2FPrague&start_date=' + date + '&end_date=' + date;
+    const r = await fetch(u); const j = await r.json(); const d = j.daily;
+    if (!d || !d.time || !d.time.length) return null;
+    const srz = d.precipitation_sum[0];
+    return ((WMO[d.weather_code[0]] || '') + ' · ' + Math.round(d.temperature_2m_min[0]) + ' až ' + Math.round(d.temperature_2m_max[0]) + ' °C' + (srz ? ' · srážky ' + srz + ' mm' : '')).trim();
+  } catch (e) { return null; }
+}
+
+/* ---------- osoby na staveništi (z docházky) ---------- */
+function attOn(pid, date) {
+  const per = {};
+  S.attendance.filter(a => a.pid === pid && a.date === date).forEach(a => {
+    const k = a.userDocId || a.userName;
+    per[k] = per[k] || { name: a.userName || fullName(userById(a.userDocId) || {}) || '?', prichod: '', odchod: '' };
+    if (a.akce === 'Příchod') { if (!per[k].prichod || a.time < per[k].prichod) per[k].prichod = a.time; }
+    else { if (!per[k].odchod || a.time > per[k].odchod) per[k].odchod = a.time; }
+  });
+  return Object.values(per).sort((a, b) => a.name.localeCompare(b.name, 'cs'));
+}
+
 /* ---------- záznamy: workflow ---------- */
 async function addEntry(pid, author, txt, persons, date) {
   const p = proj(pid);
   const photos = await uploadDraftPhotos(p);
+  const attachments = await uploadDraftAtts(p);
   const works = txt ? txt.split(/[\n]+|(?<=[.!?])\s+(?=[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ])/).map(s => s.trim().replace(/^[-•]\s*/, '')).filter(Boolean) : [];
-  await db.collection('entries').add({
-    pid, date: date || isoToday(), createdAt: FV(), author, authorUid: S.authUser.uid,
+  const d = date || isoToday();
+  const ref = await db.collection('entries').add({
+    pid, date: d, createdAt: FV(), author, authorUid: S.authUser.uid,
     persons: persons || 1, works: works.length ? works : ['(jen fotodokumentace)'],
     internal: '', client: txt || 'Fotodokumentace z průběhu prací.', status: 'pending', photos
   });
+  if (attachments.length) await db.collection('entries').doc(ref.id).update({ attachments }).catch(() => {});
+  fetchWeather(p, d).then(w => { if (w) db.collection('entries').doc(ref.id).update({ weather: w }).catch(() => {}); });
 }
 async function approveEntry(id) {
   const e = S.entries.find(x => x.id === id); if (!e) return;
@@ -242,6 +310,7 @@ function render() {
   if (!S.authUser || !S.meAuth) { root.innerHTML = viewLogin(); return; }
   const role = S.meAuth.role;
   root.innerHTML = (role === 'admin') ? viewAdmin() : viewWorker();
+  if (S.signFor) setTimeout(sigInit, 0);
 }
 function viewNotConfigured() {
   return `<div class="login"><div class="lbox"><div class="lg">🏗 REKONSTRUKCE <em>VRÁNA</em></div>
@@ -504,7 +573,7 @@ function nastenkaUkoly() {
   const ke = S.tasks.filter(t => t.stav === 'kontrola');
   return `<main>
     <div class="stats">
-      <div class="stat" onclick="goPage('ukoly')"><span class="sic">📌</span><span class="st2">Všechny úkoly</span><span class="sn">${S.tasks.length}</span></div>
+      <div class="stat" onclick="goPage('ukoly')"><span class="sic">📌</span><span class="st2">Všechny úkoly</span><span class="sn">${S.tasks.filter(t => t.stav !== 'sablona').length}</span></div>
       <div class="stat"><span class="sic">⏰</span><span class="st2">Po termínu</span><span class="sn ${od.length ? 'warn' : ''}">${od.length}</span></div>
       <div class="stat"><span class="sic">🔍</span><span class="st2">Ke kontrole</span><span class="sn">${ke.length}</span></div>
       <div class="stat"><span class="sic">✅</span><span class="st2">Hotovo</span><span class="sn">${S.tasks.filter(t => t.stav === 'hotovo').length}</span></div>
@@ -654,8 +723,25 @@ function pgProjDetail() {
         <div class="photos">${list.map(ph => phTile(ph, false, ph.eid)).join('')}</div>`).join('') || '<div class="empty">Zatím žádná média.</div>'}
       <div class="note">Výchozí stav fotky je vždy „⏳ čeká" — k investorovi jde až po schválení (#31). Klik na fotku = otevřít, klik na štítek stavu = přepnout ⏳→✓→🔒. Plné rozlišení bydlí na Drive ve složce zakázky.</div>
     </div></main>`;
+  } else if (t === 'podklady') {
+    const docs = p.stavbaDocs || [];
+    body = `<main><div class="card">
+      <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— půdorysy, vizualizace, výkresy · vidí je i parta v mobilu</span></h3>
+      ${docs.map((d, i) => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${esc(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">zobrazit</span><span class="lnk" style="font-size:11px;margin-left:10px" onclick="event.stopPropagation();delStavbaDoc('${p.id}',${i})">✕</span></div>`).join('') || '<div class="empty">Zatím žádné podklady.</div>'}
+      <div class="formsec"><h4>➕ Nahrát soubor (PDF půdorys, vizualizace…)</h4>
+        <input type="file" id="sd-file" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple onchange="uploadStavbaDocs('${p.id}',this.files)">
+        <div class="note">${S.uploading ? '<b>Nahrávám…</b> ' : ''}Soubor se uloží do složky zakázky na Drive. Partě se zobrazí přímo v apce ve vestavěném prohlížeči (#36) — listování a zoom, bez stahování, i na telefonu.</div>
+      </div>
+      <div class="formsec"><h4>Nebo přidej soubor, který už na Drive je</h4>
+        <div class="frow">
+          <div><label>Název</label><input type="text" id="sd-title" placeholder="Půdorys 1. NP"></div>
+          <div><label>Drive ID nebo odkaz</label><input type="text" id="sd-id" placeholder="https://drive.google.com/file/d/…"></div>
+        </div>
+        <div class="aprv"><button class="btn amber sm" onclick="addStavbaDocLink('${p.id}')">💾 Přidat</button></div>
+      </div>
+    </div></main>`;
   } else if (t === 'ukoly') {
-    const tk = S.tasks.filter(x => x.pid === p.id);
+    const tk = S.tasks.filter(x => x.pid === p.id && x.stav !== 'sablona');
     body = `<main><div class="card">
       <h3>📌 Úkoly na projektu (${tk.length})</h3>
       ${tk.map(x => `<div class="urow"><span>${x.stav === 'hotovo' ? '✅' : isOverdue(x) ? '❗' : '📌'}</span><div><b>${esc(x.title)}</b><br><span class="muted">${esc(x.resp || '')} · termín ${fmtISO(x.term)}</span></div>
@@ -677,8 +763,9 @@ function pgProjDetail() {
   <div class="sectabs">
     <div class="t ${t === 'info' ? 'active' : ''}" onclick="S.projDetailTab='info';render()">ℹ️ Základní informace</div>
     <div class="t ${t === 'media' ? 'active' : ''}" onclick="S.projDetailTab='media';render()">🖼 Média</div>
+    <div class="t ${t === 'podklady' ? 'active' : ''}" onclick="S.projDetailTab='podklady';render()">📐 Podklady stavby (${(p.stavbaDocs || []).length})</div>
     <div class="t ${t === 'dokumenty' ? 'active' : ''}" onclick="S.projDetailTab='dokumenty';render()">📁 Dokumenty pro investora</div>
-    <div class="t ${t === 'ukoly' ? 'active' : ''}" onclick="S.projDetailTab='ukoly';render()">📌 Úkoly (${S.tasks.filter(x => x.pid === p.id && x.stav !== 'hotovo').length})</div>
+    <div class="t ${t === 'ukoly' ? 'active' : ''}" onclick="S.projDetailTab='ukoly';render()">📌 Úkoly (${S.tasks.filter(x => x.pid === p.id && x.stav !== 'hotovo' && x.stav !== 'sablona').length})</div>
     <div class="t ${t === 'poznamky' ? 'active' : ''}" onclick="S.projDetailTab='poznamky';render()">📝 Poznámky</div>
     <div class="t" onclick="S.adminFilter='${p.id}';goPage('denik')">📓 Stavební deník</div>
   </div>${body}`;
@@ -696,6 +783,33 @@ function pgProjDocs(p) {
       <div class="note">Smlouva, klientské PDF nabídky, vizualizace… Soubor zůstává na Drive, portál drží jen odkaz (#30). Investor si ho otevře přímo na portálu.</div>
     </div>
   </div></main>`;
+}
+async function uploadStavbaDocs(pid, files) {
+  const p = proj(pid); if (!p) return;
+  for (const f of [...files]) {
+    if (f.size > 15 * 1024 * 1024) { toast('Moc velké (max 15 MB): ' + f.name); continue; }
+    const data = await new Promise(ok => { const r = new FileReader(); r.onload = () => ok(r.result); r.readAsDataURL(f); });
+    try {
+      S.uploading++; render();
+      const j = await driveCall({ action: 'upload', folderId: p.driveFolderId || '', rootId: CFG.driveRootFolderId, cn: p.cn, client: p.client, date: isoToday(), name: f.name, data: data.split(',')[1], mime: f.type || 'application/octet-stream' });
+      const cur = (proj(pid).stavbaDocs) || [];
+      await db.collection('projects').doc(pid).update({ stavbaDocs: [...cur, { name: f.name, driveId: j.fileId, mime: f.type || '' }] });
+    } catch (e) { console.warn(e); toast('⚠ ' + f.name + ' se nenahrál (Drive most)'); }
+    finally { S.uploading--; render(); }
+  }
+  toast('Podklady nahrány ✓');
+}
+async function addStavbaDocLink(pid) {
+  const title = $('#sd-title').value.trim(); const raw = $('#sd-id').value.trim();
+  if (!title || !raw) { toast('Vyplň název i Drive odkaz'); return; }
+  const m = raw.match(/[-\w]{25,}/); if (!m) { toast('Nepoznávám Drive ID/odkaz'); return; }
+  const p = proj(pid);
+  await db.collection('projects').doc(pid).update({ stavbaDocs: [...(p.stavbaDocs || []), { name: title, driveId: m[0], mime: raw.toLowerCase().includes('pdf') ? 'application/pdf' : '' }] });
+  toast('Podklad přidán ✓');
+}
+async function delStavbaDoc(pid, i) {
+  const p = proj(pid); const docs = (p.stavbaDocs || []).slice(); docs.splice(i, 1);
+  await db.collection('projects').doc(pid).update({ stavbaDocs: docs });
 }
 async function addPortalDoc(pid) {
   const p = proj(pid);
@@ -851,6 +965,36 @@ function pgDenik() {
 
 /* ---- Detail dne ---- */
 function openDetail(id) { S.detail = id; render(); }
+/* ---- podpis záznamu (canvas) ---- */
+window._sigPaths = [];
+function sigCanvas() { return document.getElementById('sig-pad'); }
+function sigRedraw() {
+  const c = sigCanvas(); if (!c) return;
+  const x = c.getContext('2d'); x.clearRect(0, 0, c.width, c.height);
+  x.lineWidth = 2.2; x.lineCap = 'round'; x.lineJoin = 'round'; x.strokeStyle = '#16324c';
+  (window._sigPaths || []).forEach(p => { if (p.length < 2) return; x.beginPath(); x.moveTo(p[0][0], p[0][1]); p.slice(1).forEach(pt => x.lineTo(pt[0], pt[1])); x.stroke(); });
+}
+function sigInit() {
+  const c = sigCanvas(); if (!c || c._bound) { sigRedraw(); return; }
+  c._bound = true;
+  const pos = ev => { const r = c.getBoundingClientRect(); return [(ev.clientX - r.left) * c.width / r.width, (ev.clientY - r.top) * c.height / r.height]; };
+  c.onpointerdown = ev => { ev.preventDefault(); c.setPointerCapture(ev.pointerId); window._sigPaths.push([pos(ev)]); };
+  c.onpointermove = ev => { if (ev.buttons !== 1) return; ev.preventDefault(); const p = window._sigPaths[window._sigPaths.length - 1]; if (p) { p.push(pos(ev)); sigRedraw(); } };
+  sigRedraw();
+}
+function sigClear() { window._sigPaths = []; sigRedraw(); }
+async function sigSave(eid) {
+  const c = sigCanvas(); if (!c || !(window._sigPaths || []).some(p => p.length > 1)) { toast('Nejdřív se podepiš'); return; }
+  const jmeno = ($('#sig-name') && $('#sig-name').value.trim()) || '—';
+  await db.collection('entries').doc(eid).update({ podpis: { img: c.toDataURL('image/png'), jmeno, at: isoToday() } });
+  S.signFor = null; window._sigPaths = [];
+  toast('Podpis uložen ✓');
+}
+async function sigRemove(eid) {
+  await db.collection('entries').doc(eid).update({ podpis: firebase.firestore.FieldValue.delete() });
+  toast('Podpis odstraněn');
+}
+
 function pgDetail() {
   const e = S.entries.find(x => x.id === S.detail);
   if (!e) { S.detail = null; return pgDenik(); }
@@ -871,6 +1015,7 @@ function pgDetail() {
       <div>
         <div class="card">
           <div class="chip-author">👷 ${esc(e.author)} · ${e.persons || 1} os.</div>
+          ${e.weather ? `<div class="muted" style="margin:6px 0 2px">🌤 ${esc(e.weather)}</div>` : ''}
           <div style="display:flex;justify-content:space-between;align-items:center"><h3>Provedené práce</h3>${sBadge(e.status)}</div>
           <ul class="worklist">${(e.works || []).map(w => `<li>${esc(w)}</li>`).join('')}</ul>
           ${e.internal ? `<div class="inote">🔒 <b>Interní poznámka</b> (investor nikdy neuvidí): ${esc(e.internal)}
@@ -889,8 +1034,27 @@ function pgDetail() {
             ? `<div class="muted" style="margin-bottom:6px">Uprav před schválením — tohle uvidí klient:</div><textarea id="ct-${e.id}">${esc(e.client)}</textarea>
               <div class="aprv"><button class="btn ok" onclick="approveEntry('${e.id}')">✓ Schválit</button><button class="btn dark" onclick="keepInternalEntry('${e.id}')">🔒 Jen interní</button></div>`
             : e.status === 'approved'
-              ? `<div>${esc(e.client)}</div><div class="note" style="margin-top:10px">Investor tento text vidí na svém portálu ✓ ${e.approvedBy ? '· schválil(a) ' + esc(e.approvedBy) : ''}</div>`
+              ? `<div>${esc(e.client).replace(/\n/g, '<br>')}</div><div class="note" style="margin-top:10px">Investor tento text vidí na svém portálu ✓ ${e.approvedBy ? '· schválil(a) ' + esc(e.approvedBy) : ''}</div>`
               : `<div class="muted">Záznam je interní — investor jej nevidí.</div><div class="aprv"><button class="btn ok sm" onclick="db.collection('entries').doc('${e.id}').update({status:'pending'}).then(render)">↩ Vrátit ke schválení</button></div>`}
+        </div>
+        <div class="card">
+          <h3>👥 Osoby na staveništi <span class="muted" style="font-weight:400">— z docházky</span></h3>
+          ${(() => { const os = attOn(e.pid, e.date); return os.length ? os.map(o => `<div class="kv"><span>${esc(o.name)}</span><b>${o.prichod || '—'} – ${o.odchod || '—'}</b></div>`).join('') : '<div class="muted">K tomuto dni není v systému docházka.</div>'; })()}
+        </div>
+        <div class="card">
+          <h3>📎 Přílohy</h3>
+          ${(e.attachments || []).map(a => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${a.driveId}','${esc(a.name)}')"><span>${(a.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(a.name)}</b><span class="muted" style="margin-left:auto">zobrazit</span></div>`).join('') || '<div class="muted">Žádné přílohy.</div>'}
+          <div class="aprv"><input type="file" id="att-${e.id}" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" onchange="addAttsToEntry('${e.id}',this.files)"></div>
+        </div>
+        <div class="card">
+          <h3>✍ Podpis záznamu</h3>
+          ${e.podpis ? `<img src="${e.podpis.img}" style="max-width:240px;border:1px solid var(--line);border-radius:6px;background:#fff"><div class="muted" style="margin-top:4px">${esc(e.podpis.jmeno)} · ${fmtISO(e.podpis.at)}</div><div class="aprv"><button class="btn ghost sm" onclick="sigRemove('${e.id}')">✕ Odstranit podpis</button></div>`
+    : S.signFor === e.id ? `
+            <label>Jméno podepisujícího</label><input type="text" id="sig-name" value="${esc(p.client || '')}">
+            <canvas id="sig-pad" width="460" height="150" style="width:100%;max-width:460px;border:1.5px dashed #9aa7b5;border-radius:8px;background:#fff;touch-action:none;margin-top:6px"></canvas>
+            <div class="aprv"><button class="btn amber sm" onclick="sigSave('${e.id}')">💾 Uložit podpis</button><button class="btn ghost sm" onclick="sigClear()">↺ Znovu</button><button class="btn ghost sm" onclick="S.signFor=null;window._sigPaths=[];render()">Zrušit</button></div>
+            <div class="note">Podepiš prstem nebo myší — např. investor při kontrolním dnu. Podpis se ukáže i v PDF exportu deníku.</div>`
+    : `<div class="muted">Záznam není podepsán.</div><div class="aprv"><button class="btn ghost sm" onclick="S.signFor='${e.id}';window._sigPaths=[];render()">✍ Podepsat</button></div>`}
         </div>
         <div class="card">
           <h3>ℹ️ Projekt</h3>
@@ -954,7 +1118,11 @@ function printDenik() {
   const bloky = list.map(e => `
     <div class="zaznam">
       <div class="zhead"><b>${fmtISOFull(e.date)}</b><span>${esc(e.author)}${e.persons ? ' · osob na staveništi: ' + e.persons : ''}${e.status === 'approved' ? '' : e.status === 'internal' ? ' · INTERNÍ' : ' · neschváleno'}</span></div>
+      ${e.weather ? `<div class="meta">Počasí: ${esc(e.weather)}</div>` : ''}
+      ${(() => { const os = attOn(e.pid, e.date); return os.length ? `<div class="meta">Na staveništi: ${os.map(o => esc(o.name) + (o.prichod || o.odchod ? ' (' + (o.prichod || '—') + '–' + (o.odchod || '—') + ')' : '')).join(', ')}</div>` : ''; })()}
       <ul>${(e.works || []).map(w => `<li>${esc(w)}</li>`).join('')}</ul>
+      ${(e.attachments || []).length ? `<div class="meta">Přílohy: ${e.attachments.map(a => esc(a.name)).join(', ')}</div>` : ''}
+      ${e.podpis ? `<div class="zpodpis"><img src="${e.podpis.img}">podepsáno: ${esc(e.podpis.jmeno)} · ${fmtISO(e.podpis.at)}</div>` : ''}
       ${verze === 'komplet' && e.internal ? `<div class="interni">Interní poznámka: ${esc(e.internal)}</div>` : ''}
       ${(e.photos || []).filter(ph => verze === 'komplet' || ph.status === 'approved').length ? `<div class="fotky">${(e.photos || []).filter(ph => verze === 'komplet' || ph.status === 'approved').map(ph => `<img src="${ph.thumb}">`).join('')}</div>` : ''}
     </div>`).join('');
@@ -971,6 +1139,8 @@ function printDenik() {
     .zhead span{color:#555;font-size:11.5px}
     ul{margin:4px 0 4px 18px;padding:0}li{margin-bottom:2px}
     .interni{background:#fdf6e3;border-left:3px solid #c9a227;padding:5px 8px;margin-top:6px;font-size:12px;white-space:pre-wrap}
+    .meta{font-size:11.5px;color:#555;margin:2px 0}
+    .zpodpis{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:11px;color:#555}.zpodpis img{height:44px;border:1px solid #ddd;border-radius:3px;background:#fff}
     .fotky{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}.fotky img{height:85px;border:1px solid #ccc;border-radius:3px}
     .podpisy{display:flex;justify-content:space-between;margin-top:50px;page-break-inside:avoid}
     .podpisy div{width:42%;border-top:1px solid #333;padding-top:6px;font-size:12px;text-align:center}
@@ -1016,6 +1186,9 @@ function pgNovy() {
       <label>Fotky</label>
       <input type="file" id="nph" accept="image/*" multiple onchange="processPhotos(this.files)">
       <div class="photos">${S.draftPhotos.map((p, i) => `<div class="ph"><img src="${p.thumb}"><span class="del" onclick="S.draftPhotos.splice(${i},1);render()">✕</span><small>${esc(p.label)}</small></div>`).join('')}</div>
+      <label>Přílohy (PDF, dokumenty)</label>
+      <input type="file" id="natt" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" multiple onchange="processAtts(this.files)">
+      ${(S.draftAtts || []).length ? `<div style="margin-top:6px">${S.draftAtts.map((a, i) => `<div class="urow"><span>📎</span><b>${esc(a.name)}</b><span class="lnk" style="margin-left:auto" onclick="S.draftAtts.splice(${i},1);render()">✕</span></div>`).join('')}</div>` : ''}
       <div class="aprv"><button class="btn amber" id="save-entry" onclick="submitNew()">💾 ULOŽIT ZÁZNAM</button><span class="muted" style="align-self:center">→ zařadí se do fronty schvalování</span></div>
     </div>
   </main>`;
@@ -1111,8 +1284,31 @@ function pgUkoly() {
   <div class="strip"><h1>Úkoly</h1><span class="sp"></span>
     <button class="btn ${v === 'kanban' ? 'amber' : 'ghost'} sm" onclick="S.ukolyView='kanban';render()">▦ KANBAN</button>
     <button class="btn ${v === 'seznam' ? 'amber' : 'ghost'} sm" onclick="S.ukolyView='seznam';render()">≡ SEZNAM</button>
+    <button class="btn ghost sm" onclick="S.tplOpen=!S.tplOpen;render()">📋 ŠABLONY</button>
     <button class="btn amber" onclick="S.taskFormOpen=!S.taskFormOpen;render()">➕ PŘIDAT</button></div>
   <main>
+    ${S.tplOpen ? (() => { const tpls = S.tasks.filter(t => t.stav === 'sablona'); return `
+    <div class="card">
+      <h3>📋 Šablony úkolů</h3>
+      ${tpls.map(tp => `<div class="urow"><span>📋</span><b>${esc(tp.title)}</b><span class="muted" style="margin-left:auto">${(tp.items || []).length} úkolů</span><span class="lnk" style="font-size:11px;margin-left:10px" onclick="db.collection('tasks').doc('${tp.id}').delete().then(()=>toast('Šablona smazána'))">✕ smazat</span></div>`).join('') || '<div class="muted">Zatím žádné šablony.</div>'}
+      ${tpls.length ? `<div class="formsec"><h4>▶ Aplikovat šablonu na projekt</h4>
+        <div class="frow">
+          <div><label>Šablona</label><select id="tp-s">${tpls.map(tp => `<option value="${tp.id}">${esc(tp.title)}</option>`).join('')}</select></div>
+          <div><label>Projekt</label><select id="tp-p">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
+        </div>
+        <div class="frow">
+          <div><label>Začátek (den 0)</label><input type="date" id="tp-d" value="${isoToday()}"></div>
+          <div><label>Odpovědná osoba</label><select id="tp-r">${S.users.filter(u => u.active !== false && u.typ && u.typ.kanc).map(u => `<option>${esc(fullName(u))}</option>`).join('')}</select></div>
+        </div>
+        <div class="aprv"><button class="btn amber sm" onclick="tplApply()">▶ Vytvořit úkoly</button></div>
+      </div>` : ''}
+      <div class="formsec"><h4>➕ Nová šablona</h4>
+        <label>Název šablony</label><input type="text" id="tp-n" placeholder="Předání bytu">
+        <label>Úkoly — jeden na řádek, volitelně „| +dny" (termín ode dne aplikace)</label>
+        <textarea id="tp-i" placeholder="Fotodokumentace předání | +0&#10;Revize elektro — protokol | +3&#10;Podepsat předávací protokol | +5"></textarea>
+        <div class="aprv"><button class="btn amber sm" onclick="tplSave()">💾 Uložit šablonu</button></div>
+      </div>
+    </div>`; })() : ''}
     ${S.taskFormOpen ? `
     <div class="card">
       <h3>➕ Nový úkol</h3>
@@ -1129,7 +1325,7 @@ function pgUkoly() {
   </main>`;
 }
 function ukolySeznam() {
-  const rows = S.tasks.slice().sort((a, b) => (a.stav === 'hotovo') - (b.stav === 'hotovo') || (a.term || '').localeCompare(b.term || ''));
+  const rows = S.tasks.filter(t => t.stav !== 'sablona').sort((a, b) => (a.stav === 'hotovo') - (b.stav === 'hotovo') || (a.term || '').localeCompare(b.term || ''));
   return `<div class="tablecard">
     <div style="overflow-x:auto"><table>
       <tr><th style="width:30px"></th><th>Název</th><th>Projekt</th><th>Odpovědná osoba</th><th>Stav</th><th>Vytvořeno</th><th>Termín</th><th></th></tr>
@@ -1168,6 +1364,26 @@ function ukolyKanban() {
   </div>`;
 }
 function nextStav(s) { return s === 'nove' ? 'probiha' : s === 'probiha' ? 'kontrola' : 'hotovo'; }
+async function tplSave() {
+  const n = $('#tp-n').value.trim(); if (!n) { toast('Vyplň název šablony'); return; }
+  const items = $('#tp-i').value.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+    const m = l.match(/^(.*?)\s*\|\s*\+?(\d+)\s*$/);
+    return m ? { title: m[1].trim(), off: parseInt(m[2]) || 0 } : { title: l, off: 0 };
+  });
+  if (!items.length) { toast('Přidej aspoň jeden úkol'); return; }
+  await db.collection('tasks').add({ title: n, stav: 'sablona', items, createdAt: FV() });
+  $('#tp-n').value = ''; $('#tp-i').value = '';
+  toast('Šablona uložena ✓ (' + items.length + ' úkolů)');
+}
+async function tplApply() {
+  const tpl = S.tasks.find(t => t.id === $('#tp-s').value); if (!tpl) return;
+  const pid = $('#tp-p').value, start = $('#tp-d').value || isoToday(), resp = $('#tp-r').value;
+  for (const it of (tpl.items || [])) {
+    await db.collection('tasks').add({ title: it.title, pid, resp, created: isoToday(), term: shiftISO(start, it.off || 0), stav: 'nove', res: [resp], src: 'ze šablony ' + tpl.title, createdAt: FV() });
+  }
+  S.tplOpen = false;
+  toast('Vytvořeno ' + (tpl.items || []).length + ' úkolů ze šablony ✓');
+}
 async function taskNext(id) { const t = S.tasks.find(x => x.id === id); await db.collection('tasks').doc(id).update({ stav: nextStav(t.stav) }); }
 async function taskMove(id, dir) { const order = ['nove', 'probiha', 'kontrola', 'hotovo']; const t = S.tasks.find(x => x.id === id); const i = order.indexOf(t.stav) + dir; if (i >= 0 && i < 4) await db.collection('tasks').doc(id).update({ stav: order[i] }); }
 async function taskDone(id) { const t = S.tasks.find(x => x.id === id); await db.collection('tasks').doc(id).update({ stav: t.stav === 'hotovo' ? 'nove' : 'hotovo' }); }
@@ -1323,9 +1539,11 @@ function repTable() {
     return `<tr><td><span class="uav" style="margin-right:6px">${ini(u)}</span>${esc(fullName(u))}<br><span class="muted" style="margin-left:34px">${esc(u.skupina || '')}</span></td>${cells.join('')}<td style="text-align:center"><b>${s ? kc(rowKc) + ' Kč' : '⚠'}</b>${diff > 0 ? `<br><span class="muted">čistá: ${kc(rowC)} Kč</span><br><span class="badge b-wait">vedoucímu party: ${kc(diff)} Kč</span>` : ''}</td><td style="text-align:center"><b>${fmtH(rowH)}</b></td></tr>`;
   });
   // křížová kontrola proti deníku (#25)
-  const denikDays = {};
-  S.entries.filter(e => e.date >= S.repFrom && e.date <= S.repTo).forEach(e => {
-    sel.forEach(udi => { const u = userById(udi); if (u && e.author && e.author.includes(u.prijmeni)) (denikDays[udi] = denikDays[udi] || new Set()).add(e.date); });
+  // křížová kontrola (#25): dny z DOCHÁZKY vs. existence zápisu v deníku pro stejný projekt a den
+  const entryDaySet = new Set(S.entries.map(e => e.date + '|' + e.pid));
+  const attPairs = {};
+  S.attendance.filter(a => a.date >= S.repFrom && a.date <= S.repTo && sel.includes(a.userDocId)).forEach(a => {
+    (attPairs[a.userDocId] = attPairs[a.userDocId] || new Set()).add(a.date + '|' + a.pid);
   });
   return `<div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
@@ -1341,10 +1559,10 @@ function repTable() {
     </table></div>
     <div class="card" style="margin-top:12px;background:#f8fafc">
       <h3>🔎 Křížová kontrola proti deníku (#25)</h3>
-      ${sel.map(udi => { const u = userById(udi); if (!u) return ''; const dd = denikDays[udi] ? denikDays[udi].size : 0; const ad = H[udi] ? Object.values(H[udi]).reduce((a, b) => a + b.dni, 0) : 0; const okk = Math.abs(dd - ad) <= 1; return `
+      ${sel.map(udi => { const u = userById(udi); if (!u) return ''; const pairs = [...(attPairs[udi] || [])]; const missing = pairs.filter(k => !entryDaySet.has(k)); const okk = missing.length === 0; return `
         <div class="urow"><span>${okk ? '✅' : '⚠️'}</span><b>${esc(fullName(u))}</b>
-        <span class="muted" style="margin-left:auto">docházka: <b>${ad} dní</b> · zápisy v deníku: <b>${dd} dní</b>${okk ? '' : ' — <b style="color:var(--red)">prověřit před proplacením!</b>'}</span></div>`; }).join('')}
-      <div class="note">Před proplacením porovnej dny v docházce s deníkem (kdo byl na stavbě které dny).</div>
+        <span class="muted" style="margin-left:auto">docházka: <b>${pairs.length} dní</b> · deník existuje pro <b>${pairs.length - missing.length}</b> z nich${okk ? '' : ` — <b style="color:var(--red)">chybí zápis: ${missing.slice(0, 5).map(k => fmtISO(k.split('|')[0]) + ' (' + esc((proj(k.split('|')[1]) || {}).name || '?') + ')').join(', ')}${missing.length > 5 ? ' +' + (missing.length - 5) + ' dalších' : ''}</b>`}</span></div>`; }).join('')}
+      <div class="note">Kontroluje se: každý den z docházky má mít deníkový zápis na stejném projektu. Chybějící dny prověř před proplacením (#25).</div>
     </div>
   </div>`;
 }
@@ -1500,7 +1718,7 @@ function viewWorker() {
   const myEntries = p ? entriesOf(p.id).slice(0, 8) : [];
   const myAtt = S.attendance.filter(a => a.date === isoToday());
   const lastAct = myAtt[0];
-  const myTasks = S.tasks.filter(t => t.stav !== 'hotovo' && S.me && (t.resp === fullName(S.me) || (t.res || []).includes(fullName(S.me))));
+  const myTasks = S.tasks.filter(t => t.stav !== 'hotovo' && t.stav !== 'sablona' && S.me && (t.resp === fullName(S.me) || (t.res || []).includes(fullName(S.me))));
   return topbar() + `<div class="shell"><div class="content">
   <div class="strip"><h1>Můj den na stavbě</h1><span class="sp"></span><span class="muted">${fmtISOFull(isoToday())}</span></div>
   <main class="mobilewrap">
@@ -1516,6 +1734,10 @@ function viewWorker() {
       </div>
       <div class="note">Poloha se ověří proti GPS stavby (±${CFG.gpsTolerance || 100} m) + ověřovací foto.</div>
     </div>
+    ${p && (p.stavbaDocs || []).length ? `<div class="card">
+      <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— půdorysy, vizualizace</span></h3>
+      ${(p.stavbaDocs || []).map(d => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${esc(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('')}
+    </div>` : ''}
     ${myTasks.length ? `<div class="card">
       <h3>📌 Moje úkoly (${myTasks.length})</h3>
       ${myTasks.map(t => `<div class="urow"><span>${isOverdue(t) ? '❗' : '📌'}</span><div><b>${esc(t.title)}</b><br><span class="muted">${esc((proj(t.pid) || {}).name || '')} · termín ${fmtISO(t.term)}</span></div>
@@ -1613,7 +1835,7 @@ function viewPortal() {
       ${S.portalFeed.length ? S.portalFeed.map((e, i) => `
         <div style="border:1px solid var(--line);border-radius:9px;padding:11px 13px;margin-bottom:9px">
           <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>${fmtISOFull(e.date)}</b>${i === 0 ? '<span class="badge b-ok">nové</span>' : ''}</div>
-          <div style="margin-top:4px">${esc(e.client)}</div>
+          <div style="margin-top:4px">${esc(e.client).replace(/\n/g, '<br>')}</div>
           ${(e.photos || []).length ? `<div class="photos">${e.photos.map(ph => `<div class="ph" onclick="openPhoto('${ph.driveId || ''}','${esc(ph.label)}',this)"><img src="${ph.thumb}"><small>${esc(ph.label || '')}</small></div>`).join('')}</div>` : ''}
         </div>`).join('') : '<div class="empty">Zatím žádné zápisy.</div>'}
     </div>
