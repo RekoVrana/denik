@@ -738,6 +738,7 @@ function nastenkaDochazka() {
     <div class="stats">
       <div class="stat"><span class="sic">💼</span><span class="st2">V práci teď</span><span class="sn">${inWork.length}</span></div>
       <div class="stat"><span class="sic">🏠</span><span class="st2">Nepřítomní</span><span class="sn">${Math.max(0, teren.length - inWork.length)}</span></div>
+      <div class="stat" onclick="S.orgFilter='schvalit';goPage('organizace')"><span class="sic">⏳</span><span class="st2">Docházka ke schválení</span><span class="sn ${cekaNaSchvaleni().length ? 'warn' : ''}">${cekaNaSchvaleni().length}</span></div>
       <div class="stat" onclick="S.orgFilter='gps';goPage('organizace')"><span class="sic">📍</span><span class="st2">Podezřelá GPS (&gt;${TOL} m)</span><span class="sn ${susp.length ? 'warn' : ''}">${susp.length}</span></div>
       <div class="stat" onclick="goPage('organizace')"><span class="sic">🗂</span><span class="st2">Záznamů docházky</span><span class="sn">${S.attendance.length}</span></div>
     </div>
@@ -1423,6 +1424,7 @@ function pgOrganizace() {
   const f = S.orgFilter;
   let rows = S.attendance.slice();
   if (f === 'gps') rows = rows.filter(a => a.gps > TOL);
+  if (f === 'schvalit') rows = rows.filter(a => a.schvaleno === false);
   // filtr podle pracovníka a projektu
   if (S.orgUser) rows = rows.filter(a => a.userDocId === S.orgUser);
   if (S.orgProj) rows = rows.filter(a => a.pid === S.orgProj);
@@ -1435,6 +1437,7 @@ function pgOrganizace() {
   <div class="sectabs">
     <div class="t ${f === 'vse' ? 'active' : ''}" onclick="S.orgFilter='vse';render()">🗂 Všechny záznamy</div>
     <div class="t ${f === 'gps' ? 'active' : ''}" onclick="S.orgFilter='gps';render()">📍 Podezřelá GPS (${S.attendance.filter(a => a.gps > TOL).length})</div>
+    <div class="t ${f === 'schvalit' ? 'active' : ''}" onclick="S.orgFilter='schvalit';render()">⏳ Ke schválení (${cekaNaSchvaleni().length})</div>
   </div>
   <main>
     ${S.attFormOpen ? `
@@ -1470,12 +1473,17 @@ function pgOrganizace() {
         <tr>
           <td><span class="uav" style="margin-right:6px">${ini(u)}</span>${esc(fullName(u))}</td>
           <td class="muted">${esc(u.skupina || '—')}</td>
-          <td><span class="badge ${a.akce === 'Příchod' ? 'b-ok' : 'b-int'}">${a.akce}</span></td>
+          <td><span class="badge ${a.akce === 'Příchod' ? 'b-ok' : 'b-int'}">${a.akce}</span>${
+            a.schvaleno === false ? `<br><span class="badge b-wait">⏳ čeká na schválení</span>${
+              a.poznamka ? `<br><span class="muted" style="font-size:11.5px">„${esc(a.poznamka)}"</span>` : ''}` : ''}</td>
           <td>${esc((proj(a.pid) || {}).name || a.projName || '')}</td>
           <td>${fmtISO(a.date)} ${a.time}${a.upraveno ? `<br><span class="badge b-wait" title="${esc(a.upraveno.duvod || '')}">✏️ opraveno — ${esc(a.upraveno.kdo || '')}</span>` : ''}</td>
           <td>${a.gps == null ? '<span class="muted">bez GPS</span>' : a.gps > TOL ? `<b style="color:var(--red)">⚠ ${a.gps.toLocaleString('cs')} m</b>` : `<span class="muted">${a.gps} m</span>`}</td>
           <td>${a.selfie ? `<img src="${a.selfie}" style="width:34px;height:34px;border-radius:50%;object-fit:cover;cursor:pointer" onclick="openPhoto('','ověřovací foto',this.parentElement)">` : a.manual ? '<span class="badge b-wait">admin</span>' : '<b style="color:var(--red)">chybí</b>'}</td>
           <td style="white-space:nowrap">
+            ${a.schvaleno === false ? `
+              <button class="btn ok sm" title="Schválit" onclick="attSchvalit('${a.id}')">✓ Schválit</button>
+              <button class="btn red sm" title="Zamítnout" onclick="attZamitnout('${a.id}')">✕</button>` : ''}
             <button class="btn ghost sm" title="Opravit" onclick="attUpravitForm('${a.id}')">✏️</button>
             <button class="btn ghost sm" title="Smazat" onclick="attSmazat('${a.id}')">🗑</button>
           </td>
@@ -1490,7 +1498,7 @@ async function addAtt() {
   const userDocId = $('#at-u').value, pid = $('#at-p').value, akce = $('#at-a').value;
   const date = $('#at-d').value || isoToday(), time = $('#at-t').value || '07:00';
   const u = userById(userDocId);
-  await db.collection('attendance').add({ userDocId, userName: fullName(u), authUid: S.authUser.uid, akce, pid, date, time, gps: null, selfie: null, manual: true, createdAt: FV() });
+  await db.collection('attendance').add({ userDocId, userName: fullName(u), authUid: S.authUser.uid, akce, pid, date, time, gps: null, selfie: null, manual: true, schvaleno: true, createdAt: FV() });
   S.attFormOpen = false; toast('Záznam přidán (opraveno administrátorem)'); render();
 }
 
@@ -1532,6 +1540,23 @@ async function attUlozit(id) {
     });
     closeModal(); toast('Záznam opraven ✓');
   } catch (e) { toast('Oprava se nepovedla: ' + (e.code || e.message)); }
+}
+async function attSchvalit(id) {
+  const a = S.attendance.find(x => x.id === id); if (!a) return;
+  try {
+    await db.collection('attendance').doc(id).update({
+      schvaleno: true, schvalil: { kdo: fullName(S.me || {}), kdy: new Date().toISOString() }
+    });
+    toast('Schváleno ✓ Hodiny se započítají.');
+  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+}
+async function attZamitnout(id) {
+  const a = S.attendance.find(x => x.id === id); if (!a) return;
+  const u = userById(a.userDocId) || {};
+  if (!confirm('Zamítnout doplněný odchod?\n\n' + (fullName(u) || a.userName || '?') + ' — ' +
+               fmtISO(a.date) + ' ' + a.time + '\n\nZáznam se smaže a den zůstane neuzavřený.')) return;
+  try { await db.collection('attendance').doc(id).delete(); toast('Zamítnuto — záznam smazán'); }
+  catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
 }
 async function attSmazat(id) {
   const a = S.attendance.find(x => x.id === id); if (!a) return;
@@ -1732,7 +1757,7 @@ function hoursFromAttendance(from, to) {
   // páruje Příchod/Odchod po dnech: {userDocId: {pid: {h, dni, incomplete}}}
   const toMin = t => { const p = String(t || '').split(':').map(Number); return (p[0] || 0) * 60 + (p[1] || 0); };
   const byKey = {};
-  S.attendance.filter(a => a.date >= from && a.date <= to).forEach(a => {
+  S.attendance.filter(a => a.date >= from && a.date <= to && jeSchvaleno(a)).forEach(a => {
     const k = a.userDocId + '|' + a.pid + '|' + a.date;
     (byKey[k] = byKey[k] || []).push(a);
   });
@@ -2006,6 +2031,11 @@ async function saveUser() {
    vzdalenosti. */
 /* Stav smeny = posledni MUJ zaznam dochazky. Zadne dva prichody po sobe:
    kdyz jsem v praci, jde jen odejit, a naopak. */
+/* Stare zaznamy pole "schvaleno" nemaji — ty plati. Ceka se jen na to,
+   co je vylozene schvaleno === false (doplnil pracovnik zpetne). */
+function jeSchvaleno(a) { return !a || a.schvaleno !== false; }
+function cekaNaSchvaleni() { return S.attendance.filter(a => a.schvaleno === false); }
+
 function mojeSmena() {
   const mine = S.attendance.filter(a => !S.me || a.userDocId === S.me.id);
   const posledni = mine.length ? mine[0] : null;          // S.attendance je razena sestupne
@@ -2105,7 +2135,15 @@ function viewWorker() {
       `}
 
       <label>⏱ Docházka</label>
-      ${sm.vPraci ? `
+      ${sm.vPraci && sm.zeVcerejska ? `
+        <div class="smena" style="background:var(--wait-soft);border-color:#ecd9a0">
+          <div class="muted" style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--wait)">Neuzavřený den</div>
+          <div class="cas" style="color:var(--wait);font-size:17px">Příchod ${fmtISO(sm.posledni.date)} v ${esc(sm.posledni.time)} — bez odchodu</div>
+          <div class="kde" style="color:#7c5806">Doplň, kdy jsi odešel. Vedení to schválí a den se uzavře.</div>
+        </div>
+        <button class="btn amber velke" onclick="doplnitOdchodForm()">🕗 DOPLNIT CHYBĚJÍCÍ ODCHOD</button>
+        <button class="btn ghost velke" ${S.checking ? 'disabled' : ''} onclick="workerCheck('Odchod')" style="margin-top:8px">${S.checking === 'Odchod' ? '⏳ ZJIŠŤUJI POLOHU…' : '🏁 Jsem tu pořád — zapsat odchod teď'}</button>
+      ` : sm.vPraci ? `
         <div class="smena">
           <div class="muted" style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#3c6b4c">V práci</div>
           <div class="cas" id="w-cas">${trvaniOd(sm.posledni)}</div>
@@ -2210,6 +2248,37 @@ async function workerCheck(akce) {
   } catch (e) { toast('Zápis se nepovedl: ' + (e.code || e.message)); }
   S.checking = null; render();
 }
+/* Zapomenuty odchod. Pracovnik ho doplni sam, ale je to jen NAVRH —
+   do hodin se zapocita az po schvaleni vedenim. */
+function doplnitOdchodForm() {
+  const sm = mojeSmena();
+  if (!sm.vPraci) return;
+  const p = proj(sm.pid) || {};
+  modal(`<h3>🕗 Doplnit chybějící odchod</h3>
+    <div class="inote" style="margin-top:0">Máš otevřený příchod z <b>${fmtISO(sm.posledni.date)}</b> od ${esc(sm.posledni.time)},
+      stavba ${esc(p.name || '')}.<br>Doplň, kdy jsi ve skutečnosti odešel. <b>Vedení to musí schválit</b> — do té doby se hodiny nezapočítají.</div>
+    <div class="frow">
+      <div><label>Datum odchodu</label><input type="date" id="do-d" value="${esc(sm.posledni.date)}"></div>
+      <div><label>Čas odchodu</label><input type="time" id="do-t" value="16:00"></div>
+    </div>
+    <label>Proč jsi nepíchnul (uvidí vedení)</label>
+    <input type="text" id="do-pozn" placeholder="např. vybil se mi telefon">
+    <div class="aprv"><button class="btn amber" onclick="doplnitOdchod()">📤 Odeslat ke schválení</button>
+    <button class="btn ghost" onclick="closeModal()">Zrušit</button></div>`);
+}
+async function doplnitOdchod() {
+  const sm = mojeSmena(); if (!sm.vPraci) return;
+  try {
+    await db.collection('attendance').add({
+      userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid,
+      akce: 'Odchod', pid: sm.pid, date: $('#do-d').value || sm.posledni.date,
+      time: $('#do-t').value || '16:00', gps: null, selfie: null,
+      manual: true, schvaleno: false, poznamka: $('#do-pozn').value.trim(), createdAt: FV()
+    });
+    closeModal(); toast('Odesláno vedení ke schválení ✓');
+  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+}
+
 /* Prechod mezi stavbami behem dne: zapise odchod tady a prichod tam.
    Poloha se meri JEDNOU a porovna se s obema stavbami zvlast. */
 function prechodForm() {
