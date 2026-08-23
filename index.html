@@ -210,6 +210,15 @@
     input[type=number], input[type=date], input[type=time],
     input[type=tel], input[type=search], .search input{ font-size:16px }
   }
+  /* ── nabídka aktualizace ──────────────────────────────── */
+  .updbar{position:fixed;left:0;right:0;bottom:0;z-index:300;background:var(--navy);color:#fff;
+    display:flex;align-items:center;gap:12px;padding:12px 16px;padding-bottom:calc(12px + var(--sab));
+    box-shadow:0 -3px 14px rgba(0,0,0,.28);font-size:13.5px}
+  .updbar b{display:block;font-size:14px}
+  .updbar small{color:#b9c9d8;font-size:12px}
+  .updbar .btn{flex:none}
+  .updspin{display:inline-block;width:13px;height:13px;border:2px solid rgba(255,255,255,.3);
+    border-top-color:#fff;border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px}
 </style>
 </head>
 <body>
@@ -217,6 +226,7 @@
 <div id="viewer"></div>
 <div id="modal"></div>
 <div class="toast" id="toast"></div>
+<div id="updbar"></div>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>

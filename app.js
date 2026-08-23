@@ -45,6 +45,54 @@ function haversine(lat1, lon1, lat2, lon2) {
   return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 }
 
+/* ---------- aktualizace aplikace ----------
+   Nainstalovana PWA si drzi starou verzi, dokud service worker nedostane
+   novou. Uzivatel by jinak musel mazat ikonu z plochy a pridavat znovu.
+   Proto: appka si novou verzi hleda sama (pri otevreni, pri navratu z pozadi
+   a jednou za pul hodiny) a nabidne ji pruhem dole. Plus tlacitko ⟳ v hlavicce. */
+function updBar() {
+  const el = document.getElementById('updbar');
+  if (!el) return;
+  el.innerHTML = S.updateReady ? `<div class="updbar">
+    <span style="font-size:20px">🔄</span>
+    <div style="flex:1"><b>Je hotová nová verze</b><small>Aktualizace trvá pár vteřin.</small></div>
+    <button class="btn amber sm" onclick="aktualizovatApp()">Aktualizovat</button>
+    <button class="btn dark sm" onclick="S.updateReady=false;updBar()">Později</button>
+  </div>` : '';
+}
+async function aktualizovatApp() {
+  if (S.updating) return;
+  S.updating = true; render();
+  try {
+    const reg = S.swReg || (navigator.serviceWorker ? await navigator.serviceWorker.getRegistration() : null);
+    if (reg) {
+      await reg.update().catch(() => {});
+      if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+    }
+    if (window.caches) {
+      const klice = await caches.keys();
+      await Promise.all(klice.map(k => caches.delete(k)));
+    }
+  } catch (e) { /* i kdyz se neco nepovede, stejne zkusime nacist znovu */ }
+  // cache-busting parametr — iOS umi byt hodne tvrdohlave
+  const u = new URL(location.href);
+  u.searchParams.set('v', String(Date.now()).slice(-8));
+  location.replace(u.toString());
+}
+function hlidatAktualizace(reg) {
+  S.swReg = reg;
+  if (reg.waiting && navigator.serviceWorker.controller) { S.updateReady = true; updBar(); }
+  reg.addEventListener('updatefound', () => {
+    const novy = reg.installing;
+    if (!novy) return;
+    novy.addEventListener('statechange', () => {
+      if (novy.state === 'installed' && navigator.serviceWorker.controller) { S.updateReady = true; updBar(); }
+    });
+  });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+  setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
+}
+
 /* ---------- instalace na plochu ---------- */
 const UA = navigator.userAgent || '';
 const JE_IOS = /iPad|iPhone|iPod/.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -131,7 +179,7 @@ const S = {
   workerProject: null, draftPhotos: [], draftAtts: [], uploading: 0, signFor: null, tplOpen: false,
   loginMode: 'teren', loginWorker: null,
   online: navigator.onLine, unsub: [],
-  denikTab: 'zaznamy', searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false, checking: null, installPrompt: null
+  denikTab: 'zaznamy', searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false, checking: null, installPrompt: null, swReg: null, updateReady: false, updating: false
 };
 window.addEventListener('online', () => { S.online = true; render(); });
 window.addEventListener('offline', () => { S.online = false; render(); });
@@ -465,6 +513,7 @@ function render() {
   root.innerHTML = (role === 'admin') ? viewAdmin() : viewWorker();
   if (S.signFor) setTimeout(sigInit, 0);
   setTimeout(mountMaps, 0);
+  updBar();
 }
 function viewNotConfigured() {
   return `<div class="login"><div class="lbox"><div class="lg">🏗 REKONSTRUKCE <em>VRÁNA</em></div>
@@ -634,6 +683,7 @@ function topbar() {
     <span class="sp"></span>
     <span class="offdot ${S.online ? '' : 'off'}">${S.online ? '' : '⚠ OFFLINE — změny se uloží po připojení'}</span>
     ${S.uploading ? '<span class="badge b-wait">📤 nahrávám fotky…</span>' : ''}
+    <button class="btn ghost sm" title="Zkontrolovat a stáhnout novou verzi" onclick="aktualizovatApp()" style="padding:6px 10px">${S.updating ? '<span class="updspin"></span>' : '⟳'}</button>
     <div class="avatar" title="Odhlásit" onclick="if(confirm('Odhlásit se?'))doLogout()">${S.me ? ini(S.me) : '?'}</div>
   </div>`;
 }
@@ -2461,6 +2511,8 @@ if (CONFIGURED) {
   else initAuth();
 } else { render(); }
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').then(hlidatAktualizace).catch(() => {});
+  });
 }
 
