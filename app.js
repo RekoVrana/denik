@@ -1741,13 +1741,21 @@ async function createLogin(udi) {
   try {
     const secondary = firebase.apps.find(a => a.name === 'sec') || firebase.initializeApp(CFG.firebase, 'sec');
     const cred = await secondary.auth().createUserWithEmailAndPassword(authEmail, pin);
-    const role = (u.typ && u.typ.kanc) ? 'admin' : (u.typ && u.typ.sub) ? 'sub' : 'worker';
+    const role = roleOfTypeKey(typeKeyOfUser(u));
     await db.collection('users_auth').doc(cred.user.uid).set({ role, userDocId: udi, name: fullName(u) });
     await db.collection('users').doc(udi).update({ uid: cred.user.uid, authEmail });
     await db.collection('roster').doc(udi).set({ jmeno: u.jmeno, prijmeni: u.prijmeni, authEmail, role, popis: $('#lf-pop').value.trim() });
     await secondary.auth().signOut();
     closeModal(); toast('Účet vytvořen ✓ PIN předej pracovníkovi.');
   } catch (e) { toast('Chyba: ' + (e.code === 'auth/email-already-in-use' ? 'účet už existuje' : e.message)); }
+}
+/* Role pro prihlaseni se odvozuje JEN tady, aby se createLogin a saveUser
+   nemohly rozejit. Drive se pri zmene typu uzivatele role v roster/users_auth
+   neprepsala a clovek zustal treba adminem. */
+function roleOfTypeKey(k) { return k === 'kanc' ? 'admin' : k === 'sub' ? 'sub' : 'worker'; }
+function typeKeyOfUser(u) {
+  const t = (u && u.typ) || {};
+  return t.kanc ? 'kanc' : t.inv ? 'inv' : t.sub ? 'sub' : 'teren';
 }
 function editUser(udi) { S.editUserId = udi; S.newUserType = null; goPage('newuser'); }
 function pgNewUser() {
@@ -1817,7 +1825,22 @@ async function saveUser() {
     if (shVal) await db.collection('sazby').doc(docId).set(scVal ? { h: shVal, c: scVal } : { h: shVal });
     else await db.collection('sazby').doc(docId).delete().catch(() => {});
   }
-  goPage('uzivatele'); toast(edit ? 'Uživatel upraven ✓' : 'Uživatel přidán ✓ Přihlášení mu vytvoř tlačítkem 🔑');
+  // Ma uz clovek prihlaseni? Pak srovnat roli i jmeno i tam, jinak by mu
+  // pri zmene typu zustala stara prava a na prihlasovaci obrazovce spatna sekce.
+  let roleChanged = false;
+  if (edit && edit.uid) {
+    const newRole = roleOfTypeKey(typKey);
+    const oldRole = roleOfTypeKey(typeKeyOfUser(edit));
+    roleChanged = newRole !== oldRole;
+    try {
+      await db.collection('roster').doc(docId).set({ jmeno: j, prijmeni: p, role: newRole }, { merge: true });
+      await db.collection('users_auth').doc(edit.uid).set({ role: newRole, name: j + ' ' + p }, { merge: true });
+    } catch (e) { toast('⚠ Kartu jsem uložil, ale práva se nepodařilo srovnat: ' + e.message); }
+  }
+  goPage('uzivatele');
+  toast(edit
+    ? (roleChanged ? 'Uživatel upraven ✓ Práva srovnána — musí se znovu přihlásit.' : 'Uživatel upraven ✓')
+    : 'Uživatel přidán ✓ Přihlášení mu vytvoř tlačítkem 🔑');
 }
 
 /* ============ PRACOVNÍK / SUB (mobil) ============ */
