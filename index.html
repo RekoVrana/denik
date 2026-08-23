@@ -198,6 +198,18 @@
     border-radius:9px;padding:10px 12px;font-weight:700;font-size:14px;color:var(--ink)}
   .zamcena .zam{font-size:15px;opacity:.55}
   .btn.velke{width:100%;justify-content:center;padding:15px;font-size:15.5px;margin-top:10px}
+  /* ── iOS: pisma v polickach min. 16 px ─────────────────
+     Safari na iPhonu stranku SAM priblizi, kdyz uzivatel tukne do policka
+     s pismem mensim nez 16 px — a uz ji neoddali. Proto na dotykovych
+     zarizenich vsechna policka na 16 px. Podminka je na dotyk, ne jen na
+     sirku: iPhone na sirku ma pres 900 px a problem by se vratil.
+     Zoom prstem zustava povoleny. */
+  @media (hover:none) and (pointer:coarse), (max-width:900px){
+    textarea, select,
+    input[type=text], input[type=password], input[type=email],
+    input[type=number], input[type=date], input[type=time],
+    input[type=tel], input[type=search], .search input{ font-size:16px }
+  }
 </style>
 </head>
 <body>
