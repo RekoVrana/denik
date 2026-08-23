@@ -17,7 +17,19 @@ function fmtISO(iso) { if (!iso) return '—'; const [y, m, d] = iso.split('-').
 function fmtISOFull(iso) { if (!iso) return '—'; const [y, m, d] = iso.split('-').map(Number); const dt = new Date(y, m - 1, d); return DAYS[dt.getDay()] + ' ' + d + '. ' + m + '. ' + y; }
 function dchipOf(iso) { const [y, m, d] = iso.split('-').map(Number); const dt = new Date(y, m - 1, d); return [DAYS2[dt.getDay()], d + '.' + m + '.']; }
 function fmtTs(ts) { if (!ts) return '—'; const d = ts.toDate ? ts.toDate() : new Date(ts); return d.getDate() + '. ' + (d.getMonth() + 1) + '. ' + d.getFullYear() + ' ' + d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0'); }
-function nowTime() { const d = new Date(); return d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0'); }
+/* POZOR: hodina MUSI mit vedouci nulu. Drive se ukladalo "7:31" a razeni
+   podle textu pak davalo "16:00" PRED "7:00" (jednicka je pred sedmickou),
+   takze kdo prisel pred 10:00 a odesel po 10:00, zustal navzdy "v praci". */
+function nowTime() { const d = new Date(); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); }
+/* Klic pro razeni pichnuti. Prednost ma serverovy cas zapisu (presny na
+   sekundy, resi i dve pichnuti ve stejne minute); kdyz chybi, spocita se
+   z data a casu — a to i u starych zaznamu bez vedouci nuly. */
+function attKey(a) {
+  if (a && a.createdAt && a.createdAt.seconds) return a.createdAt.seconds;
+  const t = String((a && a.time) || '0:0').split(':').map(Number);
+  const d = new Date((a && a.date) || '1970-01-01');
+  return (d.getTime() / 1000) + (t[0] || 0) * 3600 + (t[1] || 0) * 60;
+}
 function daysBetween(isoA, isoB) { return Math.round((new Date(isoB) - new Date(isoA)) / 86400000); }
 function shiftISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
 function kc(n) { return (Math.round(n) || 0).toLocaleString('cs-CZ'); }
@@ -56,7 +68,7 @@ const S = {
   workerProject: null, draftPhotos: [], draftAtts: [], uploading: 0, signFor: null, tplOpen: false,
   loginMode: 'teren', loginWorker: null,
   online: navigator.onLine, unsub: [],
-  denikTab: 'zaznamy', searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false
+  denikTab: 'zaznamy', searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false, checking: null
 };
 window.addEventListener('online', () => { S.online = true; render(); });
 window.addEventListener('offline', () => { S.online = false; render(); });
@@ -79,7 +91,7 @@ function startData() {
   listen('tasks', 'tasks', { sort: (a, b) => (a.term || '').localeCompare(b.term || '') });
   listen('users', 'users', { sort: (a, b) => (a.prijmeni || '').localeCompare(b.prijmeni || '', 'cs') });
   if (role === 'admin') {
-    listen('attendance', 'attendance', { sort: (a, b) => (b.date + (b.time || '')).localeCompare(a.date + (a.time || '')) });
+    listen('attendance', 'attendance', { sort: (a, b) => attKey(b) - attKey(a) });
     listen('viceprace', 'viceprace', {});
     S.unsub.push(db.collection('sazby').onSnapshot(s => { S.sazby = {}; s.docs.forEach(d => S.sazby[d.id] = d.data()); render(); }, () => {}));
     // akce investorů ze všech portálů
@@ -87,7 +99,7 @@ function startData() {
       s.docs.forEach(d => handlePortalAction(d));
     }, err => console.warn('actions', err)));
   } else {
-    listen('attendance', 'attendance', { where: [['authUid', '==', S.authUser.uid]], sort: (a, b) => (b.date + (b.time || '')).localeCompare(a.date + (a.time || '')) });
+    listen('attendance', 'attendance', { where: [['authUid', '==', S.authUser.uid]], sort: (a, b) => attKey(b) - attKey(a) });
   }
 }
 function startPortal() {
@@ -648,7 +660,7 @@ function nastenkaPrehled() {
 function nastenkaDochazka() {
   const TOL = CFG.gpsTolerance || 100;
   const last = {};
-  S.attendance.slice().sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || ''))).forEach(a => last[a.userDocId] = a);
+  S.attendance.slice().sort((a, b) => attKey(a) - attKey(b)).forEach(a => last[a.userDocId] = a);
   const inWork = Object.values(last).filter(a => a.akce === 'Příchod' && a.date === isoToday());
   const susp = S.attendance.filter(a => a.gps > TOL);
   const teren = S.users.filter(u => u.typ && u.typ.teren && !u.typ.kanc && u.active !== false);
@@ -1937,11 +1949,11 @@ function viewWorker() {
         !p.gps ? ' <b style="color:var(--wait)">· stavba nemá GPS, poloha se neověří</b>' : ''}</div>` : ''}
       <label>⏱ Docházka (GPS check-in)</label>
       <div class="aprv" style="margin-top:2px">
-        <button class="btn ok" id="chk-in" onclick="workerCheck('Příchod')">📍 PŘÍCHOD</button>
-        <button class="btn dark" id="chk-out" onclick="workerCheck('Odchod')">🏁 ODCHOD</button>
+        <button class="btn ok" id="chk-in" ${S.checking ? 'disabled' : ''} onclick="workerCheck('Příchod')">${S.checking === 'Příchod' ? '⏳ ZJIŠŤUJI POLOHU…' : '📍 PŘÍCHOD'}</button>
+        <button class="btn dark" id="chk-out" ${S.checking ? 'disabled' : ''} onclick="workerCheck('Odchod')">${S.checking === 'Odchod' ? '⏳ ZJIŠŤUJI POLOHU…' : '🏁 ODCHOD'}</button>
         ${lastAct ? `<span class="badge ${lastAct.akce === 'Příchod' ? 'b-ok' : 'b-int'}" style="align-self:center">dnes: ${lastAct.akce} ${lastAct.time}${lastAct.gps != null ? ' · GPS ' + lastAct.gps + ' m' : ''}</span>` : ''}
       </div>
-      <div class="note">Poloha se ověří proti GPS stavby (±${CFG.gpsTolerance || 100} m) + ověřovací foto.</div>
+      <div class="note">Poloha se ověří proti GPS stavby (±${CFG.gpsTolerance || 100} m). Zjišťování může pár vteřin trvat — počkej, než tlačítko zase zezelená.</div>
     </div>
     ${p && (p.stavbaDocs || []).length ? `<div class="card">
       <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— půdorysy, vizualizace</span></h3>
@@ -1973,23 +1985,63 @@ function viewWorker() {
     </div>
   </main></div></div>`;
 }
-function workerCheck(akce) {
+/* Ziskani polohy: nejdriv rychly pokus (sit/wifi, klidne i fix stary minutu),
+   teprve pak presny GPS. Puvodne se rovnou chtela vysoka presnost s limitem
+   12 s — na mobilu v barake to casto vyprsi a pichnuti se ulozilo bez polohy,
+   aniz by si toho kdokoli vsiml. */
+function getPos(opts) {
+  return new Promise((ok, no) => navigator.geolocation.getCurrentPosition(ok, no, opts));
+}
+async function acquirePos() {
+  try { return await getPos({ enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 }); }
+  catch (e) { return await getPos({ enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }); }
+}
+function posErrText(e) {
+  if (!e) return 'Polohu se nepodařilo zjistit.';
+  if (e.code === 1) return 'Poloha je zakázaná — povol ji v nastavení prohlížeče pro tuto stránku.';
+  if (e.code === 2) return 'Telefon polohu nezjistil (slabý signál, uvnitř budovy).';
+  if (e.code === 3) return 'Zjišťování polohy trvalo moc dlouho.';
+  return 'Polohu se nepodařilo zjistit.';
+}
+async function workerCheck(akce) {
+  if (S.checking) return;                       // pojistka proti dvojkliku
   const p = proj(S.workerProject);
   if (!p) { toast('Vyber stavbu'); return; }
-  const btn = $(akce === 'Příchod' ? '#chk-in' : '#chk-out'); if (btn) btn.disabled = true;
+
+  // uz je posledni dnesni akce tatáž? at se nepichne omylem dvakrát
+  const dnesMoje = S.attendance.filter(a => a.date === isoToday() && (!S.me || a.userDocId === S.me.id));
+  if (dnesMoje.length && dnesMoje[0].akce === akce) {
+    if (!confirm(akce + ' už je dnes zapsaný (' + dnesMoje[0].time + '). Zapsat ještě jednou?')) return;
+  }
+
+  S.checking = akce; render();
   const save = async (gpsDev) => {
     await db.collection('attendance').add({
       userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid,
       akce, pid: p.id, date: isoToday(), time: nowTime(), gps: gpsDev, selfie: null, manual: false, createdAt: FV()
     });
-    toast(akce + ' zaznamenán' + (gpsDev != null ? ' — GPS ' + gpsDev + ' m' : ' (bez GPS)') + ' ✓');
-    render();
+    toast(akce + ' zapsán' + (gpsDev != null ? ' — poloha sedí (' + gpsDev + ' m)' : ' BEZ OVĚŘENÍ POLOHY') + ' ✓');
   };
-  if (navigator.geolocation && p.gps) {
-    navigator.geolocation.getCurrentPosition(
-      pos => save(haversine(pos.coords.latitude, pos.coords.longitude, p.gps.lat, p.gps.lng)),
-      () => save(null), { enableHighAccuracy: true, timeout: 12000 });
-  } else save(null);
+  try {
+    if (!p.gps) {
+      if (!confirm('Stavba „' + p.name + '" nemá zadané GPS, takže polohu nelze ověřit.\n\nZapsat ' +
+                   akce.toLowerCase() + ' bez ověření?')) { S.checking = null; render(); return; }
+      await save(null);
+    } else if (!navigator.geolocation) {
+      if (!confirm('Tenhle prohlížeč neumí zjistit polohu.\n\nZapsat ' + akce.toLowerCase() + ' bez ověření?')) { S.checking = null; render(); return; }
+      await save(null);
+    } else {
+      let pos = null, err = null;
+      try { pos = await acquirePos(); } catch (e) { err = e; }
+      if (pos) {
+        await save(haversine(pos.coords.latitude, pos.coords.longitude, p.gps.lat, p.gps.lng));
+      } else {
+        if (!confirm(posErrText(err) + '\n\nZapsat ' + akce.toLowerCase() + ' bez ověření polohy?')) { S.checking = null; render(); return; }
+        await save(null);
+      }
+    }
+  } catch (e) { toast('Zápis se nepovedl: ' + (e.code || e.message)); }
+  S.checking = null; render();
 }
 async function workerSubmit() {
   const txt = $('#wt').value.trim();
