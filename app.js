@@ -56,7 +56,7 @@ const S = {
   workerProject: null, draftPhotos: [], draftAtts: [], uploading: 0, signFor: null, tplOpen: false,
   loginMode: 'teren', loginWorker: null,
   online: navigator.onLine, unsub: [],
-  denikTab: 'zaznamy', searchQ: '', geoHits: [], geoLabel: null, loginMsg: null
+  denikTab: 'zaznamy', searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false
 };
 window.addEventListener('online', () => { S.online = true; render(); });
 window.addEventListener('offline', () => { S.online = false; render(); });
@@ -1866,8 +1866,59 @@ async function saveUser() {
 }
 
 /* ============ PRACOVNÍK / SUB (mobil) ============ */
+
+/* Polohu si rekneme jednou pri otevreni obrazovky — na pichnuti ji stejne
+   potrebujeme. Kdyz ji nedostaneme, nic se nerozbije, jen se neradi podle
+   vzdalenosti. */
+function ensureMyPos() {
+  if (S.posAsked || !navigator.geolocation) return;
+  S.posAsked = true;
+  navigator.geolocation.getCurrentPosition(
+    pos => { S.myPos = { lat: pos.coords.latitude, lng: pos.coords.longitude }; render(); },
+    () => { S.myPos = null; },
+    { enableHighAccuracy: true, timeout: 12000, maximumAge: 120000 });
+}
+function fmtDist(m) {
+  if (m == null) return '';
+  return m < 1000 ? Math.round(m) + ' m' : (m / 1000).toFixed(1).replace('.', ',') + ' km';
+}
+/* Kde jsem naposledy pichnul — to je nejlepsi odhad, kde jsem i dnes.
+   Bere se z docasnosti, ne z pameti telefonu, aby to preslo i na novy mobil. */
+function lastUsedProjectId() {
+  const mine = S.attendance.filter(a => !S.me || a.userDocId === S.me.id);
+  return mine.length ? mine[0].pid : null;
+}
+/* Poradi seznamu:
+   - kdyz zname polohu -> rozhoduje vzdalenost (stojim na stavbe = jsem tady).
+     Pouhe "naposledy" by clovekovi nabidlo stavbu 4 km daleko, i kdyz stoji
+     8 m od jine. Posledni pouzita zustava oznacena, jen neni automaticky prvni.
+   - kdyz polohu nemame (nepovoleno, suteren, stary telefon) -> naposledy pouzita
+     nahore, zbytek abecedne.
+   - stavby bez GPS nejdou seradit, jdou na konec s poznamkou. */
+function workerProjectList() {
+  const last = lastUsedProjectId();
+  const items = S.projects.filter(x => x.active).map(x => ({
+    p: x,
+    dist: (S.myPos && x.gps) ? haversine(S.myPos.lat, S.myPos.lng, x.gps.lat, x.gps.lng) : null,
+    last: x.id === last
+  }));
+  const podleVzdalenosti = items.some(i => i.dist != null);
+  return items.sort((a, b) => {
+    if (a.dist != null && b.dist != null) return a.dist - b.dist;
+    if (a.dist != null) return -1;
+    if (b.dist != null) return 1;
+    if (!podleVzdalenosti && a.last !== b.last) return a.last ? -1 : 1;
+    if (!!a.p.gps !== !!b.p.gps) return a.p.gps ? -1 : 1;  // bez GPS vzdy na konec
+    return String(a.p.name).localeCompare(String(b.p.name), 'cs');
+  });
+}
+
 function viewWorker() {
-  if (!S.workerProject && S.projects.length) S.workerProject = (S.projects.find(p => p.active) || S.projects[0]).id;
+  ensureMyPos();
+  if (!S.workerProject && S.projects.length) {
+    const list = workerProjectList();
+    S.workerProject = list.length ? list[0].p.id : S.projects[0].id;
+  }
   const p = proj(S.workerProject);
   const myEntries = p ? entriesOf(p.id).slice(0, 8) : [];
   const myAtt = S.attendance.filter(a => a.date === isoToday());
@@ -1878,8 +1929,12 @@ function viewWorker() {
   <main class="mobilewrap">
     <div class="card">
       <label style="margin-top:0">Stavba</label>
-      <div class="chipselect">${S.projects.filter(x => x.active).map(x => `<button class="${x.id === S.workerProject ? 'active' : ''}" onclick="S.workerProject='${x.id}';render()">${esc(x.name)}</button>`).join('')}</div>
-      ${p ? `<div class="muted" style="margin-top:8px">${esc(p.address || '')}</div>` : ''}
+      <select id="w-proj" style="font-size:16px" onchange="S.workerProject=this.value;render()">
+        ${workerProjectList().map(it => `<option value="${it.p.id}" ${it.p.id === S.workerProject ? 'selected' : ''}>${esc(it.p.name)}${
+          it.last ? ' · naposledy' : ''}${it.dist != null ? ' · ' + fmtDist(it.dist) : it.p.gps ? '' : ' · bez GPS'}</option>`).join('')}
+      </select>
+      ${p ? `<div class="muted" style="margin-top:8px">${esc(p.address || '')}${
+        !p.gps ? ' <b style="color:var(--wait)">· stavba nemá GPS, poloha se neověří</b>' : ''}</div>` : ''}
       <label>⏱ Docházka (GPS check-in)</label>
       <div class="aprv" style="margin-top:2px">
         <button class="btn ok" id="chk-in" onclick="workerCheck('Příchod')">📍 PŘÍCHOD</button>
