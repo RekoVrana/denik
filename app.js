@@ -109,6 +109,62 @@ const STAVCOLOR = { nove: 'b-int', probiha: 'b-wait', kontrola: 'b-wait', hotovo
 const VPSTAV = { navrh: ['b-int', '✏️ čeká na nacenění'], u_investora: ['b-wait', '⏳ u investora'], schvaleno: ['b-ok', '✓ schváleno'], zamitnuto: ['b-red', '✕ zamítnuto'], papir: ['b-ok', '✓ schváleno papírově'] };
 function sBadge(s) { return s === 'approved' ? '<span class="badge b-ok">✓ schváleno</span>' : s === 'pending' ? '<span class="badge b-wait">⏳ čeká</span>' : '<span class="badge b-int">🔒 interní</span>'; }
 
+/* ---------- mapy (Leaflet + OpenStreetMap, bez klíče a zdarma) ---------- */
+const MAPS = {};
+function mountMaps() {
+  if (typeof L === 'undefined') return;
+  document.querySelectorAll('[data-map]').forEach(el => {
+    const lat = parseFloat(el.dataset.lat), lng = parseFloat(el.dataset.lng);
+    if (el._map || !isFinite(lat) || !isFinite(lng)) return;
+    const drag = el.dataset.drag === '1';
+    const map = L.map(el, { scrollWheelZoom: false }).setView([lat, lng], 18);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+    const marker = L.marker([lat, lng], { draggable: drag }).addTo(map);
+    if (drag) marker.on('dragend', () => {
+      const c = marker.getLatLng();
+      const a = $('#pf-lat'), b = $('#pf-lng');
+      if (a) a.value = c.lat.toFixed(7);
+      if (b) b.value = c.lng.toFixed(7);
+    });
+    el._map = map;
+    MAPS[el.dataset.map] = { map, marker };
+    setTimeout(() => map.invalidateSize(), 60);
+  });
+}
+function showFormMap(lat, lng) {
+  const el = $('#pf-mapwrap'), hint = $('#pf-maphint');
+  if (!el) return;
+  el.style.display = ''; if (hint) hint.style.display = '';
+  el.dataset.lat = lat; el.dataset.lng = lng;
+  if (el._map && MAPS.form) {
+    MAPS.form.map.setView([lat, lng], 18);
+    MAPS.form.marker.setLatLng([lat, lng]);
+    setTimeout(() => MAPS.form.map.invalidateSize(), 60);
+  } else mountMaps();
+}
+function mapFromInputs() {
+  const lat = parseFloat($('#pf-lat').value), lng = parseFloat($('#pf-lng').value);
+  if (isFinite(lat) && isFinite(lng)) showFormMap(lat, lng);
+}
+/* adresa -> souradnice pres Nominatim (OpenStreetMap) */
+async function geocodeAddress() {
+  const q = ($('#pf-addr').value || '').trim();
+  if (!q) { toast('Nejdřív vyplň adresu'); return; }
+  if (!S.online) { toast('Hledání adresy potřebuje internet'); return; }
+  toast('Hledám adresu…');
+  try {
+    const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=cz&q=' + encodeURIComponent(q);
+    const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    const j = await res.json();
+    if (!j || !j.length) { toast('Adresu se nepodařilo najít — zkus ji napsat jinak'); return; }
+    const lat = +parseFloat(j[0].lat).toFixed(7), lng = +parseFloat(j[0].lon).toFixed(7);
+    $('#pf-lat').value = lat; $('#pf-lng').value = lng;
+    showFormMap(lat, lng);
+    toast('Nalezeno ✓ Zkontroluj špendlík — dá se přetáhnout');
+  } catch (e) { toast('Hledání se nepovedlo — zkus to znovu'); }
+}
+
 /* ---------- Drive most (Apps Script) ---------- */
 async function driveCall(payload) {
   if (!CFG.scriptUrl) throw new Error('Drive most není nastaven (config.js → scriptUrl)');
@@ -311,6 +367,7 @@ function render() {
   const role = S.meAuth.role;
   root.innerHTML = (role === 'admin') ? viewAdmin() : viewWorker();
   if (S.signFor) setTimeout(sigInit, 0);
+  setTimeout(mountMaps, 0);
 }
 function viewNotConfigured() {
   return `<div class="login"><div class="lbox"><div class="lg">🏗 REKONSTRUKCE <em>VRÁNA</em></div>
@@ -631,7 +688,12 @@ function projectForm(id) {
     </div>
     <label>Investor</label><input type="text" id="pf-client" value="${esc(p.client || '')}">
     <label>E-mail investora (notifikace portálu)</label><input type="email" id="pf-cmail" value="${esc(p.investorEmail || '')}">
-    <label>Adresa</label><input type="text" id="pf-addr" value="${esc(p.address || '')}">
+    <label>Adresa realizace</label>
+    <div style="display:flex;gap:8px;align-items:stretch">
+      <input type="text" id="pf-addr" value="${esc(p.address || '')}" placeholder="Novodvorská 413/135, Praha 4"
+             onkeydown="if(event.key==='Enter'){event.preventDefault();geocodeAddress();}">
+      <button class="btn dark" style="flex:none" onclick="geocodeAddress()">📍 Najít</button>
+    </div>
     <label>Typ projektu</label><input type="text" id="pf-type" value="${esc(p.type || '')}" placeholder="Kompletní rekonstrukce · 3+kk panelák">
     <div class="frow">
       <div><label>Zodpovědný</label><input type="text" id="pf-resp" value="${esc(p.resp || 'Zdeno Balúch')}"></div>
@@ -642,8 +704,14 @@ function projectForm(id) {
       <div><label>Průběh (%)</label><input type="number" id="pf-prog" value="${p.progress || 0}" min="0" max="100"></div>
     </div>
     <div class="frow">
-      <div><label>GPS lat</label><input type="text" id="pf-lat" value="${p.gps ? p.gps.lat : ''}" placeholder="50.0236914"></div>
-      <div><label>GPS lng</label><input type="text" id="pf-lng" value="${p.gps ? p.gps.lng : ''}" placeholder="14.4368684"></div>
+      <div><label>GPS lat</label><input type="text" id="pf-lat" value="${p.gps ? p.gps.lat : ''}" placeholder="50.0236914" oninput="mapFromInputs()"></div>
+      <div><label>GPS lng</label><input type="text" id="pf-lng" value="${p.gps ? p.gps.lng : ''}" placeholder="14.4368684" oninput="mapFromInputs()"></div>
+    </div>
+    <div class="mapreal" id="pf-mapwrap" data-map="form" data-drag="1"
+         data-lat="${p.gps ? p.gps.lat : ''}" data-lng="${p.gps ? p.gps.lng : ''}"
+         style="${p.gps ? '' : 'display:none'}"></div>
+    <div class="note" id="pf-maphint" style="${p.gps ? '' : 'display:none'}">
+      Špendlík přetáhni přesně tam, kde se parta hlásí. Proti tomuhle bodu se ověřuje check-in (povolená odchylka ${CFG.gpsTolerance || 100} m).
     </div>
     <label>ID složky zakázky na Drive (pro fotky)</label><input type="text" id="pf-drive" value="${esc(p.driveFolderId || '')}" placeholder="nech prázdné — vytvoří se automaticky">
     <label>Plán předání</label><input type="text" id="pf-hand" value="${esc(p.handover || '')}" placeholder="plán předání 24. 7. 2026">
@@ -688,10 +756,21 @@ function pgProjDetail() {
       </div>
       <div class="card">
         <h3>📍 Pozice projektu (GPS check-in)</h3>
-        <div class="mapbox"><span class="pin">📍</span><b>${esc(p.address)}</b>
-          <span>${p.gps ? `GPS: ${p.gps.lat}, ${p.gps.lng} · povolená odchylka ${p.gps.tol || 100} m` : '⚠ GPS není nastavena — check-in nebude ověřovat polohu'}</span>
-          ${p.gps ? `<a href="https://mapy.cz/turisticka?q=${p.gps.lat}%2C${p.gps.lng}" target="_blank" class="lnk">otevřít na mapě</a>` : ''}</div>
-        <div class="aprv"><button class="btn ghost sm" onclick="gpsFromHere('${p.id}')">◎ Nastavit GPS podle mojí polohy</button></div>
+        ${p.gps ? `
+          <div class="mapreal" data-map="det" data-drag="0" data-lat="${p.gps.lat}" data-lng="${p.gps.lng}"></div>
+          <div class="kv" style="margin-top:10px"><span>${esc(p.address || '—')}</span>
+            <span class="muted">${p.gps.lat}, ${p.gps.lng} · ±${p.gps.tol || 100} m</span></div>
+          <div class="aprv">
+            <a class="btn ghost sm" target="_blank" href="https://mapy.cz/zakladni?q=${p.gps.lat}%2C${p.gps.lng}">🗺 Mapy.cz</a>
+            <a class="btn ghost sm" target="_blank" href="https://www.google.com/maps?q=${p.gps.lat},${p.gps.lng}">🗺 Google Maps</a>
+            <button class="btn ghost sm" onclick="gpsFromHere('${p.id}')">◎ Nastavit podle mojí polohy</button>
+          </div>`
+        : `<div class="mapbox"><span class="pin">📍</span><b>${esc(p.address || 'bez adresy')}</b>
+             <span>⚠ GPS není nastavena — check-in nebude ověřovat polohu</span></div>
+           <div class="aprv">
+             <button class="btn amber sm" onclick="projectForm('${p.id}')">✏️ Doplnit adresu a najít na mapě</button>
+             <button class="btn ghost sm" onclick="gpsFromHere('${p.id}')">◎ Nastavit podle mojí polohy</button>
+           </div>`}
       </div>
       <div class="card">
         <h3>🏠 Portál investora</h3>
@@ -908,7 +987,10 @@ function openDriveDoc(driveId, title) {
       <button class="btn dark sm" onclick="closeDoc()">✕ Zavřít</button></div>
     <div class="vbody"><iframe src="https://drive.google.com/file/d/${driveId}/preview" allow="autoplay"></iframe></div></div></div>`;
 }
-function modal(html) { $('#modal').innerHTML = `<div class="modal" onclick="if(event.target===this)closeModal()"><div class="mbox">${html}</div></div>`; }
+function modal(html) {
+  $('#modal').innerHTML = `<div class="modal" onclick="if(event.target===this)closeModal()"><div class="mbox">${html}</div></div>`;
+  setTimeout(mountMaps, 0);
+}
 function closeModal() { $('#modal').innerHTML = ''; }
 
 /* ---- Stavební deník ---- */

@@ -1,5 +1,5 @@
 /* Service worker — Deník staveb Rekonstrukce Vrána */
-const CACHE = 'vrana-denik-v1';
+const CACHE = 'vrana-denik-v2';
 const ASSETS = ['./', './index.html', './app.js', './config.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
@@ -16,8 +16,8 @@ self.addEventListener('fetch', e => {
       fetch(e.request).then(r => { const cp = r.clone(); caches.open(CACHE).then(c => c.put(e.request, cp)); return r; })
         .catch(() => caches.match(e.request, { ignoreSearch: true }).then(r => r || caches.match('./index.html')))
     );
-  } else if (url.hostname === 'www.gstatic.com') {
-    // firebase SDK: cache-first
+  } else if (url.hostname === 'www.gstatic.com' || url.hostname === 'unpkg.com') {
+    // firebase SDK + Leaflet: cache-first
     e.respondWith(caches.match(e.request).then(r => r || fetch(e.request).then(res => { const cp = res.clone(); caches.open(CACHE).then(c => c.put(e.request, cp)); return res; })));
   }
 });

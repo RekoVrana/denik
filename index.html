@@ -169,6 +169,8 @@
   .rosterlist .urow:hover{background:var(--amber-soft)}
   .modal{position:fixed;inset:0;background:rgba(12,22,36,.6);z-index:110;display:flex;align-items:center;justify-content:center;padding:14px}
   .modal .mbox{background:#fff;border-radius:12px;padding:20px;width:100%;max-width:520px;max-height:92vh;overflow:auto}
+  .mapreal{height:230px;border-radius:10px;border:1px solid var(--line);overflow:hidden;margin-top:10px;background:#e8edf1}
+  .mapreal .leaflet-container{height:100%;width:100%;font:inherit}
 </style>
 </head>
 <body>
@@ -176,6 +178,8 @@
 <div id="viewer"></div>
 <div id="modal"></div>
 <div class="toast" id="toast"></div>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
