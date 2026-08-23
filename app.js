@@ -56,7 +56,7 @@ const S = {
   workerProject: null, draftPhotos: [], draftAtts: [], uploading: 0, signFor: null, tplOpen: false,
   loginMode: 'teren', loginWorker: null,
   online: navigator.onLine, unsub: [],
-  denikTab: 'zaznamy', searchQ: '', geoHits: [], geoLabel: null
+  denikTab: 'zaznamy', searchQ: '', geoHits: [], geoLabel: null, loginMsg: null
 };
 window.addEventListener('online', () => { S.online = true; render(); });
 window.addEventListener('offline', () => { S.online = false; render(); });
@@ -416,8 +416,15 @@ function initAuth() {
           const me = await db.collection('users').doc(S.meAuth.userDocId).get();
           S.me = me.exists ? { id: me.id, ...me.data() } : null;
           S.authState = 'in'; startData(); render(); return;
-        } else { await auth.signOut(); toast('Účet nemá přiřazenou roli — kontaktuj vedení.'); }
-      } catch (e) { console.warn(e); toast('Chyba přihlášení: ' + e.message); await auth.signOut(); }
+        } else {
+          await auth.signOut();
+          S.loginMsg = 'Heslo bylo správně, ale účet nemá přidělená práva. Ať ho vedení otevře v sekci Uživatelé a uloží — práva se tím srovnají.';
+        }
+      } catch (e) {
+        console.warn(e);
+        S.loginMsg = 'Přihlášení se nedokončilo: ' + (e.code || e.message);
+        await auth.signOut();
+      }
     }
     S.authState = 'out';
     loadRoster(); render();
@@ -467,20 +474,35 @@ function viewLogin() {
         : '<div class="empty">Zatím žádní pracovníci.<br><span class="muted">Vedení je založí v sekci Uživatelé.</span></div>'}</div>
       `}
     `}
+    ${S.loginMsg ? `<div class="lerr" style="display:block">${esc(S.loginMsg)}</div>` : ''}
     <div class="lerr" id="lerr"></div>
     <div class="ls" style="margin-top:14px;margin-bottom:0">${CFG.firmName} · ${S.online ? '' : '⚠ offline'}</div>
   </div></div>`;
 }
-function lerr(msg) { const e = $('#lerr'); if (e) { e.textContent = msg; e.style.display = 'block'; } }
+/* Firebase vraci kody; uzivateli je musime prelozit. Drive se vsechny chyby
+   ukazovaly jako "Nesprávný PIN", takze nikdo nepoznal chybejici ucet od
+   preklepu ani od vypadku site. */
+function authErrText(e) {
+  const c = (e && e.code) || '';
+  if (c === 'auth/invalid-credential' || c === 'auth/wrong-password' || c === 'auth/user-not-found')
+    return 'Nesedí heslo/PIN — nebo účet ještě není dokončený. Ať ti vedení zkusí PIN nastavit znovu.';
+  if (c === 'auth/too-many-requests') return 'Moc pokusů po sobě. Zkus to za pár minut, nebo si nech nastavit nový PIN.';
+  if (c === 'auth/network-request-failed') return 'Nejsi připojený k internetu.';
+  if (c === 'auth/user-disabled') return 'Účet je zablokovaný — ozvi se vedení.';
+  if (c === 'auth/invalid-email') return 'Účet je poškozený (chybná adresa). Ať ti ho vedení založí znovu.';
+  return 'Přihlášení se nepodařilo (' + (c || 'neznámá chyba') + ').';
+}
+function lerr(msg) { S.loginMsg = null; const e = $('#lerr'); if (e) { e.textContent = msg; e.style.display = 'block'; } }
 async function doLogin() {
   try { await auth.signInWithEmailAndPassword($('#li-email').value.trim(), $('#li-pass').value); }
-  catch (e) { lerr('Přihlášení se nepodařilo. Zkontroluj e-mail a heslo.'); }
+  catch (e) { lerr(authErrText(e)); }
 }
 async function doWorkerLogin() {
   const pin = $('#li-pin').value.trim();
   if (pin.length < 6) { lerr('PIN má aspoň 6 znaků.'); return; }
+  if (!S.loginWorker.authEmail) { lerr('Účet nemá přihlašovací adresu — ať ti vedení vytvoří přihlášení znovu.'); return; }
   try { await auth.signInWithEmailAndPassword(S.loginWorker.authEmail, pin); }
-  catch (e) { lerr('Nesprávný PIN.'); }
+  catch (e) { lerr(authErrText(e)); }
 }
 async function doSetup() {
   const name = $('#su-name').value.trim(), email = $('#su-email').value.trim(), pass = $('#su-pass').value;
