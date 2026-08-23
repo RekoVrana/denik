@@ -1465,21 +1465,25 @@ function pgOrganizace() {
     </div>
     <div class="tablecard">
       <div style="overflow-x:auto"><table>
-        <tr><th>Terénní pracovník</th><th>Skupina</th><th>Činnost</th><th>Na projektu</th><th>Datum a čas</th><th>GPS odchylka</th><th>Foto</th></tr>
+        <tr><th>Terénní pracovník</th><th>Skupina</th><th>Činnost</th><th>Na projektu</th><th>Datum a čas</th><th>GPS odchylka</th><th>Foto</th><th></th></tr>
         ${rows.map(a => { const u = userById(a.userDocId) || { jmeno: a.userName || '?', prijmeni: '' }; return `
         <tr>
           <td><span class="uav" style="margin-right:6px">${ini(u)}</span>${esc(fullName(u))}</td>
           <td class="muted">${esc(u.skupina || '—')}</td>
           <td><span class="badge ${a.akce === 'Příchod' ? 'b-ok' : 'b-int'}">${a.akce}</span></td>
           <td>${esc((proj(a.pid) || {}).name || a.projName || '')}</td>
-          <td>${fmtISO(a.date)} ${a.time}</td>
+          <td>${fmtISO(a.date)} ${a.time}${a.upraveno ? `<br><span class="badge b-wait" title="${esc(a.upraveno.duvod || '')}">✏️ opraveno — ${esc(a.upraveno.kdo || '')}</span>` : ''}</td>
           <td>${a.gps == null ? '<span class="muted">bez GPS</span>' : a.gps > TOL ? `<b style="color:var(--red)">⚠ ${a.gps.toLocaleString('cs')} m</b>` : `<span class="muted">${a.gps} m</span>`}</td>
           <td>${a.selfie ? `<img src="${a.selfie}" style="width:34px;height:34px;border-radius:50%;object-fit:cover;cursor:pointer" onclick="openPhoto('','ověřovací foto',this.parentElement)">` : a.manual ? '<span class="badge b-wait">admin</span>' : '<b style="color:var(--red)">chybí</b>'}</td>
+          <td style="white-space:nowrap">
+            <button class="btn ghost sm" title="Opravit" onclick="attUpravitForm('${a.id}')">✏️</button>
+            <button class="btn ghost sm" title="Smazat" onclick="attSmazat('${a.id}')">🗑</button>
+          </td>
         </tr>`; }).join('')}
       </table></div>
       <div class="pagefoot"><span>${rows.length} záznamů</span></div>
     </div>
-    <div class="note">GPS nad povolenou odchylku (${TOL} m) se flaguje ⚠ a chybějící ověřovací foto je vidět hned. Měsíční kontrola hodin Ruslana (#25) = záložka Reporty.</div>
+    <div class="note">GPS nad povolenou odchylku (${TOL} m) se flaguje ⚠. Záznam jde <b>✏️ opravit</b> nebo <b>🗑 smazat</b> — u opravy se uloží kdo, kdy a proč, ať je to při sporu o výplatu dohledatelné. Měsíční kontrola hodin Ruslana (#25) = záložka Reporty.</div>
   </main>`;
 }
 async function addAtt() {
@@ -1488,6 +1492,54 @@ async function addAtt() {
   const u = userById(userDocId);
   await db.collection('attendance').add({ userDocId, userName: fullName(u), authUid: S.authUser.uid, akce, pid, date, time, gps: null, selfie: null, manual: true, createdAt: FV() });
   S.attFormOpen = false; toast('Záznam přidán (opraveno administrátorem)'); render();
+}
+
+/* Opravy dochazky. Kazda zmena nese stopu (kdo, kdy) — u evidence hodin
+   musi byt dohledatelne, kdo do zaznamu sahnul. */
+function attUpravitForm(id) {
+  const a = S.attendance.find(x => x.id === id); if (!a) return;
+  const u = userById(a.userDocId) || {};
+  modal(`<h3>✏️ Opravit záznam docházky</h3>
+    <div class="note" style="margin-top:0">${esc(fullName(u) || a.userName || '?')} ·
+      původně <b>${esc(a.akce)}</b> ${fmtISO(a.date)} ${esc(a.time)}</div>
+    <div class="frow">
+      <div><label>Činnost</label><select id="ae-a">
+        ${['Příchod', 'Odchod'].map(x => `<option ${a.akce === x ? 'selected' : ''}>${x}</option>`).join('')}
+      </select></div>
+      <div><label>Stavba</label><select id="ae-p">
+        ${S.projects.map(p => `<option value="${p.id}" ${p.id === a.pid ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+      </select></div>
+    </div>
+    <div class="frow">
+      <div><label>Datum</label><input type="date" id="ae-d" value="${esc(a.date || isoToday())}"></div>
+      <div><label>Čas</label><input type="time" id="ae-t" value="${esc(String(a.time || '07:00').split(':').map((x, i) => i === 0 ? String(x).padStart(2, '0') : x).join(':'))}"></div>
+    </div>
+    <label>Důvod opravy (uvidí ho vedení u záznamu)</label>
+    <input type="text" id="ae-duvod" placeholder="např. zapomněl píchnout odchod, nahlásil telefonem">
+    <div class="aprv">
+      <button class="btn amber" onclick="attUlozit('${id}')">💾 Uložit opravu</button>
+      <button class="btn ghost" onclick="closeModal()">Zrušit</button>
+    </div>`);
+}
+async function attUlozit(id) {
+  const a = S.attendance.find(x => x.id === id); if (!a) return;
+  const t = $('#ae-t').value || '07:00';
+  try {
+    await db.collection('attendance').doc(id).update({
+      akce: $('#ae-a').value, pid: $('#ae-p').value,
+      date: $('#ae-d').value || isoToday(), time: t,
+      upraveno: { kdo: fullName(S.me || {}), kdy: new Date().toISOString(), duvod: $('#ae-duvod').value.trim() }
+    });
+    closeModal(); toast('Záznam opraven ✓');
+  } catch (e) { toast('Oprava se nepovedla: ' + (e.code || e.message)); }
+}
+async function attSmazat(id) {
+  const a = S.attendance.find(x => x.id === id); if (!a) return;
+  const u = userById(a.userDocId) || {};
+  if (!confirm('Opravdu smazat tento záznam?\n\n' + (fullName(u) || a.userName || '?') + ' — ' +
+               a.akce + ' ' + fmtISO(a.date) + ' ' + a.time + '\n\nSmazání nejde vrátit zpět.')) return;
+  try { await db.collection('attendance').doc(id).delete(); toast('Záznam smazán ✓'); }
+  catch (e) { toast('Smazání se nepovedlo: ' + (e.code || e.message)); }
 }
 
 /* ---- Úkoly ---- */
