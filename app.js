@@ -25,7 +25,7 @@ function nowTime() { const d = new Date(); return String(d.getHours()).padStart(
    sekundy, resi i dve pichnuti ve stejne minute); kdyz chybi, spocita se
    z data a casu — a to i u starych zaznamu bez vedouci nuly. */
 function attKey(a) {
-  if (a && a.createdAt && a.createdAt.seconds) return a.createdAt.seconds;
+  if (a && a.createdAt && a.createdAt.seconds) return a.createdAt.seconds + (a.createdAt.nanoseconds || 0) / 1e9;
   const t = String((a && a.time) || '0:0').split(':').map(Number);
   const d = new Date((a && a.date) || '1970-01-01');
   return (d.getTime() / 1000) + (t[0] || 0) * 3600 + (t[1] || 0) * 60;
@@ -1952,6 +1952,33 @@ async function saveUser() {
 /* Polohu si rekneme jednou pri otevreni obrazovky — na pichnuti ji stejne
    potrebujeme. Kdyz ji nedostaneme, nic se nerozbije, jen se neradi podle
    vzdalenosti. */
+/* Stav smeny = posledni MUJ zaznam dochazky. Zadne dva prichody po sobe:
+   kdyz jsem v praci, jde jen odejit, a naopak. */
+function mojeSmena() {
+  const mine = S.attendance.filter(a => !S.me || a.userDocId === S.me.id);
+  const posledni = mine.length ? mine[0] : null;          // S.attendance je razena sestupne
+  const vPraci = !!(posledni && posledni.akce === 'Příchod');
+  return { posledni, vPraci, pid: vPraci ? posledni.pid : null, zeVcerejska: vPraci && posledni.date !== isoToday() };
+}
+function zacatekSmeny(a) {
+  const t = String((a && a.time) || '0:0').split(':').map(Number);
+  const d = new Date(((a && a.date) || isoToday()) + 'T00:00:00');
+  d.setHours(t[0] || 0, t[1] || 0, 0, 0);
+  return d;
+}
+function trvaniOd(a) {
+  const min = Math.max(0, Math.round((Date.now() - zacatekSmeny(a).getTime()) / 60000));
+  return Math.floor(min / 60) + ' h ' + String(min % 60).padStart(2, '0') + ' min';
+}
+/* Cas se prepisuje primo v DOM, ne pres render() — jinak by se pracovnikovi
+   pri psani mazal rozepsany zapis do deniku. */
+setInterval(() => {
+  const el = document.getElementById('w-cas');
+  if (!el) return;
+  const sm = mojeSmena();
+  if (sm.vPraci && sm.posledni) el.textContent = trvaniOd(sm.posledni);
+}, 30000);
+
 function ensureMyPos() {
   if (S.posAsked || !navigator.geolocation) return;
   S.posAsked = true;
@@ -1997,6 +2024,8 @@ function workerProjectList() {
 
 function viewWorker() {
   ensureMyPos();
+  const sm = mojeSmena();
+  if (sm.vPraci) S.workerProject = sm.pid;         // behem smeny se stavba neprepina
   if (!S.workerProject && S.projects.length) {
     const list = workerProjectList();
     S.workerProject = list.length ? list[0].p.id : S.projects[0].id;
@@ -2011,19 +2040,34 @@ function viewWorker() {
   <main class="mobilewrap">
     <div class="card">
       <label style="margin-top:0">Stavba</label>
-      <select id="w-proj" style="font-size:16px" onchange="S.workerProject=this.value;render()">
-        ${workerProjectList().map(it => `<option value="${it.p.id}" ${it.p.id === S.workerProject ? 'selected' : ''}>${esc(it.p.name)}${
-          it.last ? ' · naposledy' : ''}${it.dist != null ? ' · ' + fmtDist(it.dist) : it.p.gps ? '' : ' · bez GPS'}</option>`).join('')}
-      </select>
-      ${p ? `<div class="muted" style="margin-top:8px">${esc(p.address || '')}${
-        !p.gps ? ' <b style="color:var(--wait)">· stavba nemá GPS, poloha se neověří</b>' : ''}</div>` : ''}
-      <label>⏱ Docházka (GPS check-in)</label>
-      <div class="aprv" style="margin-top:2px">
-        <button class="btn ok" id="chk-in" ${S.checking ? 'disabled' : ''} onclick="workerCheck('Příchod')">${S.checking === 'Příchod' ? '⏳ ZJIŠŤUJI POLOHU…' : '📍 PŘÍCHOD'}</button>
-        <button class="btn dark" id="chk-out" ${S.checking ? 'disabled' : ''} onclick="workerCheck('Odchod')">${S.checking === 'Odchod' ? '⏳ ZJIŠŤUJI POLOHU…' : '🏁 ODCHOD'}</button>
-        ${lastAct ? `<span class="badge ${lastAct.akce === 'Příchod' ? 'b-ok' : 'b-int'}" style="align-self:center">dnes: ${lastAct.akce} ${lastAct.time}${lastAct.gps != null ? ' · GPS ' + lastAct.gps + ' m' : ''}</span>` : ''}
-      </div>
-      <div class="note">Poloha se ověří proti GPS stavby (±${CFG.gpsTolerance || 100} m). Zjišťování může pár vteřin trvat — počkej, než tlačítko zase zezelená.</div>
+      ${sm.vPraci ? `
+        <div class="zamcena"><span class="zam">🔒</span>${esc((proj(sm.pid) || {}).name || 'neznámá stavba')}</div>
+        <div class="muted" style="margin-top:6px;font-size:12px">Stavbu jde změnit až po odchodu — nebo tlačítkem „Přejít na jinou stavbu".</div>
+      ` : `
+        <select id="w-proj" style="font-size:16px" onchange="S.workerProject=this.value;render()">
+          ${workerProjectList().map(it => `<option value="${it.p.id}" ${it.p.id === S.workerProject ? 'selected' : ''}>${esc(it.p.name)}${
+            it.last ? ' · naposledy' : ''}${it.dist != null ? ' · ' + fmtDist(it.dist) : it.p.gps ? '' : ' · bez GPS'}</option>`).join('')}
+        </select>
+        ${p ? `<div class="muted" style="margin-top:8px">${esc(p.address || '')}${
+          !p.gps ? ' <b style="color:var(--wait)">· stavba nemá GPS, poloha se neověří</b>' : ''}</div>` : ''}
+      `}
+
+      <label>⏱ Docházka</label>
+      ${sm.vPraci ? `
+        <div class="smena">
+          <div class="muted" style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#3c6b4c">V práci</div>
+          <div class="cas" id="w-cas">${trvaniOd(sm.posledni)}</div>
+          <div class="kde">od ${sm.posledni.time}${sm.zeVcerejska ? ' <b>(' + fmtISO(sm.posledni.date) + ' — neuzavřeno!)</b>' : ''} · ${esc((proj(sm.pid) || {}).name || '')}</div>
+        </div>
+        <button class="btn dark velke" ${S.checking ? 'disabled' : ''} onclick="workerCheck('Odchod')">${S.checking === 'Odchod' ? '⏳ ZJIŠŤUJI POLOHU…' : '🏁 ZAPSAT ODCHOD'}</button>
+        <button class="btn ghost velke" ${S.checking ? 'disabled' : ''} onclick="prechodForm()" style="margin-top:8px">${S.checking === 'Přechod' ? '⏳ PŘESOUVÁM…' : '🔄 Přejít na jinou stavbu'}</button>
+      ` : `
+        <div class="smena mimo">
+          <div class="cas">${sm.posledni ? 'Naposledy: ' + sm.posledni.akce.toLowerCase() + ' ' + fmtISO(sm.posledni.date) + ' v ' + sm.posledni.time : 'Zatím žádná docházka'}</div>
+        </div>
+        <button class="btn ok velke" ${S.checking ? 'disabled' : ''} onclick="workerCheck('Příchod')">${S.checking === 'Příchod' ? '⏳ ZJIŠŤUJI POLOHU…' : '📍 ZAPSAT PŘÍCHOD'}</button>
+      `}
+      <div class="note">Poloha se ověří proti GPS stavby (±${CFG.gpsTolerance || 100} m). Zjišťování může pár vteřin trvat.</div>
     </div>
     ${p && (p.stavbaDocs || []).length ? `<div class="card">
       <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— půdorysy, vizualizace</span></h3>
@@ -2080,11 +2124,10 @@ async function workerCheck(akce) {
   const p = proj(S.workerProject);
   if (!p) { toast('Vyber stavbu'); return; }
 
-  // uz je posledni dnesni akce tatáž? at se nepichne omylem dvakrát
-  const dnesMoje = S.attendance.filter(a => a.date === isoToday() && (!S.me || a.userDocId === S.me.id));
-  if (dnesMoje.length && dnesMoje[0].akce === akce) {
-    if (!confirm(akce + ' už je dnes zapsaný (' + dnesMoje[0].time + '). Zapsat ještě jednou?')) return;
-  }
+  // pojistka: dvakrat po sobe tatáž akce nedava smysl (tlacitko uz to hlida)
+  const sm = mojeSmena();
+  if (sm.vPraci && akce === 'Příchod') { toast('Už jsi v práci — nejdřív zapiš odchod'); return; }
+  if (!sm.vPraci && akce === 'Odchod') { toast('Nejsi v práci — nejdřív zapiš příchod'); return; }
 
   S.checking = akce; render();
   const save = async (gpsDev) => {
@@ -2115,6 +2158,44 @@ async function workerCheck(akce) {
   } catch (e) { toast('Zápis se nepovedl: ' + (e.code || e.message)); }
   S.checking = null; render();
 }
+/* Prechod mezi stavbami behem dne: zapise odchod tady a prichod tam.
+   Poloha se meri JEDNOU a porovna se s obema stavbami zvlast. */
+function prechodForm() {
+  const sm = mojeSmena();
+  const tady = proj(sm.pid);
+  const kam = workerProjectList().filter(it => it.p.id !== sm.pid);
+  if (!kam.length) { toast('Není kam přejít — je jen jedna aktivní stavba'); return; }
+  modal(`<h3>🔄 Přejít na jinou stavbu</h3>
+    <div class="note" style="margin-top:0">Zapíšu <b>odchod</b> z ${esc((tady || {}).name || '—')}
+      a rovnou <b>příchod</b> na vybranou stavbu. Poloha se ověří u obou.</div>
+    <label>Kam jedeš</label>
+    <select id="pr-kam" style="font-size:16px">
+      ${kam.map(it => `<option value="${it.p.id}">${esc(it.p.name)}${it.dist != null ? ' · ' + fmtDist(it.dist) : it.p.gps ? '' : ' · bez GPS'}</option>`).join('')}
+    </select>
+    <div class="aprv"><button class="btn amber" onclick="workerPrechod()">🔄 Přejít</button>
+    <button class="btn ghost" onclick="closeModal()">Zrušit</button></div>`);
+}
+async function workerPrechod() {
+  const novePid = $('#pr-kam').value;
+  const sm = mojeSmena();
+  const zTady = proj(sm.pid), naTam = proj(novePid);
+  if (!zTady || !naTam) { toast('Stavba nenalezena'); return; }
+  closeModal();
+  S.checking = 'Přechod'; render();
+  let pos = null;
+  if (navigator.geolocation) { try { pos = await acquirePos(); } catch (e) {} }
+  const odch = (pos && zTady.gps) ? haversine(pos.coords.latitude, pos.coords.longitude, zTady.gps.lat, zTady.gps.lng) : null;
+  const prich = (pos && naTam.gps) ? haversine(pos.coords.latitude, pos.coords.longitude, naTam.gps.lat, naTam.gps.lng) : null;
+  const spolecne = { userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid, date: isoToday(), selfie: null, manual: false };
+  try {
+    await db.collection('attendance').add({ ...spolecne, akce: 'Odchod', pid: zTady.id, time: nowTime(), gps: odch, createdAt: FV() });
+    await db.collection('attendance').add({ ...spolecne, akce: 'Příchod', pid: naTam.id, time: nowTime(), gps: prich, createdAt: FV() });
+    S.workerProject = naTam.id;
+    toast('Přesun zapsán ✓ Jsi na stavbě ' + naTam.name);
+  } catch (e) { toast('Přesun se nepovedl: ' + (e.code || e.message)); }
+  S.checking = null; render();
+}
+
 async function workerSubmit() {
   const txt = $('#wt').value.trim();
   if (!txt && !S.draftPhotos.length) { toast('Napiš text nebo přidej fotku'); return; }
