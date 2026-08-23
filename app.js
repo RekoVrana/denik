@@ -224,7 +224,18 @@ function vratitFormulare() {
     if (FORMMEM.__kurzor && el.setSelectionRange) el.setSelectionRange(FORMMEM.__kurzor[0], FORMMEM.__kurzor[1]);
   } catch (e) {}
 }
-function zapomen(...ids) { ids.forEach(i => { delete FORMMEM[i]; }); }
+/* Po ulozeni musi zmizet i to, co je jeste v policku na obrazovce — jinak by
+   ho hned pri dalsim prekresleni schovatFormulare() zase nacetlo zpatky
+   a ulozeny text by se vratil do prazdneho formulare. */
+function zapomen(...ids) {
+  ids.forEach(i => {
+    delete FORMMEM[i];
+    const el = document.getElementById(i);
+    if (!el || !pamatovatelne(el)) return;
+    if (el.type === 'checkbox' || el.type === 'radio') el.checked = el.defaultChecked;
+    else if (el.tagName !== 'SELECT') el.value = el.defaultValue || '';
+  });
+}
 function zapomenVse() { Object.keys(FORMMEM).forEach(k => { delete FORMMEM[k]; }); }
 
 /* ---------- data listeners ---------- */
@@ -268,6 +279,18 @@ function startPortal() {
 
 /* ---------- lookups ---------- */
 const proj = id => S.projects.find(p => p.id === id);
+/* Ukol si drzi ID osoby (respId). Drive se ukladalo jen jmeno jako text, takze
+   po oprave preklepu v prijmeni ukol osirel a cloveku zmizel z mobilu.
+   Jmeno se dal uklada taky — kvuli starym ukolum a kvuli exportu. */
+function respName(t) {
+  const u = t && t.respId ? S.users.find(x => x.id === t.respId) : null;
+  return u ? fullName(u) : ((t && t.resp) || '');
+}
+function jeMuj(t) {
+  if (!S.me) return false;
+  if (t.respId) return t.respId === S.me.id;
+  return t.resp === fullName(S.me) || (t.res || []).includes(fullName(S.me));
+}
 const userById = id => S.users.find(u => u.id === id);
 function entriesOf(pid) { return S.entries.filter(e => e.pid === pid); }
 function pendingEntries() { return S.entries.filter(e => e.status === 'pending'); }
@@ -944,7 +967,7 @@ function nastenkaUkoly() {
     <div class="card">
       <h3>⏰ Úkoly po termínu — vyřešit hned</h3>
       ${od.length ? od.map(t => `
-        <div class="urow"><span style="color:var(--red)">❗</span><div><b>${esc(t.title)}</b><br><span class="muted">${esc((proj(t.pid) || {}).name || '')} · ${esc(t.resp || '')} · termín ${fmtISO(t.term)} <b style="color:var(--red)">(${daysBetween(t.term, isoToday())} dní po termínu)</b></span></div>
+        <div class="urow"><span style="color:var(--red)">❗</span><div><b>${esc(t.title)}</b><br><span class="muted">${esc((proj(t.pid) || {}).name || '')} · ${esc(respName(t))} · termín ${fmtISO(t.term)} <b style="color:var(--red)">(${daysBetween(t.term, isoToday())} dní po termínu)</b></span></div>
         <span style="margin-left:auto;display:flex;gap:6px"><button class="btn ok sm" onclick="taskDone('${t.id}')">✓ Hotovo</button><button class="btn ghost sm" onclick="taskShift('${t.id}')">+3 dny</button></span></div>`).join('')
       : '<div class="empty">🎉 Žádné úkoly po termínu.</div>'}
     </div>
@@ -1062,7 +1085,8 @@ function pgProjDetail() {
         <div class="kv"><span>Typ</span><span>${esc(p.type || '—')}</span></div>
         <div class="kv"><span>Stav</span><span>${esc(p.stav)} · ${esc(p.phase || '')} (${p.progress || 0} %)</span></div>
         <div class="kv"><span>Drive složka</span><span>${p.driveFolderId ? `<a href="https://drive.google.com/drive/folders/${p.driveFolderId}" target="_blank">📁 otevřít</a>` : '<span class="muted">vytvoří se s první fotkou</span>'}</span></div>
-        <div class="aprv"><button class="btn amber" onclick="projectForm('${p.id}')">✏️ Upravit</button></div>
+        <div class="aprv"><button class="btn amber" onclick="projectForm('${p.id}')">✏️ Upravit</button>
+          <button class="btn ghost" onclick="delProject('${p.id}')">🗑 Smazat stavbu</button></div>
       </div>
       <div class="card">
         <h3>📍 Pozice projektu (GPS check-in)</h3>
@@ -1134,7 +1158,7 @@ function pgProjDetail() {
     const tk = S.tasks.filter(x => x.pid === p.id && x.stav !== 'sablona');
     body = `<main><div class="card">
       <h3>📌 Úkoly na projektu (${tk.length})</h3>
-      ${tk.map(x => `<div class="urow"><span>${x.stav === 'hotovo' ? '✅' : isOverdue(x) ? '❗' : '📌'}</span><div><b>${esc(x.title)}</b><br><span class="muted">${esc(x.resp || '')} · termín ${fmtISO(x.term)}</span></div>
+      ${tk.map(x => `<div class="urow"><span>${x.stav === 'hotovo' ? '✅' : isOverdue(x) ? '❗' : '📌'}</span><div><b>${esc(x.title)}</b><br><span class="muted">${esc(respName(x))} · termín ${fmtISO(x.term)}</span></div>
         <span style="margin-left:auto"><span class="badge ${STAVCOLOR[x.stav]}">${STAVY[x.stav]}</span></span></div>`).join('') || '<div class="empty">Žádné úkoly.</div>'}
       <div class="aprv"><button class="btn amber sm" onclick="S.taskFormOpen=true;goPage('ukoly')">➕ Přidat úkol</button></div>
     </div></main>`;
@@ -1400,6 +1424,7 @@ function pgDetail() {
   return `
   <div class="strip"><span class="back" onclick="S.detail=null;render()">←</span><h1>Denní záznam</h1><span class="sp"></span>
     ${e.status === 'pending' ? `<button class="btn ok" onclick="approveEntry('${e.id}')">✓ SCHVÁLIT PRO INVESTORA</button><button class="btn dark" onclick="keepInternalEntry('${e.id}')">🔒 JEN INTERNÍ</button>` : ''}
+    <button class="btn ghost sm" title="Smazat záznam" onclick="delEntry('${e.id}')">🗑</button>
     <div class="proj"><b>${esc(p.name || '')}</b><br><small>${esc(p.cn || '')} · ${esc(p.client || '')}</small></div>
   </div>
   <div class="datestrip">
@@ -1415,9 +1440,14 @@ function pgDetail() {
           ${e.weather ? `<div class="muted" style="margin:6px 0 2px">🌤 ${esc(e.weather)}</div>` : ''}
           <div style="display:flex;justify-content:space-between;align-items:center"><h3>Provedené práce</h3>${sBadge(e.status)}</div>
           <ul class="worklist">${(e.works || []).map(w => `<li>${esc(w)}</li>`).join('')}</ul>
-          ${e.internal ? `<div class="inote">🔒 <b>Interní poznámka</b> (investor nikdy neuvidí): ${esc(e.internal)}
-            <div style="margin-top:6px"><button class="btn ghost sm" onclick="noteToTask('${e.id}')">📌 Převést na úkol</button></div></div>` : `
-            <div class="aprv"><input type="text" id="int-${e.id}" placeholder="Přidat interní poznámku…" style="max-width:320px"><button class="btn ghost sm" onclick="addInternal('${e.id}')">🔒 Uložit interní</button></div>`}
+          <div class="inote">🔒 <b>Interní poznámka</b> <span style="font-weight:400">— investor ji nikdy neuvidí</span>
+            <textarea id="int-${e.id}" style="min-height:56px;margin-top:6px" placeholder="Co nechceš, aby viděl klient…">${esc(e.internal || '')}</textarea>
+            <div class="aprv" style="margin-top:8px">
+              <button class="btn ghost sm" onclick="saveInternal('${e.id}')">💾 Uložit</button>
+              ${e.internal ? `<button class="btn ghost sm" onclick="delInternal('${e.id}')">🗑 Smazat</button>
+              <button class="btn ghost sm" onclick="noteToTask('${e.id}')">📌 Převést na úkol</button>` : ''}
+            </div>
+          </div>
         </div>
         <div class="card">
           <h3>📷 Média na záznamu <span class="muted" style="font-weight:400">— klik na štítek: ⏳ čeká → ✓ klient → 🔒 interní</span></h3>
@@ -1463,13 +1493,23 @@ function pgDetail() {
     </div>
   </main>`;
 }
-async function addInternal(eid) {
-  const t = $('#int-' + eid).value.trim(); if (!t) return;
+/* Poznamku slo drive napsat jen jednou — jakmile byla ulozena, policko zmizelo
+   a nesla ani opravit, ani smazat. Ted je to normalni editovatelne pole. */
+async function saveInternal(eid) {
+  const t = $('#int-' + eid).value.trim();
   await db.collection('entries').doc(eid).update({ internal: t });
+  zapomen('int-' + eid);
+  toast(t ? 'Interní poznámka uložena ✓' : 'Interní poznámka smazána');
+}
+async function delInternal(eid) {
+  if (!confirm('Smazat interní poznámku?')) return;
+  await db.collection('entries').doc(eid).update({ internal: '' });
+  zapomen('int-' + eid);
+  toast('Interní poznámka smazána');
 }
 async function noteToTask(eid) {
   const e = S.entries.find(x => x.id === eid);
-  await db.collection('tasks').add({ title: e.internal.split('—')[0].trim().slice(0, 120), pid: e.pid, resp: fullName(S.me || {}), created: isoToday(), term: shiftISO(isoToday(), 2), stav: 'nove', res: [fullName(S.me || {})], src: 'z deníku ' + fmtISO(e.date), createdAt: FV() });
+  await db.collection('tasks').add({ title: e.internal.split('—')[0].trim().slice(0, 120), pid: e.pid, respId: S.me ? S.me.id : '', resp: fullName(S.me || {}), created: isoToday(), term: shiftISO(isoToday(), 2), stav: 'nove', res: [fullName(S.me || {})], src: 'z deníku ' + fmtISO(e.date), createdAt: FV() });
   toast('Interní poznámka převedena na úkol ✓');
 }
 
@@ -1624,6 +1664,25 @@ function pgOrganizace() {
     <div class="t ${f === 'schvalit' ? 'active' : ''}" onclick="S.orgFilter='schvalit';render()">⏳ Ke schválení (${cekaNaSchvaleni().length})</div>
   </div>
   <main>
+    ${cekajiciZadosti().length ? `
+    <div class="card" style="border:2px solid var(--amber)">
+      <h3>🕗 Žádosti od party — doplnění zapomenutého odchodu (${cekajiciZadosti().length})</h3>
+      <div class="note" style="margin-top:0">Do docházky se nic nezapsalo. Zápis vznikne až tím, že žádost schválíš.</div>
+      ${cekajiciZadosti().map(z => `
+        <div class="urow" style="align-items:flex-start;padding:11px 4px">
+          <span class="uav" style="margin-top:2px">${ini(userById(z.userDocId) || { jmeno: z.userName })}</span>
+          <div style="flex:1">
+            <b>${esc(z.userName || '')}</b> — odchod <b>${fmtISO(z.date)} v ${esc(z.time)}</b>
+            ${z.pauza ? ` <span class="badge b-int">pauza ${z.pauza} min</span>` : ''}
+            <br><span class="muted">${esc((proj(z.pid) || {}).name || '')} · příchod byl ${fmtISO(z.prichodDate || z.date)} v ${esc(z.prichodTime || '?')}</span>
+            ${z.poznamka ? `<br><span class="muted">„${esc(z.poznamka)}"</span>` : ''}
+          </div>
+          <span style="display:flex;gap:6px;flex-wrap:wrap">
+            <button class="btn ok sm" onclick="zadostSchvalit('${z.id}')">✓ Schválit a zapsat</button>
+            <button class="btn red sm" onclick="zadostZamitnout('${z.id}')">✕ Zamítnout</button>
+          </span>
+        </div>`).join('')}
+    </div>` : ''}
     ${S.attFormOpen ? `
     <div class="card">
       <h3>➕ Přidat pracovní den (ručně — když pracovník zapomene)</h3>
@@ -1664,9 +1723,9 @@ function pgOrganizace() {
             a.schvaleno === false ? `<br><span class="badge b-wait">⏳ čeká na schválení</span>${
               a.poznamka ? `<br><span class="muted" style="font-size:11.5px">„${esc(a.poznamka)}"</span>` : ''}` : ''}</td>
           <td>${esc((proj(a.pid) || {}).name || a.projName || '')}</td>
-          <td>${fmtISO(a.date)} ${a.time}${a.upraveno ? `<br><span class="badge b-wait" title="${esc(a.upraveno.duvod || '')}">✏️ opraveno — ${esc(a.upraveno.kdo || '')}</span>` : ''}</td>
+          <td>${fmtISO(a.date)} ${a.time}${a.pauza ? `<br><span class="badge b-int">🥪 pauza ${a.pauza} min</span>` : ''}${a.upraveno ? `<br><span class="badge b-wait" title="${esc(a.upraveno.duvod || '')}">✏️ opraveno — ${esc(a.upraveno.kdo || '')}</span>` : ''}${a.zapsal ? `<br><span class="badge b-wait">✍ zapsalo vedení — ${esc(a.zapsal.kdo || '')}</span>` : ''}</td>
           <td>${a.gps == null ? '<span class="muted">bez GPS</span>' : a.gps > TOL ? `<b style="color:var(--red)">⚠ ${a.gps.toLocaleString('cs')} m</b>` : `<span class="muted">${a.gps} m</span>`}</td>
-          <td>${a.selfie ? `<img src="${a.selfie}" style="width:34px;height:34px;border-radius:50%;object-fit:cover;cursor:pointer" onclick="openPhoto('','ověřovací foto',this.parentElement)">` : a.manual ? '<span class="badge b-wait">admin</span>' : '<b style="color:var(--red)">chybí</b>'}</td>
+          <td>${a.selfie ? `<img src="${a.selfie}" style="width:34px;height:34px;border-radius:50%;object-fit:cover;cursor:pointer" onclick="openPhoto('${a.selfieDriveId || ''}','ověřovací foto — ${esc(a.userName || '')}',this.parentElement)">` : a.manual ? '<span class="badge b-wait">admin</span>' : '<b style="color:var(--red)">chybí</b>'}</td>
           <td style="white-space:nowrap">
             ${a.schvaleno === false ? `
               <button class="btn ok sm" title="Schválit" onclick="attSchvalit('${a.id}')">✓ Schválit</button>
@@ -1794,7 +1853,7 @@ function pgUkoly() {
         </div>
         <div class="frow">
           <div><label>Začátek (den 0)</label><input type="date" id="tp-d" value="${isoToday()}"></div>
-          <div><label>Odpovědná osoba</label><select id="tp-r">${S.users.filter(u => u.active !== false && u.typ && u.typ.kanc).map(u => `<option>${esc(fullName(u))}</option>`).join('')}</select></div>
+          <div><label>Odpovědná osoba</label><select id="tp-r">${S.users.filter(u => u.active !== false && u.typ && u.typ.kanc).map(u => `<option value="${u.id}">${esc(fullName(u))}</option>`).join('')}</select></div>
         </div>
         <div class="aprv"><button class="btn amber sm" onclick="tplApply()">▶ Vytvořit úkoly</button></div>
       </div>` : ''}
@@ -1811,7 +1870,7 @@ function pgUkoly() {
       <label>Název *</label><input type="text" id="tk-t" placeholder="Co je potřeba udělat">
       <div class="frow">
         <div><label>Projekt</label><select id="tk-p">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
-        <div><label>Odpovědná osoba</label><select id="tk-r">${S.users.filter(u => u.active !== false).map(u => `<option>${esc(fullName(u))}</option>`).join('')}</select></div>
+        <div><label>Odpovědná osoba</label><select id="tk-r">${S.users.filter(u => u.active !== false).map(u => `<option value="${u.id}">${esc(fullName(u))}</option>`).join('')}</select></div>
       </div>
       <label>Termín</label><input type="date" id="tk-d" value="${shiftISO(isoToday(), 3)}">
       <div class="aprv"><button class="btn amber" onclick="addTask()">💾 ULOŽIT ÚKOL</button></div>
@@ -1830,11 +1889,12 @@ function ukolySeznam() {
         <td><input type="checkbox" ${t.stav === 'hotovo' ? 'checked' : ''} onclick="taskDone('${t.id}')"></td>
         <td><b>${esc(t.title)}</b>${t.src ? ` <span class="badge b-int">${esc(t.src)}</span>` : ''}</td>
         <td>${esc((proj(t.pid) || {}).name || '')}</td>
-        <td>${esc(t.resp || '')}</td>
+        <td>${esc(respName(t))}</td>
         <td><span class="badge ${STAVCOLOR[t.stav]}">${STAVY[t.stav]}</span></td>
         <td class="muted">${fmtISO(t.created)}</td>
         <td>${isOverdue(t) ? `<b style="color:var(--red)">❗ ${fmtISO(t.term)} (${daysBetween(t.term, isoToday())} d. po termínu)</b>` : fmtISO(t.term)}</td>
-        <td>${t.stav !== 'hotovo' ? `<button class="btn ok sm" onclick="taskNext('${t.id}')">→ ${STAVY[nextStav(t.stav)]}</button>` : ''}</td>
+        <td style="white-space:nowrap">${t.stav !== 'hotovo' ? `<button class="btn ok sm" onclick="taskNext('${t.id}')">→ ${STAVY[nextStav(t.stav)]}</button>` : ''}
+          <button class="btn ghost sm" title="Smazat úkol" onclick="delTask('${t.id}')">🗑</button></td>
       </tr>`).join('')}
     </table></div>
     <div class="pagefoot"><span>${rows.length} úkolů</span></div>
@@ -1849,11 +1909,12 @@ function ukolyKanban() {
       ${S.tasks.filter(t => t.stav === c).map(t => `
         <div class="card" style="padding:10px 12px;margin-bottom:8px;${isOverdue(t) ? 'border-left:3px solid var(--red)' : ''}">
           <b style="font-size:13px">${esc(t.title)}</b>
-          <div class="muted" style="font-size:11.5px;margin:4px 0">${esc((proj(t.pid) || {}).name || '')} · ${esc(t.resp || '')}</div>
+          <div class="muted" style="font-size:11.5px;margin:4px 0">${esc((proj(t.pid) || {}).name || '')} · ${esc(respName(t))}</div>
           <div style="font-size:11.5px">${isOverdue(t) ? `<b style="color:var(--red)">❗ ${fmtISO(t.term)}</b>` : `📅 ${fmtISO(t.term)}`}</div>
           <div style="display:flex;gap:4px;margin-top:8px">
             ${c !== 'nove' ? `<button class="btn ghost sm" style="padding:3px 8px" onclick="taskMove('${t.id}',-1)">←</button>` : ''}
             ${c !== 'hotovo' ? `<button class="btn amber sm" style="padding:3px 8px" onclick="taskMove('${t.id}',1)">→</button>` : ''}
+            <button class="btn ghost sm" style="padding:3px 8px;margin-left:auto" title="Smazat úkol" onclick="delTask('${t.id}')">🗑</button>
           </div>
         </div>`).join('') || '<div class="muted" style="font-size:12px;text-align:center;padding:10px">prázdné</div>'}
     </div>`).join('')}
@@ -1873,9 +1934,10 @@ async function tplSave() {
 }
 async function tplApply() {
   const tpl = S.tasks.find(t => t.id === $('#tp-s').value); if (!tpl) return;
-  const pid = $('#tp-p').value, start = $('#tp-d').value || isoToday(), resp = $('#tp-r').value;
+  const pid = $('#tp-p').value, start = $('#tp-d').value || isoToday(), respId = $('#tp-r').value;
+  const ru = userById(respId), resp = ru ? fullName(ru) : '';
   for (const it of (tpl.items || [])) {
-    await db.collection('tasks').add({ title: it.title, pid, resp, created: isoToday(), term: shiftISO(start, it.off || 0), stav: 'nove', res: [resp], src: 'ze šablony ' + tpl.title, createdAt: FV() });
+    await db.collection('tasks').add({ title: it.title, pid, respId, resp, created: isoToday(), term: shiftISO(start, it.off || 0), stav: 'nove', res: resp ? [resp] : [], src: 'ze šablony ' + tpl.title, createdAt: FV() });
   }
   S.tplOpen = false;
   toast('Vytvořeno ' + (tpl.items || []).length + ' úkolů ze šablony ✓');
@@ -1887,7 +1949,12 @@ async function taskShift(id) { const t = S.tasks.find(x => x.id === id); await d
 async function addTask() {
   const title = $('#tk-t').value.trim();
   if (!title) { toast('Vyplň název úkolu'); return; }
-  await db.collection('tasks').add({ title, pid: $('#tk-p').value, resp: $('#tk-r').value, created: isoToday(), term: $('#tk-d').value || shiftISO(isoToday(), 3), stav: 'nove', res: [$('#tk-r').value], createdAt: FV() });
+  const respId = $('#tk-r').value, ru = userById(respId);
+  await db.collection('tasks').add({
+    title, pid: $('#tk-p').value, respId, resp: ru ? fullName(ru) : '', created: isoToday(),
+    term: $('#tk-d').value || shiftISO(isoToday(), 3), stav: 'nove', res: ru ? [fullName(ru)] : [], createdAt: FV()
+  });
+  $('#tk-t').value = ''; zapomen('tk-t');
   S.taskFormOpen = false; toast('Úkol přidán ✓'); render();
 }
 
@@ -1974,10 +2041,14 @@ function hoursFromAttendance(from, to) {
     const [udi, pid] = k.split('|');
     const prichody = recs.filter(r => r.akce === 'Příchod').map(r => toMin(r.time));
     const odchody = recs.filter(r => r.akce === 'Odchod').map(r => toMin(r.time));
+    // pauza na obed: bere se nejdelsi zadana za ten den na te stavbe
+    const pauza = recs.reduce((m, r) => Math.max(m, parseInt(r.pauza, 10) || 0), 0);
     out[udi] = out[udi] || {};
-    out[udi][pid] = out[udi][pid] || { h: 0, dni: 0, incomplete: 0 };
+    out[udi][pid] = out[udi][pid] || { h: 0, dni: 0, incomplete: 0, pauzaMin: 0 };
     if (prichody.length && odchody.length && Math.max(...odchody) > Math.min(...prichody)) {
-      out[udi][pid].h += (Math.max(...odchody) - Math.min(...prichody)) / 60;
+      const min = Math.max(0, (Math.max(...odchody) - Math.min(...prichody)) - pauza);
+      out[udi][pid].h += min / 60;
+      out[udi][pid].pauzaMin += pauza;
       out[udi][pid].dni++;
     } else { out[udi][pid].incomplete++; out[udi][pid].dni++; }
   });
@@ -2028,7 +2099,7 @@ function repTable() {
       if (h.incomplete) anyIncomplete = true;
       const kcv = s ? h.h * s.h : 0, cc = (s && s.c) ? h.h * s.c : 0;
       rowKc += kcv; rowC += cc; rowH += h.h;
-      return `<td style="text-align:center"><b>${s ? kc(kcv) + ' Kč' : '⚠'}</b><br><span class="muted">${fmtH(h.h)} · ${h.dni} dní${h.incomplete ? ` · <b style="color:var(--red)">${h.incomplete}× neúplný den</b>` : ''}</span><br>${s ? (s.c ? `<span class="badge b-wait">hrubá ${s.h}</span> <span class="badge b-ok">čistá ${s.c}</span>` : `<span class="badge b-wait">${s.h} Kč/h</span>`) : '<span class="badge b-red">chybí sazba!</span>'}</td>`;
+      return `<td style="text-align:center"><b>${s ? kc(kcv) + ' Kč' : '⚠'}</b><br><span class="muted">${fmtH(h.h)} · ${h.dni} ${h.dni === 1 ? 'den' : h.dni < 5 ? 'dny' : 'dní'}${h.pauzaMin ? ` · <span title="odečtená pauza na oběd">− pauza ${h.pauzaMin} min</span>` : ''}${h.incomplete ? ` · <b style="color:var(--red)">${h.incomplete}× neúplný den</b>` : ''}</span><br>${s ? (s.c ? `<span class="badge b-wait">hrubá ${s.h}</span> <span class="badge b-ok">čistá ${s.c}</span>` : `<span class="badge b-wait">${s.h} Kč/h</span>`) : '<span class="badge b-red">chybí sazba!</span>'}</td>`;
     });
     if (!s && rowH > 0) missing.push(fullName(u));
     if (s && s.c && rowH > 0) anyCista = true;
@@ -2066,12 +2137,12 @@ function repTable() {
 }
 function repExport() {
   const H = hoursFromAttendance(S.repFrom, S.repTo);
-  let csv = 'Pracovnik;Projekt;Hodiny;Dny;Sazba hruba;Sazba cista;Kc hruba\n';
+  let csv = 'Pracovnik;Projekt;Hodiny;Dny;Pauza (min);Sazba hruba;Sazba cista;Kc hruba\n';
   S.repWorkers.forEach(udi => {
     const u = userById(udi); const s = S.sazby[udi] || {};
     S.repProjects.forEach(pid => {
       const h = H[udi] && H[udi][pid]; if (!h) return;
-      csv += [fullName(u), (proj(pid) || {}).name, h.h.toFixed(2), h.dni, s.h || '', s.c || '', s.h ? Math.round(h.h * s.h) : ''].join(';') + '\n';
+      csv += [fullName(u), (proj(pid) || {}).name, h.h.toFixed(2).replace('.', ','), h.dni, h.pauzaMin || 0, s.h || '', s.c || '', s.h ? Math.round(h.h * s.h) : ''].join(';') + '\n';
     });
   });
   const a = document.createElement('a');
@@ -2105,8 +2176,12 @@ function pgUzivatele() {
           <td style="text-align:center">${t.sub ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
           <td>${s ? `<b>${s.h} Kč/h</b>${s.c ? ` / <span style="color:var(--ok);font-weight:700">${s.c} Kč/h</span>` : ''}` : (t.teren && !t.kanc && !t.sub ? '<b style="color:var(--red)">⚠ chybí</b>' : '<span class="muted">—</span>')}</td>
           <td>${esc(u.role || '—')}${u.skupina ? ` <span class="muted">· ${esc(u.skupina)}</span>` : ''}</td>
-          <td>${u.uid ? '<span class="badge b-ok">✓ má účet</span>' : (t.inv ? '<span class="muted">portál</span>' : `<button class="btn ghost sm" onclick="loginForm('${u.id}')">🔑 vytvořit</button>`)}</td>
-          <td><span class="lnk" onclick="editUser('${u.id}')">✏️</span></td>
+          <td style="white-space:nowrap">${u.uid
+            ? `<span class="badge b-ok">✓ má účet</span><br><button class="btn ghost sm" style="margin-top:4px" onclick="pinForm('${u.id}')">🔑 nový PIN</button>
+               <button class="btn ghost sm" style="margin-top:4px" title="Zrušit přihlášení" onclick="zrusitPrihlaseni('${u.id}')">🚫</button>`
+            : (t.inv ? '<span class="muted">portál</span>' : `<button class="btn ghost sm" onclick="loginForm('${u.id}')">🔑 vytvořit</button>`)}</td>
+          <td style="white-space:nowrap"><span class="lnk" onclick="editUser('${u.id}')">✏️</span>
+            <span class="lnk" style="margin-left:8px" title="Smazat uživatele" onclick="delUser('${u.id}')">🗑</span></td>
         </tr>`; }).join('')}
       </table></div>
       <div class="pagefoot"><span>${S.users.length} uživatelů</span></div>
@@ -2138,6 +2213,134 @@ async function createLogin(udi) {
     closeModal(); toast('Účet vytvořen ✓ PIN předej pracovníkovi.');
   } catch (e) { toast('Chyba: ' + (e.code === 'auth/email-already-in-use' ? 'účet už existuje' : e.message)); }
 }
+/* ---- zmena PINu a zruseni prihlaseni (B1) ----
+   Firebase z prohlizece neumi zmenit heslo cizimu uctu — to svede jen server.
+   Delame to tedy oklikou: zalozi se novy prihlasovaci ucet s novym PINem
+   a staremu se odeberou prava (smaze se jeho zaznam v users_auth). Starym
+   PINem uz se pak nikdo nikam nedostane. Dochazka a zadosti se prepnou na
+   novy ucet, aby pracovnik neprisel o svou historii a o rozdelanou smenu. */
+function pinForm(udi) {
+  const u = userById(udi); if (!u) return;
+  modal(`<h3>🔑 Nový PIN pro: ${esc(fullName(u))}</h3>
+    <div class="note" style="margin-top:0">Starý PIN okamžitě přestane platit. Nový mu předej osobně —
+      nikde se nedá zpětně zobrazit.</div>
+    <label>Nový PIN (min. 6 číslic)</label><input type="text" id="pin-novy" inputmode="numeric" placeholder="např. 481207">
+    <label>Popisek na přihlašovací obrazovce</label><input type="text" id="pin-pop" value="${esc(u.role || '')}">
+    <div class="aprv"><button class="btn amber" onclick="resetPin('${udi}')">💾 Nastavit nový PIN</button>
+    <button class="btn ghost" onclick="closeModal()">Zrušit</button></div>`);
+}
+async function resetPin(udi) {
+  const pin = ($('#pin-novy').value || '').trim();
+  if (pin.length < 6) { toast('PIN musí mít aspoň 6 znaků'); return; }
+  const u = userById(udi); if (!u) return;
+  const verze = (u.pinVerze || 1) + 1;
+  const authEmail = 'u' + udi.toLowerCase() + '.v' + verze + '@denik.rekovrana.cz';
+  const staryUid = u.uid || null;
+  try {
+    const secondary = firebase.apps.find(a => a.name === 'sec') || firebase.initializeApp(CFG.firebase, 'sec');
+    const cred = await secondary.auth().createUserWithEmailAndPassword(authEmail, pin);
+    const role = roleOfTypeKey(typeKeyOfUser(u));
+    await db.collection('users_auth').doc(cred.user.uid).set({ role, userDocId: udi, name: fullName(u) });
+    await db.collection('users').doc(udi).update({ uid: cred.user.uid, authEmail, pinVerze: verze });
+    await db.collection('roster').doc(udi).set({ jmeno: u.jmeno, prijmeni: u.prijmeni, authEmail, role, popis: ($('#pin-pop').value || '').trim() }, { merge: true });
+    if (staryUid) await db.collection('users_auth').doc(staryUid).delete().catch(() => {});
+    // historie je navazana na ucet — prepnout, jinak by pracovnik videl prazdno
+    let presunuto = 0;
+    for (const a of S.attendance.filter(x => x.userDocId === udi && x.authUid !== cred.user.uid)) {
+      await db.collection('attendance').doc(a.id).update({ authUid: cred.user.uid }).catch(() => {}); presunuto++;
+    }
+    for (const z of S.zadosti.filter(x => x.userDocId === udi && x.authUid !== cred.user.uid)) {
+      await db.collection('zadosti').doc(z.id).update({ authUid: cred.user.uid }).catch(() => {});
+    }
+    await secondary.auth().signOut();
+    closeModal();
+    toast('Nový PIN nastaven ✓ Starý už neplatí' + (presunuto ? ' · historie přenesena (' + presunuto + ' záznamů)' : '') + '.');
+  } catch (e) {
+    toast('Nepovedlo se: ' + (e.code === 'auth/email-already-in-use' ? 'zkus to prosím ještě jednou' : (e.code || e.message)));
+  }
+}
+async function zrusitPrihlaseni(udi) {
+  const u = userById(udi); if (!u || !u.uid) return;
+  if (!confirm('Zrušit přihlášení pro ' + fullName(u) + '?\n\nJeho PIN přestane platit a zmizí z přihlašovací obrazovky.\nZáznamy docházky a zápisy v deníku zůstanou.')) return;
+  try {
+    await db.collection('users_auth').doc(u.uid).delete().catch(() => {});
+    await db.collection('roster').doc(udi).delete().catch(() => {});
+    await db.collection('users').doc(udi).update({ uid: firebase.firestore.FieldValue.delete(), authEmail: firebase.firestore.FieldValue.delete() });
+    toast('Přihlášení zrušeno ✓');
+  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+}
+
+/* ---- mazani (B2) ----
+   Co je podkladem pro vyplatu nebo pro stavebni denik, se nemaze potichu.
+   Proto: dokud na veci visi dochazka nebo zapisy, nabidne se jen deaktivace
+   a rekne se proc. Prazdna polozka (preklep, testovaci zaznam) jde pryc. */
+async function delTask(id) {
+  const t = S.tasks.find(x => x.id === id); if (!t) return;
+  if (!confirm('Smazat úkol?\n\n„' + (t.title || '') + '"\n\nSmazání nejde vrátit zpět.')) return;
+  try { await db.collection('tasks').doc(id).delete(); toast('Úkol smazán ✓'); }
+  catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+}
+async function delEntry(id) {
+  const e = S.entries.find(x => x.id === id); if (!e) return;
+  const p = proj(e.pid) || {};
+  if (!confirm('Smazat denní záznam?\n\n' + fmtISOFull(e.date) + ' · ' + (p.name || '') + '\nZapsal: ' + (e.author || '') +
+    '\n\nZmizí i z portálu investora. Smazání nejde vrátit zpět.')) return;
+  try {
+    if (p.portalToken) await db.collection('portals').doc(p.portalToken).collection('feed').doc(id).delete().catch(() => {});
+    await db.collection('entries').doc(id).delete();
+    S.detail = null; toast('Záznam smazán ✓'); render();
+  } catch (err) { toast('Nepovedlo se: ' + (err.code || err.message)); }
+}
+async function delProject(pid) {
+  const p = proj(pid); if (!p) return;
+  const zapisu = S.entries.filter(e => e.pid === pid).length;
+  const dochazky = S.attendance.filter(a => a.pid === pid).length;
+  const ukolu = S.tasks.filter(t => t.pid === pid && t.stav !== 'sablona').length;
+  const vp = S.viceprace.filter(v => v.pid === pid).length;
+  if (dochazky) {
+    alert('Stavbu „' + p.name + '" smazat nejde.\n\nVisí na ní ' + dochazky + ' záznamů docházky — to je podklad pro výplaty ' +
+      'a nesmí zmizet.\n\nPřepni ji na neaktivní: zmizí z výběru na stavbě i z nabídky nových zápisů, ale historie zůstane.');
+    return;
+  }
+  if (!confirm('Opravdu smazat stavbu „' + p.name + '"?\n\nSmaže se i: ' + zapisu + ' zápisů deníku, ' + ukolu + ' úkolů, ' + vp +
+    ' víceprací a portál investora.\n\nSmazání nejde vrátit zpět.')) return;
+  if (zapisu + ukolu + vp > 0 && !confirm('Ještě jednou pro jistotu — smazat ' + (zapisu + ukolu + vp) + ' navázaných záznamů?')) return;
+  try {
+    for (const e of S.entries.filter(x => x.pid === pid)) await db.collection('entries').doc(e.id).delete().catch(() => {});
+    for (const t of S.tasks.filter(x => x.pid === pid)) await db.collection('tasks').doc(t.id).delete().catch(() => {});
+    for (const v of S.viceprace.filter(x => x.pid === pid)) await db.collection('viceprace').doc(v.id).delete().catch(() => {});
+    if (p.portalToken) {
+      for (const kol of ['feed', 'vp', 'docs']) {
+        const sn = await db.collection('portals').doc(p.portalToken).collection(kol).get().catch(() => null);
+        if (sn) for (const d of sn.docs) await d.ref.delete().catch(() => {});
+      }
+      await db.collection('portals').doc(p.portalToken).delete().catch(() => {});
+    }
+    await db.collection('projects').doc(pid).delete();
+    S.projDetailId = null; goPage('projekty'); toast('Stavba smazána ✓');
+  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+}
+async function delUser(udi) {
+  const u = userById(udi); if (!u) return;
+  const dochazky = S.attendance.filter(a => a.userDocId === udi).length;
+  const zapisu = S.entries.filter(e => e.author === fullName(u) || (u.uid && e.authorUid === u.uid)).length;
+  if (dochazky || zapisu) {
+    alert(fullName(u) + ' smazat nejde.\n\nMá ' + dochazky + ' záznamů docházky a ' + zapisu + ' zápisů v deníku — ' +
+      'to je podklad pro výplaty a stavební deník.\n\nMísto smazání: zruš mu přihlášení (🚫) a přepni ho na neaktivního. ' +
+      'Zmizí ze všech výběrů, ale historie zůstane dohledatelná.');
+    return;
+  }
+  if (!confirm('Opravdu smazat ' + fullName(u) + '?\n\nNemá žádnou docházku ani zápisy. Smazání nejde vrátit zpět.')) return;
+  try {
+    if (u.uid) await db.collection('users_auth').doc(u.uid).delete().catch(() => {});
+    await db.collection('roster').doc(udi).delete().catch(() => {});
+    await db.collection('sazby').doc(udi).delete().catch(() => {});
+    for (const t of S.tasks.filter(x => x.respId === udi)) await db.collection('tasks').doc(t.id).update({ respId: '' }).catch(() => {});
+    await db.collection('users').doc(udi).delete();
+    goPage('uzivatele'); toast('Uživatel smazán ✓');
+  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+}
+
 /* Role pro prihlaseni se odvozuje JEN tady, aby se createLogin a saveUser
    nemohly rozejit. Drive se pri zmene typu uzivatele role v roster/users_auth
    neprepsala a clovek zustal treba adminem. */
@@ -2226,9 +2429,33 @@ async function saveUser() {
       await db.collection('users_auth').doc(edit.uid).set({ role: newRole, name: j + ' ' + p }, { merge: true });
     } catch (e) { toast('⚠ Kartu jsem uložil, ale práva se nepodařilo srovnat: ' + e.message); }
   }
+  // Prejmenovani: jmeno je v ukolech, zaznamech a dochazce ulozene jako text.
+  // Bez tohohle by clovek po oprave preklepu prisel o svoje ukoly a v deniku
+  // by u starych zapisu zustalo stare jmeno.
+  const stareJmeno = edit ? fullName(edit).trim() : '';
+  const noveJmeno = (j + ' ' + p).trim();
+  let opraveno = 0;
+  if (edit && stareJmeno && stareJmeno !== noveJmeno) {
+    try {
+      for (const t of S.tasks.filter(x => x.respId === docId || x.resp === stareJmeno)) {
+        const res = (t.res || []).map(x => x === stareJmeno ? noveJmeno : x);
+        await db.collection('tasks').doc(t.id).update({ respId: docId, resp: noveJmeno, res });
+        opraveno++;
+      }
+      for (const e of S.entries.filter(x => x.author === stareJmeno)) {
+        await db.collection('entries').doc(e.id).update({ author: noveJmeno }); opraveno++;
+      }
+      for (const a of S.attendance.filter(x => x.userDocId === docId && x.userName !== noveJmeno)) {
+        await db.collection('attendance').doc(a.id).update({ userName: noveJmeno }); opraveno++;
+      }
+    } catch (e) { toast('⚠ Jméno jsem změnil, ale ne všude se to propsalo: ' + (e.code || e.message)); }
+    if (!edit.uid) await db.collection('roster').doc(docId).set({ jmeno: j, prijmeni: p }, { merge: true }).catch(() => {});
+  }
   goPage('uzivatele');
   toast(edit
-    ? (roleChanged ? 'Uživatel upraven ✓ Práva srovnána — musí se znovu přihlásit.' : 'Uživatel upraven ✓')
+    ? (roleChanged ? 'Uživatel upraven ✓ Práva srovnána — musí se znovu přihlásit.'
+      : opraveno ? 'Uživatel upraven ✓ Jméno přepsáno i u ' + opraveno + ' navázaných záznamů.'
+      : 'Uživatel upraven ✓')
     : 'Uživatel přidán ✓ Přihlášení mu vytvoř tlačítkem 🔑');
 }
 
@@ -2274,6 +2501,17 @@ setInterval(() => {
   const sm = mojeSmena();
   if (sm.vPraci && sm.posledni) el.textContent = trvaniOd(sm.posledni);
 }, 30000);
+
+/* Pauza na obed. Drzi se v telefonu do konce dne — kdyz appku zavre a zase
+   otevre, zustane zaply. Do dochazky se zapise az u odchodu. */
+function pauzaKlic() { return 'vrana-pauza-' + isoToday(); }
+function nactiPauzu() { try { return parseInt(localStorage.getItem(pauzaKlic()), 10) || 0; } catch (e) { return 0; } }
+function prepnoutPauzu() {
+  S.pauza = S.pauza ? 0 : 30;
+  try { localStorage.setItem(pauzaKlic(), String(S.pauza)); } catch (e) {}
+  render();
+}
+function vynulovatPauzu() { S.pauza = 0; try { localStorage.removeItem(pauzaKlic()); } catch (e) {} }
 
 function ensureMyPos() {
   if (S.posAsked || !navigator.geolocation) return;
@@ -2321,6 +2559,9 @@ function workerProjectList() {
 function viewWorker() {
   ensureMyPos();
   const sm = mojeSmena();
+  const zadost = mojeZadostOdchod();
+  const zamitnute = mojeZamitnuteZadosti();
+  S.pauza = nactiPauzu();
   if (sm.vPraci) S.workerProject = sm.pid;         // behem smeny se stavba neprepina
   if (!S.workerProject && S.projects.length) {
     const list = workerProjectList();
@@ -2330,7 +2571,7 @@ function viewWorker() {
   const myEntries = p ? entriesOf(p.id).slice(0, 8) : [];
   const myAtt = S.attendance.filter(a => a.date === isoToday());
   const lastAct = myAtt[0];
-  const myTasks = S.tasks.filter(t => t.stav !== 'hotovo' && t.stav !== 'sablona' && S.me && (t.resp === fullName(S.me) || (t.res || []).includes(fullName(S.me))));
+  const myTasks = S.tasks.filter(t => t.stav !== 'hotovo' && t.stav !== 'sablona' && jeMuj(t));
   return topbar() + `<div class="shell"><div class="content">
   <div class="strip"><h1>Můj den na stavbě</h1><span class="sp"></span><span class="muted">${fmtISOFull(isoToday())}</span></div>
   <main class="mobilewrap">
@@ -2349,19 +2590,34 @@ function viewWorker() {
       `}
 
       <label>⏱ Docházka</label>
-      ${sm.vPraci && sm.zeVcerejska ? `
+      ${zamitnute.map(z => `<div class="inote" style="background:#fdeceb;border-color:#e9b5b0;color:#8a2c22">
+        <b>✕ Vedení zamítlo doplněný odchod</b> (${fmtISO(z.date)} v ${esc(z.time)})${z.duvod ? '<br>Důvod: ' + esc(z.duvod) : ''}
+        <div style="margin-top:6px"><button class="btn ghost sm" onclick="zadostVzitNaVedomi('${z.id}')">Rozumím</button></div>
+      </div>`).join('')}
+      ${sm.vPraci && zadost ? `
+        <div class="smena" style="background:var(--wait-soft);border-color:#ecd9a0">
+          <div class="muted" style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--wait)">Čeká na vedení</div>
+          <div class="cas" style="color:var(--wait);font-size:17px">Odchod ${fmtISO(zadost.date)} v ${esc(zadost.time)}</div>
+          <div class="kde" style="color:#7c5806">Žádost je odeslaná. Do docházky se zapíše, až ji vedení schválí — hodiny se do té doby nepočítají.</div>
+        </div>
+      ` : sm.vPraci && sm.zeVcerejska ? `
         <div class="smena" style="background:var(--wait-soft);border-color:#ecd9a0">
           <div class="muted" style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--wait)">Neuzavřený den</div>
           <div class="cas" style="color:var(--wait);font-size:17px">Příchod ${fmtISO(sm.posledni.date)} v ${esc(sm.posledni.time)} — bez odchodu</div>
           <div class="kde" style="color:#7c5806">Doplň, kdy jsi odešel. Vedení to schválí a den se uzavře.</div>
         </div>
-        <button class="btn amber velke" onclick="doplnitOdchodForm()">🕗 DOPLNIT CHYBĚJÍCÍ ODCHOD</button>
+        <button class="btn amber velke" onclick="doplnitOdchodForm()">🕗 POŽÁDAT O DOPLNĚNÍ ODCHODU</button>
         <button class="btn ghost velke" ${S.checking ? 'disabled' : ''} onclick="workerCheck('Odchod')" style="margin-top:8px">${S.checking === 'Odchod' ? '⏳ ZAPISUJI…' : '🏁 Jsem tu pořád — zapsat odchod teď'}</button>
       ` : sm.vPraci ? `
         <div class="smena">
           <div class="muted" style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#3c6b4c">V práci</div>
           <div class="cas" id="w-cas">${trvaniOd(sm.posledni)}</div>
           <div class="kde">od ${sm.posledni.time}${sm.zeVcerejska ? ' <b>(' + fmtISO(sm.posledni.date) + ' — neuzavřeno!)</b>' : ''} · ${esc((proj(sm.pid) || {}).name || '')}</div>
+        </div>
+        <div class="pauzabox" onclick="prepnoutPauzu()">
+          <span class="toggle ${S.pauza ? 'on' : ''}"><i></i></span>
+          <div style="flex:1"><b>🥪 Pauza na oběd — 30 minut</b>
+          <small>${S.pauza ? 'Odečte se od dnešních hodin.' : 'Zapni, když sis dal pauzu. Odečte se od hodin.'}</small></div>
         </div>
         <button class="btn dark velke" ${S.checking ? 'disabled' : ''} onclick="workerCheck('Odchod')">${S.checking === 'Odchod' ? '⏳ ZAPISUJI…' : '🏁 ZAPSAT ODCHOD'}</button>
         <button class="btn ghost velke" ${S.checking ? 'disabled' : ''} onclick="prechodForm()" style="margin-top:8px">${S.checking === 'Přechod' ? '⏳ PŘESOUVÁM…' : '🔄 Přejít na jinou stavbu'}</button>
@@ -2371,7 +2627,7 @@ function viewWorker() {
         </div>
         <button class="btn ok velke" ${S.checking ? 'disabled' : ''} onclick="workerCheck('Příchod')">${S.checking === 'Příchod' ? '⏳ ZAPISUJI…' : '📍 ZAPSAT PŘÍCHOD'}</button>
       `}
-      <div class="note">Po ťuknutí se otevře foťák — vyfoť se na stavbě. Zároveň se ověří poloha proti GPS stavby (±${CFG.gpsTolerance || 100} m).</div>
+      <div class="note">Po ťuknutí se otevře foťák — vyfoť se na stavbě. Fotka se uloží do složky zakázky na Drive. Zároveň se ověří poloha proti GPS stavby (±${CFG.gpsTolerance || 100} m).</div>
     </div>
     ${p && (p.stavbaDocs || []).length ? `<div class="card">
       <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— půdorysy, vizualizace</span></h3>
@@ -2432,9 +2688,12 @@ function poriditSelfie() {
       zpracovava = true;
       try {
         const img = await fileToImage(f);
-        const d = scaleJpeg(img, 320, 0.6);      // maly nahled, at se vejde k zaznamu
+        /* nahled zustane v databazi (rychly seznam, funguje offline),
+           plna verze putuje na Drive do slozky zakazky */
+        const nahled = scaleJpeg(img, 320, 0.62);
+        const plna = scaleJpeg(img, 1280, 0.85);
         URL.revokeObjectURL(img.src);
-        konec(d);
+        konec({ nahled, plna });
       } catch (e) { konec(null); }
     };
     /* Kdyz uzivatel foceni zrusi, onchange se nespusti — poznáme to az podle
@@ -2446,6 +2705,16 @@ function poriditSelfie() {
     window.addEventListener('focus', zpet);
     inp.click();
   });
+}
+
+/* Ulozi overovaci foto na Drive do slozky zakazky. Kdyz to nevyjde
+   (offline, most nedostupny), pichnuti se presto zapise — jen s nahledem. */
+async function selfieNaDrive(p, foto, akce) {
+  if (!foto || !p || !CFG.scriptUrl || !S.online) return null;
+  const kdo = fullName(S.me || {}).replace(/\s+/g, '-');
+  const jmeno = 'dochazka_' + akce + '_' + kdo + '_' + isoToday() + '_' + nowTime().replace(':', '-');
+  try { return await uploadPhotoToDrive(p, foto.plna, jmeno); }
+  catch (e) { console.warn('selfie na Drive', e); return null; }
 }
 
 function getPos(opts) {
@@ -2483,14 +2752,19 @@ async function workerCheck(akce) {
 
   S.checking = akce; render();
 
-  const save = async (gpsDev, selfie) => {
+  const save = async (gpsDev, foto) => {
+    const pauza = akce === 'Odchod' ? (S.pauza || 0) : 0;   // pauza se zapisuje k odchodu
+    const driveId = await selfieNaDrive(p, foto, akce);
     await db.collection('attendance').add({
       userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid,
-      akce, pid: p.id, date: isoToday(), time: nowTime(), gps: gpsDev, selfie: selfie || null,
-      manual: false, createdAt: FV()
+      akce, pid: p.id, date: isoToday(), time: nowTime(), gps: gpsDev,
+      selfie: foto ? foto.nahled : null, selfieDriveId: driveId,
+      manual: false, pauza, createdAt: FV()
     });
+    if (akce === 'Odchod') vynulovatPauzu();
     toast(akce + ' zapsán' + (gpsDev != null ? ' — poloha sedí (' + gpsDev + ' m)' : ' BEZ OVĚŘENÍ POLOHY')
-      + (selfie ? ' 📷' : '') + ' ✓');
+      + (pauza ? ' · pauza ' + pauza + ' min' : '')
+      + (foto ? (driveId ? ' 📷 na Drive' : ' 📷 jen náhled') : '') + ' ✓');
   };
 
   try {
@@ -2525,14 +2799,17 @@ function doplnitOdchodForm() {
   const p = proj(sm.pid) || {};
   modal(`<h3>🕗 Doplnit chybějící odchod</h3>
     <div class="inote" style="margin-top:0">Máš otevřený příchod z <b>${fmtISO(sm.posledni.date)}</b> od ${esc(sm.posledni.time)},
-      stavba ${esc(p.name || '')}.<br>Doplň, kdy jsi ve skutečnosti odešel. <b>Vedení to musí schválit</b> — do té doby se hodiny nezapočítají.</div>
+      stavba ${esc(p.name || '')}.<br>Doplň, kdy jsi ve skutečnosti odešel. <b>Odejde to vedení jako žádost</b> — do docházky se to zapíše, až ji schválí.</div>
     <div class="frow">
       <div><label>Datum odchodu</label><input type="date" id="do-d" value="${esc(sm.posledni.date)}"></div>
       <div><label>Čas odchodu</label><input type="time" id="do-t" value="16:00"></div>
     </div>
+    <label>Pauza na oběd</label>
+    <select id="do-pauza"><option value="0">bez pauzy</option><option value="30">30 minut</option><option value="60">60 minut</option></select>
     <label>Proč jsi nepíchnul (uvidí vedení)</label>
     <input type="text" id="do-pozn" placeholder="např. vybil se mi telefon">
-    <div class="aprv"><button class="btn amber" onclick="doplnitOdchod()">📤 Odeslat ke schválení</button>
+    <div class="note">Tohle je jen žádost. Do docházky se nic nezapíše, dokud ji vedení neschválí.</div>
+    <div class="aprv"><button class="btn amber" onclick="doplnitOdchod()">📤 Odeslat žádost vedení</button>
     <button class="btn ghost" onclick="closeModal()">Zrušit</button></div>`);
 }
 async function doplnitOdchod() {
@@ -2621,9 +2898,12 @@ async function workerPrechod() {
   if (navigator.geolocation) { try { pos = await acquirePos(); } catch (e) {} }
   const odch = (pos && zTady.gps) ? haversine(pos.coords.latitude, pos.coords.longitude, zTady.gps.lat, zTady.gps.lng) : null;
   const prich = (pos && naTam.gps) ? haversine(pos.coords.latitude, pos.coords.longitude, naTam.gps.lat, naTam.gps.lng) : null;
-  const spolecne = { userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid, date: isoToday(), selfie: selfie || null, manual: false };
+  const driveId = await selfieNaDrive(zTady, selfie, 'Prechod');
+  const spolecne = { userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid,
+    date: isoToday(), selfie: selfie ? selfie.nahled : null, selfieDriveId: driveId, manual: false };
   try {
-    await db.collection('attendance').add({ ...spolecne, akce: 'Odchod', pid: zTady.id, time: nowTime(), gps: odch, createdAt: FV() });
+    await db.collection('attendance').add({ ...spolecne, akce: 'Odchod', pid: zTady.id, time: nowTime(), gps: odch, pauza: S.pauza || 0, createdAt: FV() });
+    vynulovatPauzu();
     await db.collection('attendance').add({ ...spolecne, akce: 'Příchod', pid: naTam.id, time: nowTime(), gps: prich, createdAt: FV() });
     S.workerProject = naTam.id;
     toast('Přesun zapsán ✓ Jsi na stavbě ' + naTam.name);
