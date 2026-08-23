@@ -56,7 +56,7 @@ const S = {
   workerProject: null, draftPhotos: [], draftAtts: [], uploading: 0, signFor: null, tplOpen: false,
   loginMode: 'teren', loginWorker: null,
   online: navigator.onLine, unsub: [],
-  denikTab: 'zaznamy', searchQ: ''
+  denikTab: 'zaznamy', searchQ: '', geoHits: [], geoLabel: null
 };
 window.addEventListener('online', () => { S.online = true; render(); });
 window.addEventListener('offline', () => { S.online = false; render(); });
@@ -147,22 +147,44 @@ function mapFromInputs() {
   const lat = parseFloat($('#pf-lat').value), lng = parseFloat($('#pf-lng').value);
   if (isFinite(lat) && isFinite(lng)) showFormMap(lat, lng);
 }
-/* adresa -> souradnice pres Nominatim (OpenStreetMap) */
+/* adresa -> souradnice pres Nominatim (OpenStreetMap)
+   POZOR: nikdy nebrat mlcky prvni vysledek. "Nadrazni 15, Brno" vraci jako
+   prvni Bedrichovice u Slapanic. Uzivatel musi vzdy videt, co dostal. */
 async function geocodeAddress() {
   const q = ($('#pf-addr').value || '').trim();
+  const box = $('#pf-geohits'), info = $('#pf-geoinfo');
+  if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+  if (info) info.style.display = 'none';
   if (!q) { toast('Nejdřív vyplň adresu'); return; }
   if (!S.online) { toast('Hledání adresy potřebuje internet'); return; }
   toast('Hledám adresu…');
   try {
-    const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=cz&q=' + encodeURIComponent(q);
+    const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&countrycodes=cz&q=' + encodeURIComponent(q);
     const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
     const j = await res.json();
     if (!j || !j.length) { toast('Adresu se nepodařilo najít — zkus ji napsat jinak'); return; }
-    const lat = +parseFloat(j[0].lat).toFixed(7), lng = +parseFloat(j[0].lon).toFixed(7);
-    $('#pf-lat').value = lat; $('#pf-lng').value = lng;
-    showFormMap(lat, lng);
-    toast('Nalezeno ✓ Zkontroluj špendlík — dá se přetáhnout');
+    S.geoHits = j;
+    if (j.length === 1) { pickGeo(0); return; }
+    if (!box) return;
+    box.style.display = '';
+    box.innerHTML = `<div class="inote"><b>Našel jsem ${j.length} možností.</b> Vyber tu správnou —
+      dokud nevybereš, GPS se nenastaví. (Stejná ulice bývá v desítkách měst.)</div>` +
+      j.map((d, i) => `<div class="urow" style="cursor:pointer;border-radius:8px;padding:9px 8px;align-items:flex-start"
+        onclick="pickGeo(${i})"><span class="uav" style="margin-top:1px">${i + 1}</span>
+        <span style="line-height:1.4">${esc(d.display_name)}</span></div>`).join('');
   } catch (e) { toast('Hledání se nepovedlo — zkus to znovu'); }
+}
+function pickGeo(i) {
+  const d = (S.geoHits || [])[i]; if (!d) return;
+  const lat = +parseFloat(d.lat).toFixed(7), lng = +parseFloat(d.lon).toFixed(7);
+  $('#pf-lat').value = lat; $('#pf-lng').value = lng;
+  S.geoLabel = d.display_name;
+  const box = $('#pf-geohits');
+  if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+  const info = $('#pf-geoinfo');
+  if (info) { info.style.display = ''; info.innerHTML = '📍 <b>Nastaveno podle:</b> ' + esc(d.display_name); }
+  showFormMap(lat, lng);
+  toast('GPS nastavena ✓ Zkontroluj špendlík na mapě');
 }
 
 /* ---------- Drive most (Apps Script) ---------- */
@@ -680,6 +702,7 @@ async function toggleActive(pid) { const p = proj(pid); await db.collection('pro
 function openProj(id) { S.projDetailId = id; S.projDetailTab = 'info'; S.view = 'projdetail'; render(); }
 function projectForm(id) {
   const p = id ? proj(id) : {};
+  S.geoHits = []; S.geoLabel = null;
   modal(`<h3>${id ? '✏️ Upravit projekt' : '➕ Nový projekt'}</h3>
     <label>Název stavby *</label><input type="text" id="pf-name" value="${esc(p.name || '')}" placeholder="Novodvorská - Pecka">
     <div class="frow">
@@ -694,6 +717,8 @@ function projectForm(id) {
              onkeydown="if(event.key==='Enter'){event.preventDefault();geocodeAddress();}">
       <button class="btn dark" style="flex:none" onclick="geocodeAddress()">📍 Najít</button>
     </div>
+    <div id="pf-geohits" style="display:none"></div>
+    <div class="note" id="pf-geoinfo" style="display:none"></div>
     <label>Typ projektu</label><input type="text" id="pf-type" value="${esc(p.type || '')}" placeholder="Kompletní rekonstrukce · 3+kk panelák">
     <div class="frow">
       <div><label>Zodpovědný</label><input type="text" id="pf-resp" value="${esc(p.resp || 'Zdeno Balúch')}"></div>
@@ -721,12 +746,13 @@ async function saveProject(id) {
   const name = $('#pf-name').value.trim();
   if (!name) { toast('Vyplň název stavby'); return; }
   const lat = parseFloat($('#pf-lat').value), lng = parseFloat($('#pf-lng').value);
+  const prevGps = id ? ((proj(id) || {}).gps || null) : null;
   const data = {
     name, kod: $('#pf-kod').value.trim(), cn: $('#pf-cn').value.trim(), client: $('#pf-client').value.trim(),
     investorEmail: $('#pf-cmail').value.trim(), address: $('#pf-addr').value.trim(), type: $('#pf-type').value.trim(),
     resp: $('#pf-resp').value.trim(), stav: $('#pf-stav').value, phase: $('#pf-phase').value.trim(),
     progress: Math.min(100, Math.max(0, parseInt($('#pf-prog').value) || 0)),
-    gps: (lat && lng) ? { lat, lng, tol: CFG.gpsTolerance || 100 } : null,
+    gps: (lat && lng) ? { lat, lng, tol: CFG.gpsTolerance || 100, label: S.geoLabel || (prevGps && prevGps.label) || '' } : null,
     driveFolderId: $('#pf-drive').value.trim(), handover: $('#pf-hand').value.trim()
   };
   if (id) await db.collection('projects').doc(id).update(data);
@@ -760,6 +786,7 @@ function pgProjDetail() {
           <div class="mapreal" data-map="det" data-drag="0" data-lat="${p.gps.lat}" data-lng="${p.gps.lng}"></div>
           <div class="kv" style="margin-top:10px"><span>${esc(p.address || '—')}</span>
             <span class="muted">${p.gps.lat}, ${p.gps.lng} · ±${p.gps.tol || 100} m</span></div>
+          ${p.gps.label ? `<div class="note" style="margin-top:4px">📍 Špendlík nastaven podle: ${esc(p.gps.label)}</div>` : ''}
           <div class="aprv">
             <a class="btn ghost sm" target="_blank" href="https://mapy.cz/zakladni?q=${p.gps.lat}%2C${p.gps.lng}">🗺 Mapy.cz</a>
             <a class="btn ghost sm" target="_blank" href="https://www.google.com/maps?q=${p.gps.lat},${p.gps.lng}">🗺 Google Maps</a>
