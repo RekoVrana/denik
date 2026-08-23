@@ -170,7 +170,7 @@ const FV = () => firebase.firestore.FieldValue.serverTimestamp();
 const S = {
   portalToken: new URLSearchParams(location.search).get('p'),
   authUser: null, meAuth: null, me: null, roster: [], appCfg: null,
-  users: [], projects: [], entries: [], tasks: [], attendance: [], viceprace: [], sazby: {},
+  users: [], projects: [], entries: [], tasks: [], attendance: [], viceprace: [], sazby: {}, zadosti: [],
   portal: null, portalFeed: [], portalVp: [], portalDocs: [],
   view: 'nastenka', nastenkaTab: 'prehled', adminFilter: null, detail: null,
   projDetailId: null, projDetailTab: 'info', newUserType: null, editUserId: null,
@@ -179,10 +179,53 @@ const S = {
   workerProject: null, draftPhotos: [], draftAtts: [], uploading: 0, signFor: null, tplOpen: false,
   loginMode: 'teren', loginWorker: null,
   online: navigator.onLine, unsub: [],
-  denikTab: 'zaznamy', searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false, checking: null, installPrompt: null, swReg: null, updateReady: false, updating: false
+  denikTab: 'zaznamy', searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false, checking: null, installPrompt: null, swReg: null, updateReady: false, updating: false,
+  frontaPocet: 0, pauza: 0
 };
 window.addEventListener('online', () => { S.online = true; render(); });
 window.addEventListener('offline', () => { S.online = false; render(); });
+
+/* ---------- pamet rozepsanych formularu ----------
+   render() prekresluje celou obrazovku a deje se to pri KAZDE zmene v databazi
+   — staci, aby nekdo v terenu pichnul prichod. Bez tohohle by kazdemu, kdo
+   prave pise, zmizel rozepsany text: zapis do deniku, zneni pro investora,
+   novy ukol. Proto se pred prekreslenim obsah policek schova a po nem vrati,
+   vcetne kurzoru. Po uspesnem ulozeni se pamet toho formulare zahodi
+   (zapomen...), aby se ulozeny text nevracel do prazdneho formulare. */
+const FORMMEM = {};
+function pamatovatelne(el) {
+  return el && el.id && el.type !== 'file' && el.type !== 'button' && el.type !== 'submit';
+}
+function schovatFormulare() {
+  const root = $('#root'); if (!root) return;
+  root.querySelectorAll('input[id],textarea[id],select[id]').forEach(el => {
+    if (!pamatovatelne(el)) return;
+    FORMMEM[el.id] = (el.type === 'checkbox' || el.type === 'radio') ? el.checked : el.value;
+  });
+  const a = document.activeElement;
+  FORMMEM.__fokus = (a && a.id && root.contains(a) && pamatovatelne(a)) ? a.id : null;
+  FORMMEM.__kurzor = null;
+  if (a && FORMMEM.__fokus) { try { FORMMEM.__kurzor = [a.selectionStart, a.selectionEnd]; } catch (e) {} }
+}
+function vratitFormulare() {
+  const root = $('#root'); if (!root) return;
+  root.querySelectorAll('input[id],textarea[id],select[id]').forEach(el => {
+    if (!pamatovatelne(el) || !(el.id in FORMMEM)) return;
+    const v = FORMMEM[el.id];
+    if (el.type === 'checkbox' || el.type === 'radio') el.checked = !!v;
+    else if (el.value !== v) el.value = v;
+  });
+  const f = FORMMEM.__fokus;
+  if (!f) return;
+  const el = document.getElementById(f);
+  if (!el) return;
+  try {
+    el.focus({ preventScroll: true });
+    if (FORMMEM.__kurzor && el.setSelectionRange) el.setSelectionRange(FORMMEM.__kurzor[0], FORMMEM.__kurzor[1]);
+  } catch (e) {}
+}
+function zapomen(...ids) { ids.forEach(i => { delete FORMMEM[i]; }); }
+function zapomenVse() { Object.keys(FORMMEM).forEach(k => { delete FORMMEM[k]; }); }
 
 /* ---------- data listeners ---------- */
 function clearSubs() { S.unsub.forEach(u => { try { u(); } catch (e) {} }); S.unsub = []; }
@@ -204,6 +247,7 @@ function startData() {
   if (role === 'admin') {
     listen('attendance', 'attendance', { sort: (a, b) => attKey(b) - attKey(a) });
     listen('viceprace', 'viceprace', {});
+    listen('zadosti', 'zadosti', { sort: (a, b) => (b.date || '').localeCompare(a.date || '') });
     S.unsub.push(db.collection('sazby').onSnapshot(s => { S.sazby = {}; s.docs.forEach(d => S.sazby[d.id] = d.data()); render(); }, () => {}));
     // akce investorů ze všech portálů
     S.unsub.push(db.collectionGroup('actions').where('handled', '==', false).onSnapshot(s => {
@@ -211,6 +255,7 @@ function startData() {
     }, err => console.warn('actions', err)));
   } else {
     listen('attendance', 'attendance', { where: [['authUid', '==', S.authUser.uid]], sort: (a, b) => attKey(b) - attKey(a) });
+    listen('zadosti', 'zadosti', { where: [['authUid', '==', S.authUser.uid]], sort: (a, b) => (b.date || '').localeCompare(a.date || '') });
   }
 }
 function startPortal() {
@@ -324,6 +369,84 @@ async function uploadPhotoToDrive(p, dataUrl, name) {
 }
 function driveViewUrl(id) { return 'https://drive.google.com/file/d/' + id + '/view'; }
 
+/* ---------- fronta na Drive ----------
+   Drive se puvodne fotka v plne kvalite zahodila, kdyz byl telefon offline —
+   v zaznamu zustal jen maly nahled a original uz nikde nebyl. Presne v suterenu
+   a v jadru, kde neni signal, se ale foti to nejdulezitejsi.
+   Ted se plna verze ulozi do telefonu (IndexedDB, na rozdil od localStorage
+   uveze i stovky MB) a odesle se sama, jakmile je signal. Zaznam v deniku
+   vznikne hned, driveId se do nej doplni pozdeji. */
+const FRONTA = { db: 'vrana-fronta', store: 'soubory' };
+let _frontaBezi = false;
+function frontaOpen() {
+  return new Promise((ok, no) => {
+    if (!window.indexedDB) return no(new Error('bez IndexedDB'));
+    const r = indexedDB.open(FRONTA.db, 1);
+    r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains(FRONTA.store)) r.result.createObjectStore(FRONTA.store, { keyPath: 'id', autoIncrement: true }); };
+    r.onsuccess = () => ok(r.result);
+    r.onerror = () => no(r.error);
+  });
+}
+function frontaTx(mode, fn) {
+  return frontaOpen().then(d => new Promise((ok, no) => {
+    const t = d.transaction(FRONTA.store, mode), st = t.objectStore(FRONTA.store);
+    let vysledek; try { vysledek = fn(st); } catch (e) { return no(e); }
+    t.oncomplete = () => ok(vysledek && vysledek.result !== undefined ? vysledek.result : vysledek);
+    t.onerror = () => no(t.error);
+  }));
+}
+async function frontaPridat(polozka) {
+  await frontaTx('readwrite', st => st.add(polozka));
+  await frontaSpocitat();
+}
+async function frontaVse() {
+  try { return await frontaTx('readonly', st => st.getAll()) || []; } catch (e) { return []; }
+}
+async function frontaSmazat(id) { try { await frontaTx('readwrite', st => st.delete(id)); } catch (e) {} }
+async function frontaSpocitat() {
+  try { const v = await frontaVse(); S.frontaPocet = v.length; } catch (e) { S.frontaPocet = 0; }
+  render();
+}
+/* Odesle vsechno, co ceka. Bezi po jedne polozce, aby se dva zapisy do stejneho
+   deniku neprepsaly navzajem. Co se nepovede, zustane ve fronte na priste. */
+async function frontaOdeslat() {
+  if (_frontaBezi || !S.online || !CFG.scriptUrl) return;
+  const cekaji = await frontaVse();
+  if (!cekaji.length) return;
+  _frontaBezi = true; S.uploading++; render();
+  try {
+    for (const it of cekaji) {
+      if (!S.online) break;
+      try {
+        const j = await driveCall({
+          action: 'upload', folderId: it.folderId || '', rootId: CFG.driveRootFolderId,
+          cn: it.cn, client: it.client, date: it.date, name: it.name,
+          data: String(it.data).split(',')[1], mime: it.mime || 'application/octet-stream'
+        });
+        await frontaZapsatDoZaznamu(it, j.fileId);
+        await frontaSmazat(it.id);
+      } catch (e) { console.warn('fronta', e); break; }   // nejspis vypadl signal — zkusime priste
+    }
+  } finally { _frontaBezi = false; S.uploading--; await frontaSpocitat(); }
+}
+async function frontaZapsatDoZaznamu(it, fileId) {
+  if (!it.entryId) return;
+  const ref = db.collection('entries').doc(it.entryId);
+  const snap = await ref.get();
+  if (!snap.exists) return;
+  const e = snap.data();
+  if (it.druh === 'foto') {
+    const photos = (e.photos || []).map(ph => ph.id === it.photoId ? { ...ph, driveId: fileId } : ph);
+    await ref.update({ photos });
+    if (e.status === 'approved') await mirrorEntry({ ...e, id: it.entryId, photos });
+  } else {
+    const attachments = [...(e.attachments || []), { name: it.name, driveId: fileId, mime: it.mime || '' }];
+    await ref.update({ attachments });
+  }
+}
+window.addEventListener('online', () => setTimeout(frontaOdeslat, 1500));
+setInterval(() => { if (S.online) frontaOdeslat(); }, 90000);
+
 /* ---------- image pipeline ---------- */
 function fileToImage(file) {
   return new Promise((ok, no) => { const img = new Image(); img.onload = () => ok(img); img.onerror = no; img.src = URL.createObjectURL(file); });
@@ -346,20 +469,33 @@ async function processPhotos(files, label) {
   }
   render();
 }
-async function uploadDraftPhotos(p) {
-  // nahraje full verze na Drive (pokud je most), vrátí pole fotek pro záznam
+/* Fotky uz se nenahravaji pred ulozenim zaznamu. Zaznam vznikne hned (i bez
+   signalu) a plne verze se postavi do fronty — odeslou se samy. */
+async function zaraditFotky(p, entryId) {
   const out = [];
   for (const ph of S.draftPhotos) {
-    let driveId = null;
-    if (CFG.scriptUrl && S.online) {
-      try { S.uploading++; render(); driveId = await uploadPhotoToDrive(p, ph.full, ph.label); }
-      catch (e) { console.warn(e); toast('⚠ Fotka se na Drive nenahrála — uložen jen náhled'); }
-      finally { S.uploading--; }
-    }
-    out.push({ id: uid8(), thumb: ph.thumb, label: ph.label, status: 'pending', driveId });
+    const id = uid8();
+    out.push({ id, thumb: ph.thumb, label: ph.label, status: 'pending', driveId: null });
+    try {
+      await frontaPridat({
+        druh: 'foto', entryId, photoId: id, name: (ph.label || 'foto') + '.jpg', mime: 'image/jpeg',
+        data: ph.full, folderId: (p && p.driveFolderId) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', date: isoToday()
+      });
+    } catch (e) { console.warn('fronta foto', e); toast('⚠ Fotku se nepodařilo uložit do fronty — zůstal jen náhled'); }
   }
   S.draftPhotos = [];
   return out;
+}
+async function zaraditPrilohy(p, entryId) {
+  for (const at of (S.draftAtts || [])) {
+    try {
+      await frontaPridat({
+        druh: 'priloha', entryId, name: at.name, mime: at.mime || 'application/octet-stream',
+        data: at.data, folderId: (p && p.driveFolderId) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', date: isoToday()
+      });
+    } catch (e) { console.warn('fronta priloha', e); toast('⚠ Přílohu ' + at.name + ' se nepodařilo uložit do fronty'); }
+  }
+  S.draftAtts = [];
 }
 
 /* ---------- přílohy záznamu ---------- */
@@ -371,34 +507,20 @@ function processAtts(files) {
     rd.readAsDataURL(f);
   });
 }
-async function uploadDraftAtts(p) {
-  const out = [];
-  for (const at of (S.draftAtts || [])) {
-    if (!CFG.scriptUrl || !S.online) { toast('⚠ Příloha ' + at.name + ' se nenahrála — Drive most / offline'); continue; }
-    try {
-      S.uploading++; render();
-      const j = await driveCall({ action: 'upload', folderId: p.driveFolderId || '', rootId: CFG.driveRootFolderId, cn: p.cn, client: p.client, date: isoToday(), name: at.name, data: at.data.split(',')[1], mime: at.mime || 'application/octet-stream' });
-      out.push({ name: at.name, driveId: j.fileId, mime: at.mime || '' });
-    } catch (e) { console.warn(e); toast('⚠ Příloha ' + at.name + ' se na Drive nenahrála'); }
-    finally { S.uploading--; }
-  }
-  S.draftAtts = [];
-  return out;
-}
 async function addAttsToEntry(eid, files) {
   const list = [...files]; if (!list.length) return;
+  const e = S.entries.find(x => x.id === eid); if (!e) return;
+  const p = proj(e.pid) || {};
   for (const f of list) {
-    const e = S.entries.find(x => x.id === eid); if (!e) return;
-    const p = proj(e.pid) || {};
     if (f.size > 15 * 1024 * 1024) { toast('Moc velké (max 15 MB): ' + f.name); continue; }
     const data = await new Promise(ok => { const r = new FileReader(); r.onload = () => ok(r.result); r.readAsDataURL(f); });
     try {
-      S.uploading++; render();
-      const j = await driveCall({ action: 'upload', folderId: p.driveFolderId || '', rootId: CFG.driveRootFolderId, cn: p.cn, client: p.client, date: e.date, name: f.name, data: data.split(',')[1], mime: f.type || 'application/octet-stream' });
-      await db.collection('entries').doc(eid).update({ attachments: [...(e.attachments || []), { name: f.name, driveId: j.fileId, mime: f.type || '' }] });
-    } catch (err) { console.warn(err); toast('⚠ ' + f.name + ' se nenahrál (Drive most)'); }
-    finally { S.uploading--; render(); }
+      await frontaPridat({ druh: 'priloha', entryId: eid, name: f.name, mime: f.type || 'application/octet-stream',
+        data, folderId: p.driveFolderId || '', cn: p.cn || '', client: p.client || '', date: e.date });
+    } catch (err) { console.warn(err); toast('⚠ ' + f.name + ' se nepodařilo uložit do fronty'); }
   }
+  toast(S.online ? 'Nahrávám na Drive…' : 'Uloženo — odešle se, až bude signál ✓');
+  frontaOdeslat();
 }
 
 /* ---------- počasí (Open-Meteo, dle GPS projektu) ---------- */
@@ -427,19 +549,22 @@ function attOn(pid, date) {
 }
 
 /* ---------- záznamy: workflow ---------- */
+/* Zaznam se zaklada s ID vyrobenym v telefonu, ne az po odpovedi serveru —
+   diky tomu funguje zapis i bez signalu a fotky uz vedi, kam patri. */
 async function addEntry(pid, author, txt, persons, date) {
   const p = proj(pid);
-  const photos = await uploadDraftPhotos(p);
-  const attachments = await uploadDraftAtts(p);
   const works = txt ? txt.split(/[\n]+|(?<=[.!?])\s+(?=[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ])/).map(s => s.trim().replace(/^[-•]\s*/, '')).filter(Boolean) : [];
   const d = date || isoToday();
-  const ref = await db.collection('entries').add({
+  const ref = db.collection('entries').doc();
+  const photos = await zaraditFotky(p, ref.id);
+  await zaraditPrilohy(p, ref.id);
+  ref.set({
     pid, date: d, createdAt: FV(), author, authorUid: S.authUser.uid,
     persons: persons || 1, works: works.length ? works : ['(jen fotodokumentace)'],
     internal: '', client: txt || 'Fotodokumentace z průběhu prací.', status: 'pending', photos
-  });
-  if (attachments.length) await db.collection('entries').doc(ref.id).update({ attachments }).catch(() => {});
-  fetchWeather(p, d).then(w => { if (w) db.collection('entries').doc(ref.id).update({ weather: w }).catch(() => {}); });
+  }).catch(e => console.warn('zapis zaznamu', e));
+  frontaOdeslat();
+  fetchWeather(p, d).then(w => { if (w) ref.update({ weather: w }).catch(() => {}); });
 }
 async function approveEntry(id) {
   const e = S.entries.find(x => x.id === id); if (!e) return;
@@ -447,6 +572,7 @@ async function approveEntry(id) {
   const clientTxt = ta ? (ta.value.trim() || e.client) : e.client;
   const photos = (e.photos || []).map(ph => ph.status === 'pending' ? { ...ph, status: 'approved' } : ph);
   await db.collection('entries').doc(id).update({ status: 'approved', client: clientTxt, photos, approvedAt: FV(), approvedBy: fullName(S.me || {}) });
+  zapomen('ct-' + id);
   await mirrorEntry({ ...e, status: 'approved', client: clientTxt, photos });
   notifyMail('entry', e.pid, clientTxt);
   toast('Schváleno — investor teď záznam uvidí ✓');
@@ -505,12 +631,14 @@ async function handlePortalAction(docSnap) {
 /* ============ RENDER ROOT ============ */
 function render() {
   const root = $('#root');
-  if (!CONFIGURED) { root.innerHTML = viewNotConfigured(); return; }
-  if (S.portalToken) { root.innerHTML = viewPortal(); return; }
-  if (S.authState === 'loading') { return; }
-  if (!S.authUser || !S.meAuth) { root.innerHTML = viewLogin(); return; }
-  const role = S.meAuth.role;
-  root.innerHTML = (role === 'admin') ? viewAdmin() : viewWorker();
+  if (S.authState === 'loading' && CONFIGURED && !S.portalToken) return;
+  // rozepsany text se schova pred prekreslenim a hned potom vrati zpatky
+  schovatFormulare();
+  if (!CONFIGURED) root.innerHTML = viewNotConfigured();
+  else if (S.portalToken) root.innerHTML = viewPortal();
+  else if (!S.authUser || !S.meAuth) root.innerHTML = viewLogin();
+  else root.innerHTML = (S.meAuth.role === 'admin') ? viewAdmin() : viewWorker();
+  vratitFormulare();
   if (S.signFor) setTimeout(sigInit, 0);
   setTimeout(mountMaps, 0);
   updBar();
@@ -526,7 +654,7 @@ function initAuth() {
   S.authState = 'loading';
   auth.onAuthStateChanged(async u => {
     if (S.bootstrapping) return; // založení systému právě probíhá — nechat doSetup doběhnout
-    clearSubs();
+    clearSubs(); zapomenVse();
     S.authUser = u; S.meAuth = null; S.me = null;
     if (u) {
       try {
@@ -682,7 +810,8 @@ function topbar() {
     <span class="logo">🏗 REKONSTRUKCE <em>VRÁNA</em> <span style="color:#8b98a5;font-weight:500">· Deník staveb</span></span>
     <span class="sp"></span>
     <span class="offdot ${S.online ? '' : 'off'}">${S.online ? '' : '⚠ OFFLINE — změny se uloží po připojení'}</span>
-    ${S.uploading ? '<span class="badge b-wait">📤 nahrávám fotky…</span>' : ''}
+    ${S.uploading ? '<span class="badge b-wait">📤 nahrávám na Drive…</span>' : ''}
+    ${S.frontaPocet ? `<span class="badge ${S.online ? 'b-wait' : 'b-int'}" title="Fotky a přílohy čekají, až bude signál. Neztratí se — appka je odešle sama.">🕓 ${S.frontaPocet} čeká na odeslání</span>` : ''}
     <button class="btn ghost sm" title="Zkontrolovat a stáhnout novou verzi" onclick="aktualizovatApp()" style="padding:6px 10px">${S.updating ? '<span class="updspin"></span>' : '⟳'}</button>
     <div class="avatar" title="Odhlásit" onclick="if(confirm('Odhlásit se?'))doLogout()">${S.me ? ini(S.me) : '?'}</div>
   </div>`;
@@ -1066,6 +1195,7 @@ async function addStavbaDocLink(pid) {
   const m = raw.match(/[-\w]{25,}/); if (!m) { toast('Nepoznávám Drive ID/odkaz'); return; }
   const p = proj(pid);
   await db.collection('projects').doc(pid).update({ stavbaDocs: [...(p.stavbaDocs || []), { name: title, driveId: m[0], mime: raw.toLowerCase().includes('pdf') ? 'application/pdf' : '' }] });
+  $('#sd-title').value = ''; $('#sd-id').value = ''; zapomen('sd-title', 'sd-id');
   toast('Podklad přidán ✓');
 }
 async function delStavbaDoc(pid, i) {
@@ -1081,6 +1211,7 @@ async function addPortalDoc(pid) {
   const docs = [...(p.portalDocs || []), { title, driveId: m[0], mime: '' }];
   await db.collection('projects').doc(pid).update({ portalDocs: docs });
   if (p.portalToken) await db.collection('portals').doc(p.portalToken).collection('docs').add({ title, driveId: m[0] });
+  $('#pd-title').value = ''; $('#pd-id').value = ''; zapomen('pd-title', 'pd-id');
   toast('Dokument přidán na portál ✓');
 }
 async function delPortalDoc(pid, i) {
@@ -1133,6 +1264,7 @@ async function cycleMile(pid, i) {
 async function addMile(pid) {
   const t = $('#mile-t').value.trim(); if (!t) return;
   const p = proj(pid); const ms = [...(p.milestones || []), { t, s: 'next' }];
+  $('#mile-t').value = ''; zapomen('mile-t');
   await db.collection('projects').doc(pid).update({ milestones: ms, ...msRecalc(ms, p) });
 }
 async function delMile(pid, i) {
@@ -1143,6 +1275,7 @@ async function addNote(pid) {
   const t = $('#pn-t').value.trim(); if (!t) { toast('Napiš text poznámky'); return; }
   const p = proj(pid);
   await db.collection('projects').doc(pid).update({ notes: [{ date: isoToday(), author: fullName(S.me || {}), text: t }, ...(p.notes || [])] });
+  $('#pn-t').value = ''; zapomen('pn-t');
   toast('Poznámka uložena ✓');
 }
 
@@ -1206,7 +1339,7 @@ function pgDenik() {
       <div class="aprv"><button class="btn amber" onclick="printDenik()">🖨 Vygenerovat</button><span class="muted" style="align-self:center">otevře se náhled — ulož jako PDF nebo vytiskni</span></div>
     </div>` : ''}
     <div class="tablecard">
-      <div class="tabletools"><div class="search"><input placeholder="Hledat v záznamech" value="${esc(S.searchQ)}" oninput="S.searchQ=this.value;render();this.focus();this.setSelectionRange(this.value.length,this.value.length)"></div></div>
+      <div class="tabletools"><div class="search"><input id="q-denik" placeholder="Hledat v záznamech" value="${esc(S.searchQ)}" oninput="S.searchQ=this.value;render()"></div></div>
       <div style="overflow-x:auto"><table>
         <tr><th>Datum</th><th>Vytvořeno</th><th>Projekt</th><th>Autor zápisu</th><th>Práce</th><th>Fotky</th><th>Osoby</th><th>Stav (klient)</th></tr>
         ${rows.map(e => { const p = proj(e.pid) || {}; return `
@@ -1465,6 +1598,7 @@ async function submitNew() {
   if (!txt && !S.draftPhotos.length) { toast('Napiš text nebo přidej fotku'); return; }
   $('#save-entry').disabled = true;
   await addEntry(pid, author, txt, pers, date);
+  zapomen('nt', 'npers');
   goPage('denik'); toast(date === isoToday() ? 'Záznam uložen — čeká na schválení ✓' : 'Záznam za ' + fmtISO(date) + ' uložen — čeká na schválení ✓');
 }
 
@@ -1501,6 +1635,9 @@ function pgOrganizace() {
         <div><label>Činnost</label><select id="at-a"><option>Příchod</option><option>Odchod</option></select></div>
         <div><label>Datum a čas</label><div class="frow"><input type="date" id="at-d" value="${isoToday()}"><input type="time" id="at-t" value="07:00"></div></div>
       </div>
+      <label>Pauza na oběd (minuty)</label>
+      <input type="number" id="at-pauza" value="0" min="0" max="240" step="5" style="max-width:140px">
+      <div class="note">Zadává se u odchodu. Odečte se od odpracovaných hodin za ten den.</div>
       <div class="aprv"><button class="btn amber" onclick="addAtt()">💾 ULOŽIT</button><span class="muted" style="align-self:center">označí se „opraveno administrátorem"</span></div>
     </div>` : ''}
     <div class="card">
@@ -1544,11 +1681,23 @@ function pgOrganizace() {
     <div class="note">GPS nad povolenou odchylku (${TOL} m) se flaguje ⚠. Záznam jde <b>✏️ opravit</b> nebo <b>🗑 smazat</b> — u opravy se uloží kdo, kdy a proč, ať je to při sporu o výplatu dohledatelné. Měsíční kontrola hodin Ruslana (#25) = záložka Reporty.</div>
   </main>`;
 }
+/* POZOR na authUid: rozhoduje o tom, komu se zaznam v mobilu ZOBRAZI.
+   Drive se sem psalo uid toho, kdo zaznam pridal (tedy vedeni), takze oprava
+   se k pracovnikovi nikdy nedostala — jeho telefon dal tvrdil "jsi v praci"
+   a rano nesel pichnout prichod. Musi to byt uid toho, KOHO se zaznam tyka. */
+function authUidOsoby(u) { return (u && u.uid) || (S.authUser ? S.authUser.uid : ''); }
 async function addAtt() {
   const userDocId = $('#at-u').value, pid = $('#at-p').value, akce = $('#at-a').value;
   const date = $('#at-d').value || isoToday(), time = $('#at-t').value || '07:00';
+  const pauza = Math.max(0, parseInt(($('#at-pauza') || {}).value, 10) || 0);
   const u = userById(userDocId);
-  await db.collection('attendance').add({ userDocId, userName: fullName(u), authUid: S.authUser.uid, akce, pid, date, time, gps: null, selfie: null, manual: true, schvaleno: true, createdAt: FV() });
+  if (!u) { toast('Vyber pracovníka'); return; }
+  if (!u.uid) toast('⚠ Pracovník zatím nemá přihlášení — v jeho mobilu se záznam ukáže až potom');
+  await db.collection('attendance').add({
+    userDocId, userName: fullName(u), authUid: authUidOsoby(u), akce, pid, date, time,
+    gps: null, selfie: null, manual: true, schvaleno: true, pauza,
+    zapsal: { kdo: fullName(S.me || {}), kdy: new Date().toISOString() }, createdAt: FV()
+  });
   S.attFormOpen = false; toast('Záznam přidán (opraveno administrátorem)'); render();
 }
 
@@ -1572,6 +1721,8 @@ function attUpravitForm(id) {
       <div><label>Datum</label><input type="date" id="ae-d" value="${esc(a.date || isoToday())}"></div>
       <div><label>Čas</label><input type="time" id="ae-t" value="${esc(String(a.time || '07:00').split(':').map((x, i) => i === 0 ? String(x).padStart(2, '0') : x).join(':'))}"></div>
     </div>
+    <label>Pauza na oběd (minuty)</label>
+    <input type="number" id="ae-pauza" value="${a.pauza || 0}" min="0" max="240" step="5" style="max-width:140px">
     <label>Důvod opravy (uvidí ho vedení u záznamu)</label>
     <input type="text" id="ae-duvod" placeholder="např. zapomněl píchnout odchod, nahlásil telefonem">
     <div class="aprv">
@@ -1582,12 +1733,17 @@ function attUpravitForm(id) {
 async function attUlozit(id) {
   const a = S.attendance.find(x => x.id === id); if (!a) return;
   const t = $('#ae-t').value || '07:00';
+  const u = userById(a.userDocId);
+  const zmeny = {
+    akce: $('#ae-a').value, pid: $('#ae-p').value,
+    date: $('#ae-d').value || isoToday(), time: t,
+    pauza: Math.max(0, parseInt($('#ae-pauza').value, 10) || 0),
+    upraveno: { kdo: fullName(S.me || {}), kdy: new Date().toISOString(), duvod: $('#ae-duvod').value.trim() }
+  };
+  // spravi i stare zaznamy, ktere se pracovnikovi v mobilu nezobrazovaly
+  if (u && u.uid && a.authUid !== u.uid) zmeny.authUid = u.uid;
   try {
-    await db.collection('attendance').doc(id).update({
-      akce: $('#ae-a').value, pid: $('#ae-p').value,
-      date: $('#ae-d').value || isoToday(), time: t,
-      upraveno: { kdo: fullName(S.me || {}), kdy: new Date().toISOString(), duvod: $('#ae-duvod').value.trim() }
-    });
+    await db.collection('attendance').doc(id).update(zmeny);
     closeModal(); toast('Záznam opraven ✓');
   } catch (e) { toast('Oprava se nepovedla: ' + (e.code || e.message)); }
 }
@@ -1712,7 +1868,7 @@ async function tplSave() {
   });
   if (!items.length) { toast('Přidej aspoň jeden úkol'); return; }
   await db.collection('tasks').add({ title: n, stav: 'sablona', items, createdAt: FV() });
-  $('#tp-n').value = ''; $('#tp-i').value = '';
+  $('#tp-n').value = ''; $('#tp-i').value = ''; zapomen('tp-n', 'tp-i');
   toast('Šablona uložena ✓ (' + items.length + ' úkolů)');
 }
 async function tplApply() {
@@ -1779,6 +1935,7 @@ async function addVp() {
   if (!title) { toast('Vyplň název'); return; }
   const raw = $('#vp-f').value.trim(); const m = raw.match(/[-\w]{25,}/);
   await db.collection('viceprace').add({ pid: $('#vp-p').value, title, popis: $('#vp-pop').value.trim(), cena: 0, stav: 'navrh', zdroj: $('#vp-z').value, driveId: m ? m[0] : null, createdAt: FV(), createdBy: fullName(S.me || {}) });
+  zapomen('vp-t', 'vp-pop', 'vp-f');
   S.vpFormOpen = false; toast('Vícepráce založena — čeká na nacenění'); render();
 }
 async function vpNacenit(id) {
@@ -1786,6 +1943,7 @@ async function vpNacenit(id) {
   if (!c) { toast('Zadej cenu'); return; }
   const v = S.viceprace.find(x => x.id === id);
   const p = proj(v.pid);
+  zapomen('vpc-' + id);
   await db.collection('viceprace').doc(id).update({ cena: c, stav: 'u_investora', clientName: (p || {}).client || '' });
   if (p && p.portalToken) {
     await db.collection('portals').doc(p.portalToken).collection('vp').doc(id).set({ title: v.title, popis: v.popis || '', cena: c, stav: 'u_investora' });
@@ -2084,7 +2242,13 @@ async function saveUser() {
 /* Stare zaznamy pole "schvaleno" nemaji — ty plati. Ceka se jen na to,
    co je vylozene schvaleno === false (doplnil pracovnik zpetne). */
 function jeSchvaleno(a) { return !a || a.schvaleno !== false; }
-function cekaNaSchvaleni() { return S.attendance.filter(a => a.schvaleno === false); }
+/* Zapomenuty odchod NEJDE zapsat rovnou do dochazky — pracovnik posle ZADOST
+   (kolekce zadosti) a teprve vedeni ji promeni v zaznam dochazky. Do hodin se
+   tak nikdy nedostane nic, co vedeni nevidelo. */
+function cekajiciZadosti() { return S.zadosti.filter(z => z.stav === 'ceka'); }
+function cekaNaSchvaleni() { return cekajiciZadosti().concat(S.attendance.filter(a => a.schvaleno === false)); }
+function mojeZadostOdchod() { return S.zadosti.find(z => z.typ === 'odchod' && z.stav === 'ceka') || null; }
+function mojeZamitnuteZadosti() { return S.zadosti.filter(z => z.stav === 'zamitnuto' && !z.videno); }
 
 function mojeSmena() {
   const mine = S.attendance.filter(a => !S.me || a.userDocId === S.me.id);
@@ -2192,22 +2356,22 @@ function viewWorker() {
           <div class="kde" style="color:#7c5806">Doplň, kdy jsi odešel. Vedení to schválí a den se uzavře.</div>
         </div>
         <button class="btn amber velke" onclick="doplnitOdchodForm()">🕗 DOPLNIT CHYBĚJÍCÍ ODCHOD</button>
-        <button class="btn ghost velke" ${S.checking ? 'disabled' : ''} onclick="workerCheck('Odchod')" style="margin-top:8px">${S.checking === 'Odchod' ? '⏳ ZJIŠŤUJI POLOHU…' : '🏁 Jsem tu pořád — zapsat odchod teď'}</button>
+        <button class="btn ghost velke" ${S.checking ? 'disabled' : ''} onclick="workerCheck('Odchod')" style="margin-top:8px">${S.checking === 'Odchod' ? '⏳ ZAPISUJI…' : '🏁 Jsem tu pořád — zapsat odchod teď'}</button>
       ` : sm.vPraci ? `
         <div class="smena">
           <div class="muted" style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#3c6b4c">V práci</div>
           <div class="cas" id="w-cas">${trvaniOd(sm.posledni)}</div>
           <div class="kde">od ${sm.posledni.time}${sm.zeVcerejska ? ' <b>(' + fmtISO(sm.posledni.date) + ' — neuzavřeno!)</b>' : ''} · ${esc((proj(sm.pid) || {}).name || '')}</div>
         </div>
-        <button class="btn dark velke" ${S.checking ? 'disabled' : ''} onclick="workerCheck('Odchod')">${S.checking === 'Odchod' ? '⏳ ZJIŠŤUJI POLOHU…' : '🏁 ZAPSAT ODCHOD'}</button>
+        <button class="btn dark velke" ${S.checking ? 'disabled' : ''} onclick="workerCheck('Odchod')">${S.checking === 'Odchod' ? '⏳ ZAPISUJI…' : '🏁 ZAPSAT ODCHOD'}</button>
         <button class="btn ghost velke" ${S.checking ? 'disabled' : ''} onclick="prechodForm()" style="margin-top:8px">${S.checking === 'Přechod' ? '⏳ PŘESOUVÁM…' : '🔄 Přejít na jinou stavbu'}</button>
       ` : `
         <div class="smena mimo">
           <div class="cas">${sm.posledni ? 'Naposledy: ' + sm.posledni.akce.toLowerCase() + ' ' + fmtISO(sm.posledni.date) + ' v ' + sm.posledni.time : 'Zatím žádná docházka'}</div>
         </div>
-        <button class="btn ok velke" ${S.checking ? 'disabled' : ''} onclick="workerCheck('Příchod')">${S.checking === 'Příchod' ? '⏳ ZJIŠŤUJI POLOHU…' : '📍 ZAPSAT PŘÍCHOD'}</button>
+        <button class="btn ok velke" ${S.checking ? 'disabled' : ''} onclick="workerCheck('Příchod')">${S.checking === 'Příchod' ? '⏳ ZAPISUJI…' : '📍 ZAPSAT PŘÍCHOD'}</button>
       `}
-      <div class="note">Poloha se ověří proti GPS stavby (±${CFG.gpsTolerance || 100} m). Zjišťování může pár vteřin trvat.</div>
+      <div class="note">Po ťuknutí se otevře foťák — vyfoť se na stavbě. Zároveň se ověří poloha proti GPS stavby (±${CFG.gpsTolerance || 100} m).</div>
     </div>
     ${p && (p.stavbaDocs || []).length ? `<div class="card">
       <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— půdorysy, vizualizace</span></h3>
@@ -2243,6 +2407,47 @@ function viewWorker() {
    teprve pak presny GPS. Puvodne se rovnou chtela vysoka presnost s limitem
    12 s — na mobilu v barake to casto vyprsi a pichnuti se ulozilo bez polohy,
    aniz by si toho kdokoli vsiml. */
+/* Overovaci foto. Pouzivame skryty vstup se souborem a capture="user"
+   (predni foto-aparat), ne getUserMedia — na iOS je to spolehlivejsi
+   a nechce dalsi opravneni.
+   POZOR: .click() musi probehnout jeste v ramci uzivatelova tuknuti,
+   takze se tahle funkce vola PRED jakymkoli await. */
+function poriditSelfie() {
+  return new Promise(hotovo => {
+    if (!window.FileReader) return hotovo(null);
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.setAttribute('accept', 'image/*');
+    /* capture MUSI pres setAttribute — jako vlastnost ji nekdy prohlizec
+       zahodí a pak iOS nabidne i vyber z galerie. Overovaci foto ma byt
+       vzdy cerstve z fotaku. */
+    inp.setAttribute('capture', 'user');
+    inp.style.cssText = 'position:fixed;left:-9999px;opacity:0';
+    document.body.appendChild(inp);
+    let vyrizeno = false, zpracovava = false;
+    const konec = v => { if (vyrizeno) return; vyrizeno = true; try { inp.remove(); } catch (e) {} hotovo(v); };
+    inp.onchange = async () => {
+      const f = inp.files && inp.files[0];
+      if (!f) return konec(null);
+      zpracovava = true;
+      try {
+        const img = await fileToImage(f);
+        const d = scaleJpeg(img, 320, 0.6);      // maly nahled, at se vejde k zaznamu
+        URL.revokeObjectURL(img.src);
+        konec(d);
+      } catch (e) { konec(null); }
+    };
+    /* Kdyz uzivatel foceni zrusi, onchange se nespusti — poznáme to az podle
+       navratu na stranku. Kratka prodleva, at nepredbehneme zpracovani fotky. */
+    const zpet = () => {
+      window.removeEventListener('focus', zpet);
+      setTimeout(() => { if (!zpracovava) konec(null); }, 1500);
+    };
+    window.addEventListener('focus', zpet);
+    inp.click();
+  });
+}
+
 function getPos(opts) {
   return new Promise((ok, no) => navigator.geolocation.getCurrentPosition(ok, no, opts));
 }
@@ -2260,7 +2465,7 @@ function posErrText(e) {
   return 'Polohu se nepodařilo zjistit.';
 }
 async function workerCheck(akce) {
-  if (S.checking) return;                       // pojistka proti dvojkliku
+  if (S.checking) return;
   const p = proj(S.workerProject);
   if (!p) { toast('Vyber stavbu'); return; }
 
@@ -2269,35 +2474,49 @@ async function workerCheck(akce) {
   if (sm.vPraci && akce === 'Příchod') { toast('Už jsi v práci — nejdřív zapiš odchod'); return; }
   if (!sm.vPraci && akce === 'Odchod') { toast('Nejsi v práci — nejdřív zapiš příchod'); return; }
 
+  /* Foťák spustit HNED (jeste v ramci tuknuti), polohu zjistovat soubezne —
+     usetri to par vterin, protoze GPS bezi, zatimco clovek fotí. */
+  const fotoSlib = poriditSelfie();
+  const polohaSlib = (p.gps && navigator.geolocation)
+    ? acquirePos().then(pos => ({ pos })).catch(err => ({ err }))
+    : Promise.resolve(null);
+
   S.checking = akce; render();
-  const save = async (gpsDev) => {
+
+  const save = async (gpsDev, selfie) => {
     await db.collection('attendance').add({
       userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid,
-      akce, pid: p.id, date: isoToday(), time: nowTime(), gps: gpsDev, selfie: null, manual: false, createdAt: FV()
+      akce, pid: p.id, date: isoToday(), time: nowTime(), gps: gpsDev, selfie: selfie || null,
+      manual: false, createdAt: FV()
     });
-    toast(akce + ' zapsán' + (gpsDev != null ? ' — poloha sedí (' + gpsDev + ' m)' : ' BEZ OVĚŘENÍ POLOHY') + ' ✓');
+    toast(akce + ' zapsán' + (gpsDev != null ? ' — poloha sedí (' + gpsDev + ' m)' : ' BEZ OVĚŘENÍ POLOHY')
+      + (selfie ? ' 📷' : '') + ' ✓');
   };
+
   try {
+    const selfie = await fotoSlib;
+    if (!selfie && !confirm('Ověřovací foto se nepořídilo.\n\nZapsat ' + akce.toLowerCase() + ' bez fotky?')) {
+      S.checking = null; render(); return;
+    }
     if (!p.gps) {
       if (!confirm('Stavba „' + p.name + '" nemá zadané GPS, takže polohu nelze ověřit.\n\nZapsat ' +
                    akce.toLowerCase() + ' bez ověření?')) { S.checking = null; render(); return; }
-      await save(null);
-    } else if (!navigator.geolocation) {
-      if (!confirm('Tenhle prohlížeč neumí zjistit polohu.\n\nZapsat ' + akce.toLowerCase() + ' bez ověření?')) { S.checking = null; render(); return; }
-      await save(null);
+      await save(null, selfie);
     } else {
-      let pos = null, err = null;
-      try { pos = await acquirePos(); } catch (e) { err = e; }
-      if (pos) {
-        await save(haversine(pos.coords.latitude, pos.coords.longitude, p.gps.lat, p.gps.lng));
+      const r = await polohaSlib;
+      if (r && r.pos) {
+        await save(haversine(r.pos.coords.latitude, r.pos.coords.longitude, p.gps.lat, p.gps.lng), selfie);
       } else {
-        if (!confirm(posErrText(err) + '\n\nZapsat ' + akce.toLowerCase() + ' bez ověření polohy?')) { S.checking = null; render(); return; }
-        await save(null);
+        if (!confirm(posErrText(r && r.err) + '\n\nZapsat ' + akce.toLowerCase() + ' bez ověření polohy?')) {
+          S.checking = null; render(); return;
+        }
+        await save(null, selfie);
       }
     }
   } catch (e) { toast('Zápis se nepovedl: ' + (e.code || e.message)); }
   S.checking = null; render();
 }
+
 /* Zapomenuty odchod. Pracovnik ho doplni sam, ale je to jen NAVRH —
    do hodin se zapocita az po schvaleni vedenim. */
 function doplnitOdchodForm() {
@@ -2318,15 +2537,58 @@ function doplnitOdchodForm() {
 }
 async function doplnitOdchod() {
   const sm = mojeSmena(); if (!sm.vPraci) return;
+  if (mojeZadostOdchod()) { toast('Žádost už čeká u vedení'); closeModal(); return; }
+  const cas = $('#do-t').value || '16:00';
+  const datum = $('#do-d').value || sm.posledni.date;
+  if (datum < sm.posledni.date || (datum === sm.posledni.date && cas <= sm.posledni.time)) {
+    toast('Odchod musí být později než příchod v ' + sm.posledni.time); return;
+  }
+  try {
+    await db.collection('zadosti').add({
+      typ: 'odchod', stav: 'ceka',
+      userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid,
+      pid: sm.pid, date: datum, time: cas,
+      pauza: Math.max(0, parseInt($('#do-pauza').value, 10) || 0),
+      prichodId: sm.posledni.id, prichodDate: sm.posledni.date, prichodTime: sm.posledni.time,
+      poznamka: $('#do-pozn').value.trim(), createdAt: FV()
+    });
+    closeModal();
+    toast('Žádost odeslaná vedení ✓ Do hodin se započítá až po schválení.');
+  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+}
+/* Vedeni zadost schvali -> teprve TED vznikne zaznam dochazky. Zapisuje ho
+   vedeni, ale pod uctem pracovnika, aby ho mel videt i on ve svem mobilu. */
+async function zadostSchvalit(id) {
+  const z = S.zadosti.find(x => x.id === id); if (!z) return;
   try {
     await db.collection('attendance').add({
-      userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid,
-      akce: 'Odchod', pid: sm.pid, date: $('#do-d').value || sm.posledni.date,
-      time: $('#do-t').value || '16:00', gps: null, selfie: null,
-      manual: true, schvaleno: false, poznamka: $('#do-pozn').value.trim(), createdAt: FV()
+      userDocId: z.userDocId, userName: z.userName, authUid: z.authUid,
+      akce: 'Odchod', pid: z.pid, date: z.date, time: z.time,
+      gps: null, selfie: null, manual: true, schvaleno: true, pauza: z.pauza || 0,
+      poznamka: z.poznamka || '', zeZadosti: id,
+      zapsal: { kdo: fullName(S.me || {}), kdy: new Date().toISOString() }, createdAt: FV()
     });
-    closeModal(); toast('Odesláno vedení ke schválení ✓');
+    await db.collection('zadosti').doc(id).update({
+      stav: 'schvaleno', vyrizeno: { kdo: fullName(S.me || {}), kdy: new Date().toISOString() }
+    });
+    toast('Schváleno ✓ Odchod zapsán, hodiny se započítají.');
   } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+}
+async function zadostZamitnout(id) {
+  const z = S.zadosti.find(x => x.id === id); if (!z) return;
+  const duvod = prompt('Proč žádost zamítáš? (uvidí to pracovník)\n\n' +
+    z.userName + ' — odchod ' + fmtISO(z.date) + ' v ' + z.time, '');
+  if (duvod === null) return;
+  try {
+    await db.collection('zadosti').doc(id).update({
+      stav: 'zamitnuto', duvod: (duvod || '').trim(),
+      vyrizeno: { kdo: fullName(S.me || {}), kdy: new Date().toISOString() }
+    });
+    toast('Zamítnuto — den zůstává neuzavřený.');
+  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+}
+async function zadostVzitNaVedomi(id) {
+  try { await db.collection('zadosti').doc(id).update({ videno: true }); } catch (e) {}
 }
 
 /* Prechod mezi stavbami behem dne: zapise odchod tady a prichod tam.
@@ -2351,13 +2613,15 @@ async function workerPrechod() {
   const sm = mojeSmena();
   const zTady = proj(sm.pid), naTam = proj(novePid);
   if (!zTady || !naTam) { toast('Stavba nenalezena'); return; }
+  const fotoSlib = poriditSelfie();          // jeste v ramci tuknuti
   closeModal();
   S.checking = 'Přechod'; render();
+  const selfie = await fotoSlib;             // jedna fotka pro oba zaznamy
   let pos = null;
   if (navigator.geolocation) { try { pos = await acquirePos(); } catch (e) {} }
   const odch = (pos && zTady.gps) ? haversine(pos.coords.latitude, pos.coords.longitude, zTady.gps.lat, zTady.gps.lng) : null;
   const prich = (pos && naTam.gps) ? haversine(pos.coords.latitude, pos.coords.longitude, naTam.gps.lat, naTam.gps.lng) : null;
-  const spolecne = { userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid, date: isoToday(), selfie: null, manual: false };
+  const spolecne = { userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid, date: isoToday(), selfie: selfie || null, manual: false };
   try {
     await db.collection('attendance').add({ ...spolecne, akce: 'Odchod', pid: zTady.id, time: nowTime(), gps: odch, createdAt: FV() });
     await db.collection('attendance').add({ ...spolecne, akce: 'Příchod', pid: naTam.id, time: nowTime(), gps: prich, createdAt: FV() });
@@ -2372,6 +2636,7 @@ async function workerSubmit() {
   if (!txt && !S.draftPhotos.length) { toast('Napiš text nebo přidej fotku'); return; }
   $('#w-save').disabled = true;
   await addEntry(S.workerProject, fullName(S.me || {}), txt, parseInt($('#wpers').value) || 1);
+  zapomen('wt', 'wpers');
   toast('Odesláno — čeká na schválení vedením ✓'); render();
 }
 
@@ -2508,7 +2773,7 @@ nastenkaPrehled = function () {
 /* ============ INIT ============ */
 if (CONFIGURED) {
   if (S.portalToken) { startPortal(); render(); }
-  else initAuth();
+  else { initAuth(); frontaSpocitat().then(() => frontaOdeslat()); }
 } else { render(); }
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   window.addEventListener('load', () => {
