@@ -45,6 +45,69 @@ function haversine(lat1, lon1, lat2, lon2) {
   return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 }
 
+/* ---------- instalace na plochu ---------- */
+const UA = navigator.userAgent || '';
+const JE_IOS = /iPad|iPhone|iPod/.test(UA) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const JE_IOS_CHROME = JE_IOS && /CriOS|FxiOS|EdgiOS/.test(UA);
+const JE_ANDROID = /Android/.test(UA);
+function jeNaPlose() {
+  return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+}
+/* Android/desktop Chrome nabidne skutecnou instalaci pres tuhle udalost.
+   iOS ji neumi — tam musime ukazat postup rucne. */
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); S.installPrompt = e; render(); });
+window.addEventListener('appinstalled', () => { S.installPrompt = null; toast('Nainstalováno na plochu ✓'); render(); });
+
+async function pridatNaPlochu() {
+  if (S.installPrompt) {                       // Android / desktop Chrome
+    S.installPrompt.prompt();
+    try { await S.installPrompt.userChoice; } catch (e) {}
+    S.installPrompt = null; render(); return;
+  }
+  if (JE_IOS_CHROME) {
+    modal(`<h3>📲 Přidat Deník na plochu</h3>
+      <div class="howto">
+        <div class="note" style="margin-top:0">V Chromu na iPhonu to spolehlivě nejde. Otevři si Deník
+        v <b>Safari</b> — tam to je na dvě ťuknutí a aplikace pak funguje líp (celá obrazovka, vlastní povolení polohy).</div>
+        <ol>
+          <li>Zkopíruj odkaz tlačítkem níž</li>
+          <li>Otevři <b>Safari</b> a vlož ho do adresního řádku</li>
+          <li>Ťukni na <span class="k">Sdílet ⬆️</span> dole uprostřed</li>
+          <li>Sjeď dolů na <span class="k">Přidat na plochu</span> → <span class="k">Přidat</span></li>
+        </ol>
+      </div>
+      <div class="aprv"><button class="btn amber" onclick="kopirovatOdkaz()">📋 Zkopírovat odkaz</button>
+      <button class="btn ghost" onclick="closeModal()">Zavřít</button></div>`);
+    return;
+  }
+  if (JE_IOS) {
+    modal(`<h3>📲 Přidat Deník na plochu</h3>
+      <div class="howto">Bude z toho ikona jako u normální aplikace — otevře se na celou obrazovku.
+        <ol>
+          <li>Ťukni na <span class="k">Sdílet ⬆️</span> dole uprostřed obrazovky</li>
+          <li>Sjeď v nabídce dolů na <span class="k">Přidat na plochu</span></li>
+          <li>Vpravo nahoře <span class="k">Přidat</span></li>
+        </ol>
+      </div>
+      <div class="aprv"><button class="btn amber" onclick="closeModal()">Rozumím</button></div>`);
+    return;
+  }
+  modal(`<h3>📲 Přidat Deník na plochu</h3>
+    <div class="howto">
+      <ol>
+        <li>Otevři nabídku prohlížeče — <span class="k">⋮</span> ${JE_ANDROID ? 'vpravo nahoře' : 'nebo ikona instalace v adresním řádku'}</li>
+        <li>Vyber <span class="k">${JE_ANDROID ? 'Přidat na plochu' : 'Nainstalovat aplikaci'}</span></li>
+        <li>Potvrď <span class="k">Přidat</span></li>
+      </ol>
+    </div>
+    <div class="aprv"><button class="btn amber" onclick="closeModal()">Rozumím</button></div>`);
+}
+function kopirovatOdkaz() {
+  const url = location.origin + location.pathname;
+  if (navigator.clipboard) navigator.clipboard.writeText(url).then(() => toast('Odkaz zkopírován ✓'), () => toast(url));
+  else toast(url);
+}
+
 /* ---------- firebase init ---------- */
 let db = null, auth = null;
 if (CONFIGURED) {
@@ -68,7 +131,7 @@ const S = {
   workerProject: null, draftPhotos: [], draftAtts: [], uploading: 0, signFor: null, tplOpen: false,
   loginMode: 'teren', loginWorker: null,
   online: navigator.onLine, unsub: [],
-  denikTab: 'zaznamy', searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false, checking: null
+  denikTab: 'zaznamy', searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false, checking: null, installPrompt: null
 };
 window.addEventListener('online', () => { S.online = true; render(); });
 window.addEventListener('offline', () => { S.online = false; render(); });
@@ -488,6 +551,13 @@ function viewLogin() {
     `}
     ${S.loginMsg ? `<div class="lerr" style="display:block">${esc(S.loginMsg)}</div>` : ''}
     <div class="lerr" id="lerr"></div>
+    ${jeNaPlose() ? '' : `<button class="instbox" onclick="pridatNaPlochu()">
+      <span class="ic">📲</span>
+      <span><b>Přidat Deník na plochu</b>
+      <span>${S.installPrompt ? 'Jedno ťuknutí a máš ho jako aplikaci — bez hledání odkazu.'
+        : JE_IOS ? 'Vznikne ikona jako u běžné aplikace. Ukážu ti jak.'
+        : 'Ať ho nemusíš pokaždé hledat. Ukážu ti jak.'}</span></span>
+    </button>`}
     <div class="ls" style="margin-top:14px;margin-bottom:0">${CFG.firmName} · ${S.online ? '' : '⚠ offline'}</div>
   </div></div>`;
 }
@@ -1998,7 +2068,9 @@ async function acquirePos() {
 }
 function posErrText(e) {
   if (!e) return 'Polohu se nepodařilo zjistit.';
-  if (e.code === 1) return 'Poloha je zakázaná — povol ji v nastavení prohlížeče pro tuto stránku.';
+  if (e.code === 1) return JE_IOS
+    ? 'Poloha je zakázaná.\n\nNa iPhonu ji zapneš takto:\n1) Nastavení → Soukromí a zabezpečení → Polohové služby\n2) Zapnout nahoře, pak sjet na svůj prohlížeč\n3) Nastavit "Při používání aplikace" + Přesná poloha\n4) Vrátit se sem a stránku načíst znovu'
+    : 'Poloha je zakázaná — povol ji v nastavení prohlížeče pro tuto stránku a stránku načti znovu.';
   if (e.code === 2) return 'Telefon polohu nezjistil (slabý signál, uvnitř budovy).';
   if (e.code === 3) return 'Zjišťování polohy trvalo moc dlouho.';
   return 'Polohu se nepodařilo zjistit.';
