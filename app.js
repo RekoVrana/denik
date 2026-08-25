@@ -2855,7 +2855,51 @@ function viewWorker() {
    a nechce dalsi opravneni.
    POZOR: .click() musi probehnout jeste v ramci uzivatelova tuknuti,
    takze se tahle funkce vola PRED jakymkoli await. */
+/* Overovaci foto. Na telefonu otevreme rovnou fotoaparat pres skryty vstup
+   se souborem — na iOS je to spolehlivejsi nez webkamera. Na pocitaci ale
+   prohlizec pokyn "otevri fotak" ignoruje a nabidne vyber souboru z disku,
+   takze tam sahneme po webkamere. */
+function jeDotykove() {
+  return (navigator.maxTouchPoints || 0) > 0 || 'ontouchstart' in window;
+}
 function poriditSelfie() {
+  return jeDotykove() ? selfieZFotaku() : selfieZKamery();
+}
+function selfieZKamery() {
+  return new Promise(hotovo => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return hotovo(null);
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false })
+      .then(stream => {
+        const box = document.createElement('div');
+        box.className = 'modal';
+        box.innerHTML = `<div class="mbox" style="max-width:420px">
+          <h3>📷 Ověřovací foto</h3>
+          <video id="cam-v" autoplay playsinline muted style="width:100%;border-radius:10px;background:#000"></video>
+          <div class="aprv" style="margin-top:12px">
+            <button class="btn ghost" id="cam-x">Zrušit</button>
+            <button class="btn amber" id="cam-ok">📸 Vyfotit</button>
+          </div></div>`;
+        document.body.appendChild(box);
+        const v = box.querySelector('#cam-v');
+        v.srcObject = stream;
+        const konec = vysledek => {
+          stream.getTracks().forEach(t => t.stop());
+          box.remove();
+          hotovo(vysledek);
+        };
+        box.querySelector('#cam-x').onclick = () => konec(null);
+        box.querySelector('#cam-ok').onclick = () => {
+          const c = document.createElement('canvas');
+          c.width = v.videoWidth || 640;
+          c.height = v.videoHeight || 480;
+          c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+          konec({ nahled: scaleJpeg(c, 320, 0.62), plna: scaleJpeg(c, 1280, 0.85) });
+        };
+      })
+      .catch(() => hotovo(null));
+  });
+}
+function selfieZFotaku() {
   return new Promise(hotovo => {
     if (!window.FileReader) return hotovo(null);
     const inp = document.createElement('input');
