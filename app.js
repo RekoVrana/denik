@@ -1028,9 +1028,10 @@ function projectForm(id) {
     </div>
     <label>Investor</label><input type="text" id="pf-client" value="${esc(p.client || '')}">
     <div class="frow">
-      <div><label>E-mail investora (notifikace portálu)</label><input type="email" id="pf-cmail" value="${esc(p.investorEmail || '')}"></div>
+      <div><label>E-mail investora</label><input type="email" id="pf-cmail" value="${esc(p.investorEmail || '')}"></div>
       <div><label>Telefon investora</label><input type="tel" id="pf-cphone" value="${esc(p.investorPhone || '')}" placeholder="602 285 581"></div>
     </div>
+    <div class="muted" style="font-size:11.5px;margin:-6px 0 10px">Na e-mail chodí investorovi zpráva, když v deníku přibude zápis pro něj nebo vícepráce ke schválení — i s odkazem na jeho portál. Bez e-mailu se nic neposílá.</div>
     <label>Adresa realizace</label>
     <div style="display:flex;gap:8px;align-items:stretch">
       <input type="text" id="pf-addr" value="${esc(p.address || '')}" placeholder="Novodvorská 413/135, Praha 4"

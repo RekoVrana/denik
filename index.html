@@ -143,6 +143,10 @@
   .formsec{border-top:1px solid var(--line);margin-top:16px;padding-top:14px}
   .formsec h4{font-size:13.5px;color:var(--navy);margin-bottom:4px}
   .frow{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  /* Delsi popisek se zalomi na dva radky (treba "E-mail investora (notifikace
+     portalu)") a policko pod nim pak stoji niz nez jeho soused vedle.
+     Tohle drzi policka zarovnana u spodni hrany bez ohledu na delku popisku. */
+  .frow>div{display:flex;flex-direction:column;justify-content:flex-end}
   @media(max-width:700px){.frow{grid-template-columns:1fr}}
   .mapbox{background:linear-gradient(135deg,#dfe9e2,#cfdce9);border:1px solid var(--line);border-radius:10px;min-height:120px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#42505e;font-size:12.5px;gap:6px;padding:10px;text-align:center}
   .mapbox .pin{font-size:30px}
