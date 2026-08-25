@@ -1,0 +1,145 @@
+// ============================================================
+//  DENÍK STAVEB — Rekonstrukce Vrána s.r.o.
+//  ZÁLOŽNÍ KOPIE pravidel přístupu k databázi (Firestore)
+//
+//  Toto je věrný opis toho, co je nasazené v ostrém provozu.
+//  Ověřeno proti Firebase konzoli 23. 8. 2026 v 10:15 — sedí řádek po řádku.
+//  Živá verze: Firebase konzole → Firestore → Rules
+//  Když se změní tam, změň i tady, ať kopie nezastará.
+//
+//  Poslední změny 23. 8. 2026:
+//   4) OPRAVA ZÁLOHY: sekce /dashboard tady měla 'if false', ale ostrá
+//      verze má 'if isAdmin()' (změněno v konzoli 23. 8. v 8:40 a do téhle
+//      kopie se to nezapsalo). Srovnáno podle ostré verze — kdyby se
+//      publikovala ta stará, přestal by fungovat Ranní report.
+//   3) NOVA kolekce /zadosti — pracovnik uz nezapisuje zapomenuty odchod
+//      primo do dochazky (pravidla to stejne odmitala). Posle zadost,
+//      vedeni ji schvali a teprve tim vznikne zaznam dochazky.
+//
+//  Poslední změny 22. 8. 2026:
+//   1) /portals/{token}: 'allow read' → 'allow get'
+//    Důvod: 'read' povoloval i vyjmenování VŠECH portálů, takže
+//    kdokoliv z internetu si mohl stáhnout seznam odkazů investorů
+//    a přečíst si cizí stavbu. 'get' pustí jen ten jeden portál,
+//      jehož token už člověk zná. Ověřeno testem zvenku.
+//   2) /dashboard/*: zavřeno úplně (bylo veřejně čitelné, notes i
+//      zapisovatelné). Denní report nově chodí přes Apps Script most.
+// ============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function bootstrap() {
+      return !exists(/databases/$(database)/documents/config/app);
+    }
+    // má přidělenou roli v systému (users_auth doc) — samému založený účet bez role nemá přístup k ničemu
+    function hasRole() {
+      return signedIn() && exists(/databases/$(database)/documents/users_auth/$(request.auth.uid));
+    }
+    function isAdmin() {
+      return hasRole()
+        && get(/databases/$(database)/documents/users_auth/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    match /config/app {
+      allow read: if true;
+      allow write: if bootstrap() || isAdmin();
+    }
+    match /roster/{id} {
+      allow read: if true;
+      allow write: if bootstrap() || isAdmin();
+    }
+    match /users_auth/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow write: if bootstrap() || isAdmin();
+    }
+
+    match /users/{id} {
+      allow read: if hasRole();
+      allow write: if bootstrap() || isAdmin();
+    }
+
+    match /sazby/{id} {
+      allow read, write: if isAdmin();
+    }
+
+    match /projects/{id} {
+      allow read: if hasRole();
+      allow write: if isAdmin();
+    }
+
+    match /entries/{id} {
+      allow read: if hasRole();
+      allow create: if hasRole() && request.resource.data.authorUid == request.auth.uid
+                    && request.resource.data.status == 'pending';
+      allow update: if isAdmin()
+                    || (hasRole() && resource.data.authorUid == request.auth.uid
+                        && resource.data.status == 'pending'
+                        && request.resource.data.status == 'pending');
+      allow delete: if isAdmin();
+    }
+
+    match /tasks/{id} {
+      allow read: if hasRole();
+      allow create, update: if hasRole();
+      allow delete: if isAdmin();
+    }
+
+    match /attendance/{id} {
+      allow read: if isAdmin() || (hasRole() && resource.data.authUid == request.auth.uid);
+      allow create: if isAdmin() || (hasRole() && request.resource.data.authUid == request.auth.uid
+                    && request.resource.data.manual == false);
+      allow update, delete: if isAdmin();
+    }
+
+    // ── Zadosti od party (doplneni zapomenuteho odchodu) ──
+    // Pracovnik NEZAPISUJE do dochazky. Posle sem zadost, vedeni ji schvali
+    // a teprve tim vznikne zaznam dochazky. Do hodin se tak nikdy nedostane
+    // nic, co vedeni nevidelo.
+    match /zadosti/{id} {
+      allow read: if isAdmin() || (hasRole() && resource.data.authUid == request.auth.uid);
+      allow create: if hasRole()
+                    && request.resource.data.authUid == request.auth.uid
+                    && request.resource.data.stav == 'ceka';
+      // pracovnik smi u sve zadosti odklepnout jen to, ze videl zamitnuti
+      allow update: if isAdmin()
+                    || (hasRole() && resource.data.authUid == request.auth.uid
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['videno']));
+      allow delete: if isAdmin();
+    }
+
+    match /viceprace/{id} {
+      allow read, write: if isAdmin();
+    }
+
+    // ── Dashboard (denní report — aplikace ranni-report-vrana) ──
+    // Zapisuje jen Apps Script most "Vrana Dashboard Most", který se
+    // autorizuje jako vlastník skriptu, takže pravidla obchází.
+    // Čtení otevřeno přihlášenému vedení (23. 8. 2026) — bez toho si
+    // Ranní report svoje data nepřečte. Z internetu se sem nikdo nedostane.
+    match /dashboard/content {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+    match /dashboard/notes {
+      allow read, write: if isAdmin();
+    }
+
+    match /portals/{token} {
+      allow get: if true;           // ← OPRAVENO 22.8.2026 (bylo 'read')
+      allow write: if isAdmin();
+      match /feed/{id} { allow read: if true; allow write: if isAdmin(); }
+      match /vp/{id}   { allow read: if true; allow write: if isAdmin(); }
+      match /docs/{id} { allow read: if true; allow write: if isAdmin(); }
+      match /actions/{id} {
+        allow create: if request.resource.data.keys().hasOnly(['type','vpid','action','ts','handled'])
+                      && request.resource.data.type == 'vp'
+                      && request.resource.data.action in ['approve','reject']
+                      && request.resource.data.handled == false;
+        allow read, update, delete: if isAdmin();
+      }
+    }
+  }
+}

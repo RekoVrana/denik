@@ -444,6 +444,7 @@ async function frontaOdeslat() {
         const j = await driveCall({
           action: 'upload', folderId: it.folderId || '', rootId: CFG.driveRootFolderId,
           cn: it.cn, client: it.client, date: it.date, name: it.name,
+          druh: it.druh || 'foto',          // most podle toho vybere podsložku v 09_Denik_staveb
           data: String(it.data).split(',')[1], mime: it.mime || 'application/octet-stream'
         });
         await frontaZapsatDoZaznamu(it, j.fileId);
@@ -453,6 +454,11 @@ async function frontaOdeslat() {
   } finally { _frontaBezi = false; S.uploading--; await frontaSpocitat(); }
 }
 async function frontaZapsatDoZaznamu(it, fileId) {
+  if (it.druh === 'selfie') {
+    if (!it.attendanceId) return;
+    await db.collection('attendance').doc(it.attendanceId).update({ selfieDriveId: fileId }).catch(() => {});
+    return;
+  }
   if (!it.entryId) return;
   const ref = db.collection('entries').doc(it.entryId);
   const snap = await ref.get();
@@ -1205,7 +1211,7 @@ async function uploadStavbaDocs(pid, files) {
     const data = await new Promise(ok => { const r = new FileReader(); r.onload = () => ok(r.result); r.readAsDataURL(f); });
     try {
       S.uploading++; render();
-      const j = await driveCall({ action: 'upload', folderId: p.driveFolderId || '', rootId: CFG.driveRootFolderId, cn: p.cn, client: p.client, date: isoToday(), name: f.name, data: data.split(',')[1], mime: f.type || 'application/octet-stream' });
+      const j = await driveCall({ action: 'upload', folderId: p.driveFolderId || '', rootId: CFG.driveRootFolderId, cn: p.cn, client: p.client, date: isoToday(), name: f.name, druh: 'podklad', data: data.split(',')[1], mime: f.type || 'application/octet-stream' });
       const cur = (proj(pid).stavbaDocs) || [];
       await db.collection('projects').doc(pid).update({ stavbaDocs: [...cur, { name: f.name, driveId: j.fileId, mime: f.type || '' }] });
     } catch (e) { console.warn(e); toast('⚠ ' + f.name + ' se nenahrál (Drive most)'); }
@@ -2709,12 +2715,20 @@ function poriditSelfie() {
 
 /* Ulozi overovaci foto na Drive do slozky zakazky. Kdyz to nevyjde
    (offline, most nedostupny), pichnuti se presto zapise — jen s nahledem. */
-async function selfieNaDrive(p, foto, akce) {
-  if (!foto || !p || !CFG.scriptUrl || !S.online) return null;
+/* Overovaci foto jde do stejne fronty jako fotky z deniku. Drive se posilalo
+   rovnou na Drive a kdyz nebyl signal, plna verze se zahodila — v zaznamu
+   zustal jen maly nahled. Ted se plna verze ulozi do telefonu a odesle se
+   sama, jakmile je signal; odkaz se do zaznamu dochazky doplni pozdeji. */
+async function zaraditSelfie(p, attendanceId, foto, akce) {
+  if (!foto || !foto.plna) return;
   const kdo = fullName(S.me || {}).replace(/\s+/g, '-');
   const jmeno = 'dochazka_' + akce + '_' + kdo + '_' + isoToday() + '_' + nowTime().replace(':', '-');
-  try { return await uploadPhotoToDrive(p, foto.plna, jmeno); }
-  catch (e) { console.warn('selfie na Drive', e); return null; }
+  try {
+    await frontaPridat({
+      druh: 'selfie', attendanceId, name: jmeno + '.jpg', mime: 'image/jpeg', data: foto.plna,
+      folderId: (p && p.driveFolderId) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', date: isoToday()
+    });
+  } catch (e) { console.warn('fronta selfie', e); }
 }
 
 function getPos(opts) {
@@ -2752,19 +2766,25 @@ async function workerCheck(akce) {
 
   S.checking = akce; render();
 
+  /* ID zaznamu vyrobi telefon, ne server — diky tomu pichnuti projde i bez
+     signalu (Firestore ho posle sam, az bude) a selfie uz vi, kam patri.
+     Zapis se zamerne neceka: offline by se na nej cekalo do nekonecna
+     a tlacitko by zustalo viset na "ZAPISUJI…". */
   const save = async (gpsDev, foto) => {
     const pauza = akce === 'Odchod' ? (S.pauza || 0) : 0;   // pauza se zapisuje k odchodu
-    const driveId = await selfieNaDrive(p, foto, akce);
-    await db.collection('attendance').add({
+    const ref = db.collection('attendance').doc();
+    if (foto) await zaraditSelfie(p, ref.id, foto, akce);
+    ref.set({
       userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid,
       akce, pid: p.id, date: isoToday(), time: nowTime(), gps: gpsDev,
-      selfie: foto ? foto.nahled : null, selfieDriveId: driveId,
+      selfie: foto ? foto.nahled : null, selfieDriveId: null,
       manual: false, pauza, createdAt: FV()
-    });
+    }).catch(e => console.warn('zapis dochazky', e));
     if (akce === 'Odchod') vynulovatPauzu();
+    frontaOdeslat();
     toast(akce + ' zapsán' + (gpsDev != null ? ' — poloha sedí (' + gpsDev + ' m)' : ' BEZ OVĚŘENÍ POLOHY')
       + (pauza ? ' · pauza ' + pauza + ' min' : '')
-      + (foto ? (driveId ? ' 📷 na Drive' : ' 📷 jen náhled') : '') + ' ✓');
+      + (foto ? (S.online ? ' 📷' : ' 📷 odešle se, až bude signál') : '') + ' ✓');
   };
 
   try {
@@ -2821,7 +2841,9 @@ async function doplnitOdchod() {
     toast('Odchod musí být později než příchod v ' + sm.posledni.time); return;
   }
   try {
-    await db.collection('zadosti').add({
+    // nececkame na server do nekonecna — bez signalu by okno zustalo viset;
+    // Firestore zapis stejne dorucil sam, az bude pripojeni
+    const zapis = db.collection('zadosti').add({
       typ: 'odchod', stav: 'ceka',
       userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid,
       pid: sm.pid, date: datum, time: cas,
@@ -2829,8 +2851,11 @@ async function doplnitOdchod() {
       prichodId: sm.posledni.id, prichodDate: sm.posledni.date, prichodTime: sm.posledni.time,
       poznamka: $('#do-pozn').value.trim(), createdAt: FV()
     });
+    zapis.catch(e => toast('Žádost se neuložila: ' + (e.code || e.message)));
+    await Promise.race([zapis, new Promise(r => setTimeout(r, 1500))]);
     closeModal();
-    toast('Žádost odeslaná vedení ✓ Do hodin se započítá až po schválení.');
+    toast(S.online ? 'Žádost odeslaná vedení ✓ Do hodin se započítá až po schválení.'
+                   : 'Žádost uložena — odejde vedení, až bude signál ✓');
   } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
 }
 /* Vedeni zadost schvali -> teprve TED vznikne zaznam dochazky. Zapisuje ho
@@ -2898,15 +2923,22 @@ async function workerPrechod() {
   if (navigator.geolocation) { try { pos = await acquirePos(); } catch (e) {} }
   const odch = (pos && zTady.gps) ? haversine(pos.coords.latitude, pos.coords.longitude, zTady.gps.lat, zTady.gps.lng) : null;
   const prich = (pos && naTam.gps) ? haversine(pos.coords.latitude, pos.coords.longitude, naTam.gps.lat, naTam.gps.lng) : null;
-  const driveId = await selfieNaDrive(zTady, selfie, 'Prechod');
   const spolecne = { userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid,
-    date: isoToday(), selfie: selfie ? selfie.nahled : null, selfieDriveId: driveId, manual: false };
+    date: isoToday(), selfie: selfie ? selfie.nahled : null, selfieDriveId: null, manual: false };
   try {
-    await db.collection('attendance').add({ ...spolecne, akce: 'Odchod', pid: zTady.id, time: nowTime(), gps: odch, pauza: S.pauza || 0, createdAt: FV() });
+    // ID obou zaznamu vyrobi telefon — prechod tak projde i bez signalu.
+    // Fotka je jedna spolecna, na Drive ji navazeme na zaznam odchodu.
+    const refOdchod = db.collection('attendance').doc();
+    const refPrichod = db.collection('attendance').doc();
+    if (selfie) await zaraditSelfie(zTady, refOdchod.id, selfie, 'Prechod');
+    refOdchod.set({ ...spolecne, akce: 'Odchod', pid: zTady.id, time: nowTime(), gps: odch, pauza: S.pauza || 0, createdAt: FV() })
+      .catch(e => console.warn('prechod odchod', e));
     vynulovatPauzu();
-    await db.collection('attendance').add({ ...spolecne, akce: 'Příchod', pid: naTam.id, time: nowTime(), gps: prich, createdAt: FV() });
+    refPrichod.set({ ...spolecne, akce: 'Příchod', pid: naTam.id, time: nowTime(), gps: prich, createdAt: FV() })
+      .catch(e => console.warn('prechod prichod', e));
     S.workerProject = naTam.id;
-    toast('Přesun zapsán ✓ Jsi na stavbě ' + naTam.name);
+    frontaOdeslat();
+    toast('Přesun zapsán ✓ Jsi na stavbě ' + naTam.name + (selfie && !S.online ? ' · fotka se odešle, až bude signál' : ''));
   } catch (e) { toast('Přesun se nepovedl: ' + (e.code || e.message)); }
   S.checking = null; render();
 }
