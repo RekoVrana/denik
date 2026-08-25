@@ -249,6 +249,19 @@ function listen(col, target, opts) {
     render();
   }, err => console.warn('listener ' + col, err)));
 }
+/* Cteni, ktere jednou zopakuje, kdyz ho databaze odmitne proto, ze jeste
+   nezna prihlaseneho uzivatele. Jina odmitnuti propousti dal — ta znamenaji
+   skutecne chybejici opravneni a nemaji se zamlcovat. */
+async function ctiSPokusem(cti, prodleva) {
+  try { return await cti(); }
+  catch (e) {
+    if (e && e.code === 'permission-denied') {
+      await new Promise(r => setTimeout(r, prodleva || 700));
+      return await cti();
+    }
+    throw e;
+  }
+}
 function startData() {
   const role = S.meAuth.role; // 'admin' | 'worker' | 'sub'
   listen('projects', 'projects', { sort: (a, b) => (b.active - a.active) || String(a.cn || a.name).localeCompare(String(b.cn || b.name), 'cs') });
@@ -691,14 +704,20 @@ function initAuth() {
     S.authUser = u; S.meAuth = null; S.me = null;
     if (u) {
       try {
-        let d = await db.collection('users_auth').doc(u.uid).get();
+        /* POZOR na zavod pri prvnim prihlaseni: Firebase nejdriv overi heslo
+           a teprve potom preda databazi totoznost prihlaseneho. Kdyz se
+           zeptame driv, pravidla nas vidi jako neprihlaseneho a odmitnou nas
+           s "permission-denied" — projevovalo se to tak, ze prvni pokus vzdy
+           selhal a druhy uz prosel. Vynutime token a pripadne zopakujeme. */
+        try { await u.getIdToken(); } catch (e) {}
+        let d = await ctiSPokusem(() => db.collection('users_auth').doc(u.uid).get());
         if (!d.exists) { // krátké čekání — zápis role mohl ještě probíhat
           await new Promise(r => setTimeout(r, 1500));
-          d = await db.collection('users_auth').doc(u.uid).get();
+          d = await ctiSPokusem(() => db.collection('users_auth').doc(u.uid).get());
         }
         if (d.exists) {
           S.meAuth = d.data();
-          const me = await db.collection('users').doc(S.meAuth.userDocId).get();
+          const me = await ctiSPokusem(() => db.collection('users').doc(S.meAuth.userDocId).get());
           S.me = me.exists ? { id: me.id, ...me.data() } : null;
           S.authState = 'in'; startData(); render(); return;
         } else {
