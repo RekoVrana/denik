@@ -2863,7 +2863,11 @@ function jeDotykove() {
   return (navigator.maxTouchPoints || 0) > 0 || 'ontouchstart' in window;
 }
 function poriditSelfie() {
-  return jeDotykove() ? selfieZFotaku() : selfieZKamery();
+  if (jeDotykove()) return selfieZFotaku();
+  /* Na pocitaci nejdriv webkamera. Kdyz nepujde (obsazena jinou aplikaci,
+     zakazany pristup), spadneme na vyber souboru — fotka je porad potreba,
+     jen se vezme odjinud. Zablokovat cloveka u pocitace by bylo horsi. */
+  return selfieZKamery().then(v => v || selfieZFotaku());
 }
 function selfieZKamery() {
   return new Promise(hotovo => {
