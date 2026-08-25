@@ -234,6 +234,14 @@
 <div id="updbar"></div>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  /* Leaflet dava svym vrstvam z-index 400 az 1000, ale kontejneru mapy zadny.
+     Bez toho se vrstvy mapy poradi primo proti strance, takze mapa z detailu
+     stavby prekryla otevrene okno "Upravit projekt" (okno ma z-index 110).
+     z-index:0 na kontejneru uzavre vrstvy mapy dovnitr, takze uz nikam nelezou.
+     Plati i pro prohlizec fotek a hlasky. */
+  .leaflet-container{ position:relative; z-index:0 }
+</style>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>

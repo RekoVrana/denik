@@ -1051,13 +1051,74 @@ function projectForm(id) {
     <div class="note" id="pf-maphint" style="${p.gps ? '' : 'display:none'}">
       Špendlík přetáhni přesně tam, kde se parta hlásí. Proti tomuhle bodu se ověřuje check-in (povolená odchylka ${CFG.gpsTolerance || 100} m).
     </div>
-    <label>ID složky zakázky na Drive (pro fotky)</label><input type="text" id="pf-drive" value="${esc(p.driveFolderId || '')}" placeholder="nech prázdné — vytvoří se automaticky">
+    <label>Složka zakázky na Drive</label>
+    <div style="display:flex;gap:8px;align-items:stretch">
+      <input type="text" id="pf-drive" value="${esc(p.driveFolderId || '')}" placeholder="najdi tlačítkem podle čísla zakázky">
+      <button class="btn dark" style="flex:none" onclick="najdiDriveSlozku()">🔍 Najít</button>
+    </div>
+    <div class="note" id="pf-drivestav" style="display:none"></div>
+    <div class="muted" style="font-size:11.5px;margin-top:4px">Sem chodí fotky, přílohy i docházka — do podsložky <b>09_Denik_staveb</b>. Když zůstane prázdné, most si založí vlastní složku vedle té tvojí.</div>
     <label>Plán předání</label><input type="text" id="pf-hand" value="${esc(p.handover || '')}" placeholder="plán předání 24. 7. 2026">
     <div class="aprv"><button class="btn amber" onclick="saveProject('${id || ''}')">💾 Uložit</button><button class="btn ghost" onclick="closeModal()">Zrušit</button></div>`);
 }
+/* Slozka zakazky na Drive se hleda podle CN — nazvy slozek zacinaji cislem
+   zakazky (CN20260053_Sasek_Machuldova), takze staci porovnat zacatek.
+   Dokud je pole prazdne, most si zaklada vlastni slozku "..._SYSTEM" vedle
+   te skutecne, coz je presne to, cemu se chceme vyhnout. */
+function driveStav(text, barva) {
+  const el = $('#pf-drivestav');
+  if (el) { el.innerHTML = text; el.style.display = text ? '' : 'none'; el.style.color = barva || ''; }
+}
+async function najdiDriveSlozku(tiche) {
+  const cn = ($('#pf-cn') ? $('#pf-cn').value : '').trim();
+  if (!cn) { if (!tiche) toast('Nejdřív vyplň číslo zakázky (CN)'); return false; }
+  if (!CFG.scriptUrl) { if (!tiche) toast('Drive most není nastavený'); return false; }
+  if (!S.online) { if (!tiche) toast('Hledání potřebuje internet'); return false; }
+  driveStav('<span class="spin"></span> Hledám složku na Drive…');
+  try {
+    const j = await driveCall({ action: 'findFolder', cn, rootId: CFG.driveRootFolderId });
+    const nalezene = j.folders || [];
+    if (nalezene.length === 1) {
+      $('#pf-drive').value = nalezene[0].id;
+      driveStav('✅ Nalezeno: <b>' + esc(nalezene[0].name) + '</b>', 'var(--ok)');
+      return true;
+    }
+    if (nalezene.length === 0) {
+      if (tiche) { driveStav('⚠ Složka pro ' + esc(cn) + ' na Drive není — soubory půjdou do náhradní složky.', 'var(--wait)'); return false; }
+      const navrh = cn + '_' + (($('#pf-client').value || '').trim().split(/\s+/).pop() || 'zakazka');
+      const jmeno = prompt('Složka pro ' + cn + ' na Drive neexistuje.\n\nZaložit ji? Uprav název, nebo zruš:', navrh);
+      if (!jmeno) { driveStav('Složka nenalezena — pole zůstalo prázdné.', 'var(--wait)'); return false; }
+      const k = await driveCall({ action: 'createFolder', name: jmeno, rootId: CFG.driveRootFolderId });
+      if (k.id) { $('#pf-drive').value = k.id; driveStav('✅ Založeno: <b>' + esc(k.name) + '</b>', 'var(--ok)'); return true; }
+      driveStav('Založení se nepovedlo: ' + esc(k.error || '?'), 'var(--red)'); return false;
+    }
+    // vic shod -> at vybere clovek
+    driveStav('Našel jsem ' + nalezene.length + ' složek — vyber:', '');
+    modal(`<h3>📁 Která složka to je?</h3>
+      <div class="note" style="margin-top:0">Číslu <b>${esc(cn)}</b> odpovídá víc složek.</div>
+      <div class="rosterlist">${nalezene.map(f => `
+        <div class="urow" onclick="vyberDriveSlozku('${f.id}','${esc(f.name).replace(/'/g, "&#39;")}')">
+          <span>📁</span><b>${esc(f.name)}</b></div>`).join('')}</div>
+      <div class="aprv"><button class="btn ghost" onclick="closeModal()">Zrušit</button></div>`);
+    return false;
+  } catch (e) {
+    driveStav('Hledání se nepovedlo: ' + esc(e.message || ''), 'var(--red)');
+    return false;
+  }
+}
+function vyberDriveSlozku(id, jmeno) {
+  closeModal();
+  if ($('#pf-drive')) $('#pf-drive').value = id;
+  driveStav('✅ Vybráno: <b>' + esc(jmeno) + '</b>', 'var(--ok)');
+}
+
 async function saveProject(id) {
   const name = $('#pf-name').value.trim();
   if (!name) { toast('Vyplň název stavby'); return; }
+  // novy projekt bez slozky -> zkusit ji najit potichu, at to uzivatel nemusi resit
+  if (!id && !$('#pf-drive').value.trim() && ($('#pf-cn').value || '').trim()) {
+    await najdiDriveSlozku(true);
+  }
   const lat = parseFloat($('#pf-lat').value), lng = parseFloat($('#pf-lng').value);
   const prevGps = id ? ((proj(id) || {}).gps || null) : null;
   const data = {
