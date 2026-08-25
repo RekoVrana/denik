@@ -1027,7 +1027,10 @@ function projectForm(id) {
     <div class="frow">
     </div>
     <label>Investor</label><input type="text" id="pf-client" value="${esc(p.client || '')}">
-    <label>E-mail investora (notifikace portálu)</label><input type="email" id="pf-cmail" value="${esc(p.investorEmail || '')}">
+    <div class="frow">
+      <div><label>E-mail investora (notifikace portálu)</label><input type="email" id="pf-cmail" value="${esc(p.investorEmail || '')}"></div>
+      <div><label>Telefon investora</label><input type="tel" id="pf-cphone" value="${esc(p.investorPhone || '')}" placeholder="602 285 581"></div>
+    </div>
     <label>Adresa realizace</label>
     <div style="display:flex;gap:8px;align-items:stretch">
       <input type="text" id="pf-addr" value="${esc(p.address || '')}" placeholder="Novodvorská 413/135, Praha 4"
@@ -1138,6 +1141,7 @@ async function nacistZakazku() {
     ['#pf-drive',  j.folderId,  'složka na Drive'],
     ['#pf-client', j.klient,    'investor'],
     ['#pf-cmail',  j.email,     'e-mail investora'],
+    ['#pf-cphone', j.telefon,   'telefon investora'],
     ['#pf-addr',   j.adresa,    'adresa realizace'],
     ['#pf-type',   j.typ,       'typ projektu'],
     ['#pf-hand',   j.dokonceni, 'plán předání']
@@ -1184,7 +1188,8 @@ async function saveProject(id) {
   const prevGps = id ? ((proj(id) || {}).gps || null) : null;
   const data = {
     name, cn: $('#pf-cn').value.trim(), client: $('#pf-client').value.trim(),
-    investorEmail: $('#pf-cmail').value.trim(), address: $('#pf-addr').value.trim(), type: $('#pf-type').value.trim(),
+    investorEmail: $('#pf-cmail').value.trim(), investorPhone: $('#pf-cphone').value.trim(),
+    address: $('#pf-addr').value.trim(), type: $('#pf-type').value.trim(),
     resp: $('#pf-resp').value.trim(), stav: $('#pf-stav').value,
     /* Faze a prubeh se pri zalozeni nezadavaji — u stavby, ktera jeste
        nezacala, nemaji co rikat. Objevi se az pri uprave existujici. */
@@ -1211,7 +1216,7 @@ function pgProjDetail() {
         <h3>ℹ️ Základní informace</h3>
         <div class="kv"><span>Název</span><b>${esc(p.name)}</b></div>
         <div class="kv"><span>Zakázka</span><b>${esc(p.cn)}</b></div>
-        <div class="kv"><span>Investor</span><span>${esc(p.client)} ${p.investorEmail ? '· ' + esc(p.investorEmail) : ''}</span></div>
+        <div class="kv"><span>Investor</span><span>${esc(p.client)}${p.investorEmail ? ' · ' + esc(p.investorEmail) : ''}${p.investorPhone ? ' · <a href="tel:' + esc(p.investorPhone.replace(/\s/g, '')) + '">' + esc(p.investorPhone) + '</a>' : ''}</span></div>
         <div class="kv"><span>Adresa</span><span>${esc(p.address)}</span></div>
         <div class="kv"><span>Typ</span><span>${esc(p.type || '—')}</span></div>
         <div class="kv"><span>Stav</span><span>${esc(p.stav)} · ${esc(p.phase || '')} (${p.progress || 0} %)</span></div>
