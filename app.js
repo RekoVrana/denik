@@ -1016,9 +1016,15 @@ function projectForm(id) {
   const p = id ? proj(id) : {};
   S.geoHits = []; S.geoLabel = null;
   modal(`<h3>${id ? '✏️ Upravit projekt' : '➕ Nový projekt'}</h3>
+      <div><label>Číslo zakázky (CN)</label>
+      <div style="display:flex;gap:8px;align-items:stretch">
+        <input type="text" id="pf-cn" value="${esc(p.cn || '')}" placeholder="CN20260055"
+               onkeydown="if(event.key==='Enter'){event.preventDefault();nacistZakazku();}">
+        <button class="btn dark" style="flex:none;white-space:nowrap" onclick="nacistZakazku()">🔎 Načíst z disku</button>
+      </div>
+      <div class="note" id="pf-cnstav" style="display:none"></div></div>
     <label>Název stavby *</label><input type="text" id="pf-name" value="${esc(p.name || '')}" placeholder="Novodvorská - Pecka">
     <div class="frow">
-      <div><label>Číslo zakázky (CN)</label><input type="text" id="pf-cn" value="${esc(p.cn || '')}" placeholder="CN20260055"></div>
     </div>
     <label>Investor</label><input type="text" id="pf-client" value="${esc(p.client || '')}">
     <label>E-mail investora (notifikace portálu)</label><input type="email" id="pf-cmail" value="${esc(p.investorEmail || '')}">
@@ -1110,6 +1116,63 @@ function vyberDriveSlozku(id, jmeno) {
   driveStav('✅ Vybráno: <b>' + esc(jmeno) + '</b>', 'var(--ok)');
 }
 
+/* Precte, co jde, ze slozky zakazky na Drive — hlavne ze smlouvy.
+   Zamerne prepisuje jen PRAZDNA policka: co uzivatel napsal rukou, ma prednost.
+   Co se nenajde, zustane prazdne; zalozeni zakazky to nikdy nezablokuje. */
+async function nacistZakazku() {
+  const cn = ($('#pf-cn') ? $('#pf-cn').value : '').trim();
+  const st = $('#pf-cnstav');
+  const hlas = (html, barva) => { if (st) { st.innerHTML = html; st.style.display = ''; st.style.color = barva || ''; } };
+  if (!cn) { toast('Nejdřív vyplň číslo zakázky (CN)'); return; }
+  if (!CFG.scriptUrl) { toast('Drive most není nastavený'); return; }
+  if (!S.online) { toast('Načítání potřebuje internet'); return; }
+
+  hlas('<span class="spin"></span> Hledám na Disku…');
+  let j;
+  try { j = await driveCall({ action: 'readProject', cn, rootId: CFG.driveRootFolderId }); }
+  catch (e) { hlas('Načtení se nepovedlo: ' + esc(e.message || ''), 'var(--red)'); return; }
+
+  if (!j.nalezeno) { hlas('⚠ ' + esc(j.duvod || 'Složka nenalezena.'), 'var(--wait)'); return; }
+
+  const mapa = [
+    ['#pf-drive',  j.folderId,  'složka na Drive'],
+    ['#pf-client', j.klient,    'investor'],
+    ['#pf-cmail',  j.email,     'e-mail investora'],
+    ['#pf-addr',   j.adresa,    'adresa realizace'],
+    ['#pf-type',   j.typ,       'typ projektu'],
+    ['#pf-hand',   j.dokonceni, 'plán předání']
+  ];
+  const doplneno = [], preskoceno = [];
+  mapa.forEach(([sel, hodnota, popis]) => {
+    const el = $(sel);
+    if (!el || !hodnota) return;
+    if (el.value.trim()) { if (el.value.trim() !== String(hodnota)) preskoceno.push(popis); return; }
+    el.value = hodnota; doplneno.push(popis);
+  });
+
+  // nazev stavby poskladame z ulice a prijmeni — stejny tvar jako u ostatnich staveb
+  const nm = $('#pf-name');
+  if (nm && !nm.value.trim() && j.adresa && j.klient) {
+    const ulice = String(j.adresa).split(/[\s,]/)[0];
+    const prijmeni = String(j.klient).split(' a ')[0].trim().split(/\s+/).pop();
+    if (ulice && prijmeni) { nm.value = ulice + ' - ' + prijmeni; doplneno.push('název stavby'); }
+  }
+
+  const chybi = [
+    !j.klient && 'investor', !j.email && 'e-mail investora',
+    !j.adresa && 'adresa', !j.dokonceni && 'termín dokončení'
+  ].filter(Boolean);
+
+  let zprava = '✅ Načteno z: <b>' + esc((j.zdroje || []).join(' + ') || 'složky') + '</b>';
+  if (doplneno.length) zprava += '<br>Doplněno: ' + esc(doplneno.join(', '));
+  if (preskoceno.length) zprava += '<br><span style="color:var(--wait)">Nepřepsáno (máš tam své): ' + esc(preskoceno.join(', ')) + '</span>';
+  if (chybi.length) zprava += '<br><span style="color:var(--wait)">Nenašel jsem: ' + esc(chybi.join(', ')) + ' — doplň ručně</span>';
+  if (j.cena) zprava += '<br><span class="muted">Cena díla dle smlouvy: ' + esc(j.cena) + '</span>';
+  if (j.zahajeni) zprava += '<br><span class="muted">Předání staveniště: ' + esc(j.zahajeni) + '</span>';
+  hlas(zprava, 'var(--ok)');
+
+  if ($('#pf-addr') && $('#pf-addr').value.trim() && !$('#pf-lat').value.trim()) geocodeAddress();
+}
 async function saveProject(id) {
   const name = $('#pf-name').value.trim();
   if (!name) { toast('Vyplň název stavby'); return; }
