@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kontrola výpočtů — Deník staveb</title>
+<style>
+  :root{--ok:#2f7a4d;--red:#b3382c;--navy:#1a3c5e;--line:#e2e5e9;--muted:#63758a}
+  body{font:15px/1.55 -apple-system,"Segoe UI",system-ui,sans-serif;margin:0;background:#f4f6f8;color:#16232e}
+  .wrap{max-width:860px;margin:0 auto;padding:28px 18px 70px}
+  h1{font-size:22px;margin:0 0 4px;color:var(--navy)}
+  .lede{color:var(--muted);margin:0 0 20px}
+  .souhrn{padding:14px 18px;border-radius:8px;font-weight:700;font-size:17px;margin-bottom:18px;color:#fff}
+  .souhrn.ok{background:var(--ok)} .souhrn.red{background:var(--red)}
+  .t{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px 15px;margin-bottom:8px}
+  .t.pad{border-left:4px solid var(--red)}
+  .t.prosel{border-left:4px solid var(--ok)}
+  .nazev{font-weight:600}
+  .detail{color:var(--muted);font-size:13.5px;margin-top:3px}
+  .rozdil{font-family:ui-monospace,monospace;font-size:13px;margin-top:6px;color:var(--red)}
+  .znacka{float:right;font-weight:700}
+  .znacka.ok{color:var(--ok)} .znacka.red{color:var(--red)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Kontrola výpočtů docházky</h1>
+  <p class="lede">Zelená = počítá správně. Červená = někdo to rozbil. Stránku stačí otevřít, nic se neinstaluje a nikam se nesahá — počítá se na vymyšlených datech, ne na vašich.</p>
+  <div id="souhrn" class="souhrn">Počítám…</div>
+  <div id="vysledky"></div>
+</div>
+
+<script src="vypocty.js"></script>
+<script>
+/* Kazdy test je jeden realny pripad ze stavby, popsany cesky.
+   Kdyz nekdy nekdo zmeni vypocet hodin, tady to spadne do cervene. */
+var testy = [], poradi = 0;
+
+function z(akce, cas) { poradi++; return { akce: akce, time: cas, createdAt: { seconds: 1e9 + poradi * 60 } }; }
+function test(nazev, popis, zaznamy, cekamMinut, dalsi) {
+  var v = Vypocty.spocitejDen(zaznamy);
+  var ok = v.minuty === cekamMinut;
+  var poznamky = [];
+  if (dalsi) Object.keys(dalsi).forEach(function (k) {
+    if (v[k] !== dalsi[k]) { ok = false; poznamky.push(k + ': čekáno ' + dalsi[k] + ', vyšlo ' + v[k]); }
+  });
+  testy.push({ nazev: nazev, popis: popis, ok: ok, cekano: cekamMinut, vyslo: v.minuty, poznamky: poznamky });
+}
+
+/* ---- 1. bezny den ---- */
+test('Běžný den bez pauzy', 'Příchod 7:00, odchod 16:00 → 9 hodin',
+  [z('Příchod','7:00'), z('Odchod','16:00')], 540);
+
+/* ---- 2. pauza se odecita ---- */
+test('Pauza na oběd', 'Práce 7:00–16:00, pauza 12:00–12:30 → 8,5 hodiny',
+  [z('Příchod','7:00'), z('Pauza','12:00'), z('Konec pauzy','12:30'), z('Odchod','16:00')], 510);
+
+/* ---- 3. vsechny pauzy, ne jen nejdelsi ---- */
+test('Dvě pauzy se sečtou', 'Pauzy 20 a 15 minut → odečte se 35, ne jen 20',
+  [z('Příchod','7:00'), z('Pauza','9:00'), z('Konec pauzy','9:20'),
+   z('Pauza','12:00'), z('Konec pauzy','12:15'), z('Odchod','16:00')], 505);
+
+/* ---- 4. TA CHYBA, kvuli ktere to delame ---- */
+test('Odhlášená mezera se NEplatí', 'Odejde ve 12, vrátí se ve 14 → 7 hodin, ne 9',
+  [z('Příchod','7:00'), z('Odchod','12:00'), z('Příchod','14:00'), z('Odchod','16:00')], 420);
+
+/* ---- 5. zapomenuty odchod ---- */
+test('Zapomenutý odchod', 'Jen příchod → nula hodin a den označený jako neuzavřený',
+  [z('Příchod','7:00')], 0, { nedokonceno: true });
+
+/* ---- 6. dvakrat pichnuty prichod ---- */
+test('Dvakrát ťuknutý příchod', 'Dva příchody po sobě nesmí hodiny zdvojnásobit',
+  [z('Příchod','7:00'), z('Příchod','7:01'), z('Odchod','16:00')], 540);
+
+/* ---- 7. pauza, kterou zapomnel ukoncit ---- */
+test('Neukončená pauza', 'Zapne pauzu ve 12 a už ji nevypne — končí odchodem v 16:00 → 5 hodin',
+  [z('Příchod','7:00'), z('Pauza','12:00'), z('Odchod','16:00')], 300);
+
+/* ---- 8. pauza mimo pracovni dobu ---- */
+test('Pauza mimo směnu', 'Pauza po odchodu se neodečítá — den zůstává 9 hodin',
+  [z('Příchod','7:00'), z('Odchod','16:00'), z('Pauza','17:00'), z('Konec pauzy','17:30')], 540);
+
+/* ---- 9. stara chyba s razenim casu ---- */
+test('Ranní příchod, odpolední odchod', 'Textově je "16:00" menší než "7:05" — dřív kvůli tomu zůstal člověk navždy v práci',
+  [z('Příchod','7:05'), z('Odchod','16:00')], 535, { nedokonceno: false });
+
+/* ---- 10. dve smeny na jedne stavbe ---- */
+test('Dvě směny za den', 'Ráno 6:00–10:00 a večer 18:00–21:00 → 7 hodin',
+  [z('Příchod','6:00'), z('Odchod','10:00'), z('Příchod','18:00'), z('Odchod','21:00')], 420);
+
+/* ---- 11. odchod bez prichodu ---- */
+test('Odchod bez příchodu', 'Osamocený odchod nesmí vyrobit hodiny ani záporné číslo',
+  [z('Odchod','16:00')], 0);
+
+/* ---- 12. stara pauza jako pocet minut ---- */
+test('Starý záznam s pauzou v minutách', 'Historická data mají pauzu jako číslo u odchodu — musí dál fungovat',
+  [z('Příchod','7:00'), (function(){ var r = z('Odchod','16:00'); r.pauza = 30; return r; })()], 510);
+
+/* ---- vypis ---- */
+var padlo = testy.filter(function (t) { return !t.ok; }).length;
+document.getElementById('souhrn').className = 'souhrn ' + (padlo ? 'red' : 'ok');
+document.getElementById('souhrn').textContent = padlo
+  ? padlo + ' z ' + testy.length + ' kontrol NEPROŠLO — výpočet hodin je rozbitý'
+  : 'Všech ' + testy.length + ' kontrol prošlo — hodiny se počítají správně';
+
+document.getElementById('vysledky').innerHTML = testy.map(function (t) {
+  return '<div class="t ' + (t.ok ? 'prosel' : 'pad') + '">' +
+    '<span class="znacka ' + (t.ok ? 'ok' : 'red') + '">' + (t.ok ? '✓' : '✕') + '</span>' +
+    '<div class="nazev">' + t.nazev + '</div>' +
+    '<div class="detail">' + t.popis + '</div>' +
+    (t.ok ? '' : '<div class="rozdil">čekáno ' + Vypocty.naCas(t.cekano) + ', vyšlo ' + Vypocty.naCas(t.vyslo) +
+      (t.poznamky.length ? ' · ' + t.poznamky.join(' · ') : '') + '</div>') +
+  '</div>';
+}).join('');
+</script>
+</body>
+</html>

@@ -180,7 +180,7 @@ const S = {
   loginMode: 'teren', loginWorker: null,
   online: navigator.onLine, unsub: [],
   denikTab: 'zaznamy', searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false, checking: null, installPrompt: null, swReg: null, updateReady: false, updating: false,
-  frontaPocet: 0, pauza: 0
+  frontaPocet: 0
 };
 window.addEventListener('online', () => { S.online = true; render(); });
 window.addEventListener('offline', () => { S.online = false; render(); });
@@ -568,7 +568,10 @@ async function fetchWeather(p, date) {
 /* ---------- osoby na staveništi (z docházky) ---------- */
 function attOn(pid, date) {
   const per = {};
-  S.attendance.filter(a => a.pid === pid && a.date === date).forEach(a => {
+  /* Jen prichod a odchod — pauza ma vlastni zaznamy a bez tohohle filtru
+     by se zapnuta pauza pocitala jako odchod ze stavby. */
+  S.attendance.filter(a => a.pid === pid && a.date === date
+    && (a.akce === 'Příchod' || a.akce === 'Odchod')).forEach(a => {
     const k = a.userDocId || a.userName;
     per[k] = per[k] || { name: a.userName || fullName(userById(a.userDocId) || {}) || '?', prichod: '', odchod: '' };
     if (a.akce === 'Příchod') { if (!per[k].prichod || a.time < per[k].prichod) per[k].prichod = a.time; }
@@ -735,7 +738,7 @@ function viewLogin() {
       <div class="aprv"><button class="btn amber" style="width:100%;justify-content:center" onclick="doSetup()">🚀 Založit systém</button></div>
     ` : `
       <div class="chipselect" style="justify-content:center;margin-bottom:14px">
-        <button class="${m === 'teren' ? 'active' : ''}" onclick="S.loginMode='teren';render()">👷 Stavba</button>
+        <button class="${m === 'teren' ? 'active' : ''}" onclick="S.loginMode='teren';render()">👷 Pracovníci</button>
         <button class="${m === 'kanc' ? 'active' : ''}" onclick="S.loginMode='kanc';render()">🗂 Vedení / kancelář</button>
       </div>
       ${m === 'kanc' ? `
@@ -1579,7 +1582,7 @@ function pgDetail() {
     <div class="grid-detail">
       <div>
         <div class="card">
-          <div class="chip-author">👷 ${esc(e.author)} · ${e.persons || 1} os.</div>
+          <div class="chip-author">👷 ${esc(e.author)}${e.persons ? ' · ' + e.persons + ' os.' : ''}</div>
           ${e.weather ? `<div class="muted" style="margin:6px 0 2px">🌤 ${esc(e.weather)}</div>` : ''}
           <div style="display:flex;justify-content:space-between;align-items:center"><h3>Provedené práce</h3>${sBadge(e.status)}</div>
           <ul class="worklist">${(e.works || []).map(w => `<li>${esc(w)}</li>`).join('')}</ul>
@@ -2171,9 +2174,9 @@ async function vpPapir(id) {
 }
 
 /* ---- Reporty — hodiny z docházky ---- */
+/* Hodiny za obdobi. Vlastni matematika je ve vypocty.js, aby se dala
+   otestovat samostatne — otevri test.html a uvidis zelena/cervena. */
 function hoursFromAttendance(from, to) {
-  // páruje Příchod/Odchod po dnech: {userDocId: {pid: {h, dni, incomplete}}}
-  const toMin = t => { const p = String(t || '').split(':').map(Number); return (p[0] || 0) * 60 + (p[1] || 0); };
   const byKey = {};
   S.attendance.filter(a => a.date >= from && a.date <= to && jeSchvaleno(a)).forEach(a => {
     const k = a.userDocId + '|' + a.pid + '|' + a.date;
@@ -2182,18 +2185,13 @@ function hoursFromAttendance(from, to) {
   const out = {};
   Object.entries(byKey).forEach(([k, recs]) => {
     const [udi, pid] = k.split('|');
-    const prichody = recs.filter(r => r.akce === 'Příchod').map(r => toMin(r.time));
-    const odchody = recs.filter(r => r.akce === 'Odchod').map(r => toMin(r.time));
-    // pauza na obed: bere se nejdelsi zadana za ten den na te stavbe
-    const pauza = recs.reduce((m, r) => Math.max(m, parseInt(r.pauza, 10) || 0), 0);
+    const d = Vypocty.spocitejDen(recs);
     out[udi] = out[udi] || {};
     out[udi][pid] = out[udi][pid] || { h: 0, dni: 0, incomplete: 0, pauzaMin: 0 };
-    if (prichody.length && odchody.length && Math.max(...odchody) > Math.min(...prichody)) {
-      const min = Math.max(0, (Math.max(...odchody) - Math.min(...prichody)) - pauza);
-      out[udi][pid].h += min / 60;
-      out[udi][pid].pauzaMin += pauza;
-      out[udi][pid].dni++;
-    } else { out[udi][pid].incomplete++; out[udi][pid].dni++; }
+    out[udi][pid].h += d.minuty / 60;
+    out[udi][pid].pauzaMin += d.pauzaMin;
+    out[udi][pid].dni++;
+    if (d.nedokonceno) out[udi][pid].incomplete++;
   });
   return out;
 }
@@ -2620,8 +2618,11 @@ function cekaNaSchvaleni() { return cekajiciZadosti().concat(S.attendance.filter
 function mojeZadostOdchod() { return S.zadosti.find(z => z.typ === 'odchod' && z.stav === 'ceka') || null; }
 function mojeZamitnuteZadosti() { return S.zadosti.filter(z => z.stav === 'zamitnuto' && !z.videno); }
 
+/* POZOR: pauza ma vlastni zaznamy v dochazce, ale o stavu smeny nerozhoduje.
+   Bez tohohle filtru by clovek zapnutim pauzy "prestal byt v praci". */
 function mojeSmena() {
-  const mine = S.attendance.filter(a => !S.me || a.userDocId === S.me.id);
+  const mine = S.attendance.filter(a => (!S.me || a.userDocId === S.me.id)
+    && (a.akce === 'Příchod' || a.akce === 'Odchod'));
   const posledni = mine.length ? mine[0] : null;          // S.attendance je razena sestupne
   const vPraci = !!(posledni && posledni.akce === 'Příchod');
   return { posledni, vPraci, pid: vPraci ? posledni.pid : null, zeVcerejska: vPraci && posledni.date !== isoToday() };
@@ -2639,6 +2640,19 @@ function trvaniOd(a) {
 /* Cas se prepisuje primo v DOM, ne pres render() — jinak by se pracovnikovi
    pri psani mazal rozepsany zapis do deniku. */
 setInterval(() => {
+  /* Pauza umi bezet dlouho, kdyz na ni clovek zapomene — po hodine na to
+     jednou upozornime. Funguje to jen kdyz ma appku otevrenou; z vypnuteho
+     telefonu upozornit neumime. */
+  const bezici = (typeof mojePauza === 'function' && S.me) ? mojePauza() : null;
+  const ep = document.getElementById('w-pauza');
+  if (bezici && ep) ep.textContent = trvaniOd(bezici);
+  if (bezici) {
+    if ((Date.now() - zacatekSmeny(bezici).getTime()) / 60000 >= 60 && !S.pauzaPripomenuto) {
+      S.pauzaPripomenuto = true;
+      toast('🥪 Pauza běží už přes hodinu — nezapomněl jsi ji vypnout?');
+    }
+  } else if (S.pauzaPripomenuto) S.pauzaPripomenuto = false;
+
   const el = document.getElementById('w-cas');
   if (!el) return;
   const sm = mojeSmena();
@@ -2647,14 +2661,37 @@ setInterval(() => {
 
 /* Pauza na obed. Drzi se v telefonu do konce dne — kdyz appku zavre a zase
    otevre, zustane zaply. Do dochazky se zapise az u odchodu. */
-function pauzaKlic() { return 'vrana-pauza-' + isoToday(); }
-function nactiPauzu() { try { return parseInt(localStorage.getItem(pauzaKlic()), 10) || 0; } catch (e) { return 0; } }
-function prepnoutPauzu() {
-  S.pauza = S.pauza ? 0 : 30;
-  try { localStorage.setItem(pauzaKlic(), String(S.pauza)); } catch (e) {}
-  render();
+/* Pauza je skutecny casovac: zacatek i konec se zapisuji do dochazky jako
+   samostatne zaznamy. Prezije to zavreny telefon, vedeni pauzu vidi a muze ji
+   opravit, a hodiny se pocitaji ze stejneho zdroje jako pichnuti.
+   Driv to byl prepinac na pevnych 30 minut ulozeny jen v pameti telefonu. */
+function mojePauza() {
+  const mine = S.attendance.filter(a => (!S.me || a.userDocId === S.me.id)
+    && (a.akce === 'Pauza' || a.akce === 'Konec pauzy'));
+  const posl = mine.length ? mine[0] : null;
+  return (posl && posl.akce === 'Pauza') ? posl : null;   // vraci bezici pauzu
 }
-function vynulovatPauzu() { S.pauza = 0; try { localStorage.removeItem(pauzaKlic()); } catch (e) {} }
+function zapisPauzu(akce, pid) {
+  return db.collection('attendance').add({
+    userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid,
+    akce, pid, date: isoToday(), time: nowTime(), gps: null, selfie: null,
+    manual: false, createdAt: FV()
+  });
+}
+async function zacitPauzu() {
+  const sm = mojeSmena();
+  if (!sm.vPraci) { toast('Pauzu jde zapnout jen během směny'); return; }
+  /* Prepinac je hned nad tlacitkem ODCHOD, takze se da tuknout omylem.
+     Proto potvrzeni — spatne zapnuta pauza ubira hodiny z vyplaty. */
+  if (!confirm('Začít pauzu?\n\nČas pauzy se odečte od dnešních hodin.')) return;
+  try { await zapisPauzu('Pauza', sm.pid); S.pauzaPripomenuto = false; toast('Pauza běží ⏸'); }
+  catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+}
+async function ukoncitPauzu(tiche) {
+  const b = mojePauza(); if (!b) return false;
+  try { await zapisPauzu('Konec pauzy', b.pid); if (!tiche) toast('Pauza ukončena ✓'); return true; }
+  catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); return false; }
+}
 
 function ensureMyPos() {
   if (S.posAsked || !navigator.geolocation) return;
@@ -2707,7 +2744,6 @@ function viewWorker() {
   const sm = mojeSmena();
   const zadost = mojeZadostOdchod();
   const zamitnute = mojeZamitnuteZadosti();
-  S.pauza = nactiPauzu();
   if (sm.vPraci) S.workerProject = sm.pid;         // behem smeny se stavba neprepina
   if (!S.workerProject && S.projects.length) {
     const list = workerProjectList();
@@ -2760,11 +2796,17 @@ function viewWorker() {
           <div class="cas" id="w-cas">${trvaniOd(sm.posledni)}</div>
           <div class="kde">od ${sm.posledni.time}${sm.zeVcerejska ? ' <b>(' + fmtISO(sm.posledni.date) + ' — neuzavřeno!)</b>' : ''} · ${esc((proj(sm.pid) || {}).name || '')}</div>
         </div>
-        <div class="pauzabox" onclick="prepnoutPauzu()">
-          <span class="toggle ${S.pauza ? 'on' : ''}"><i></i></span>
-          <div style="flex:1"><b>🥪 Pauza na oběd — 30 minut</b>
-          <small>${S.pauza ? 'Odečte se od dnešních hodin.' : 'Zapni, když sis dal pauzu. Odečte se od hodin.'}</small></div>
-        </div>
+        ${(() => { const b = mojePauza(); return b ? `
+        <div class="pauzabox" style="border-color:#f2a91f;background:#fbf1da" onclick="ukoncitPauzu()">
+          <span class="toggle on"><i></i></span>
+          <div style="flex:1"><b>🥪 Pauza běží — <span id="w-pauza">${trvaniOd(b)}</span></b>
+          <small>Ťukni, až se vrátíš do práce. Čas pauzy se odečte od hodin.</small></div>
+        </div>` : `
+        <div class="pauzabox" onclick="zacitPauzu()">
+          <span class="toggle"><i></i></span>
+          <div style="flex:1"><b>🥪 Začít pauzu</b>
+          <small>Zapni, když jdeš na oběd. Odečte se od dnešních hodin.</small></div>
+        </div>`; })()}
         <button class="btn dark velke" ${S.checking ? 'disabled' : ''} onclick="workerCheck('Odchod')">${S.checking === 'Odchod' ? '⏳ ZAPISUJI…' : '🏁 ZAPSAT ODCHOD'}</button>
         <button class="btn ghost velke" ${S.checking ? 'disabled' : ''} onclick="prechodForm()" style="margin-top:8px">${S.checking === 'Přechod' ? '⏳ PŘESOUVÁM…' : '🔄 Přejít na jinou stavbu'}</button>
       ` : `
@@ -2787,7 +2829,6 @@ function viewWorker() {
     <div class="card">
       <h3>✍️ Nový zápis do deníku</h3>
       <textarea id="wt" placeholder="Co se dnes dělalo… každá věta = jedna odrážka"></textarea>
-      <label>Počet osob</label><input type="number" id="wpers" value="1" min="1" style="max-width:110px">
       <label>Fotky z dneška</label>
       <input type="file" id="wph" accept="image/*" capture="environment" multiple onchange="processPhotos(this.files)">
       <div class="photos">${S.draftPhotos.map((ph, i) => `<div class="ph"><img src="${ph.thumb}"><span class="del" onclick="S.draftPhotos.splice(${i},1);render()">✕</span><small>${esc(ph.label)}</small></div>`).join('')}</div>
@@ -2911,25 +2952,30 @@ async function workerCheck(akce) {
      Zapis se zamerne neceka: offline by se na nej cekalo do nekonecna
      a tlacitko by zustalo viset na "ZAPISUJI…". */
   const save = async (gpsDev, foto) => {
-    const pauza = akce === 'Odchod' ? (S.pauza || 0) : 0;   // pauza se zapisuje k odchodu
+    /* Pauza uz neni cislo u odchodu — ma vlastni zaznamy. Kdyz nekdo odchazi
+       s bezici pauzou, uzavreme ji, jinak by bezela dal a ubirala hodiny. */
     const ref = db.collection('attendance').doc();
     if (foto) await zaraditSelfie(p, ref.id, foto, akce);
     ref.set({
       userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid,
       akce, pid: p.id, date: isoToday(), time: nowTime(), gps: gpsDev,
       selfie: foto ? foto.nahled : null, selfieDriveId: null,
-      manual: false, pauza, createdAt: FV()
+      manual: false, createdAt: FV()
     }).catch(e => console.warn('zapis dochazky', e));
-    if (akce === 'Odchod') vynulovatPauzu();
+    if (akce === 'Odchod') await ukoncitPauzu(true);
     frontaOdeslat();
     toast(akce + ' zapsán' + (gpsDev != null ? ' — poloha sedí (' + gpsDev + ' m)' : ' BEZ OVĚŘENÍ POLOHY')
-      + (pauza ? ' · pauza ' + pauza + ' min' : '')
       + (foto ? (S.online ? ' 📷' : ' 📷 odešle se, až bude signál') : '') + ' ✓');
   };
 
   try {
     const selfie = await fotoSlib;
-    if (!selfie && !confirm('Ověřovací foto se nepořídilo.\n\nZapsat ' + akce.toLowerCase() + ' bez fotky?')) {
+    /* Foto je povinne (rozhodnuti 25. 8.). Kdo nepusti foťák, nepichne si —
+       proto je hlaska konkretni, at clovek vi, co ma udelat, nez zavola vedeni. */
+    if (!selfie) {
+      alert('Bez ověřovacího fota nejde ' + akce.toLowerCase() + ' zapsat.\n\n'
+        + 'Zkus to znovu. Když se foťák neotevře, povol aplikaci přístup k fotoaparátu '
+        + 'v nastavení telefonu — a když to nepůjde ani pak, ozvi se vedení, doplní ti to ručně.');
       S.checking = null; render(); return;
     }
     if (!p.gps) {
@@ -3071,9 +3117,9 @@ async function workerPrechod() {
     const refOdchod = db.collection('attendance').doc();
     const refPrichod = db.collection('attendance').doc();
     if (selfie) await zaraditSelfie(zTady, refOdchod.id, selfie, 'Prechod');
-    refOdchod.set({ ...spolecne, akce: 'Odchod', pid: zTady.id, time: nowTime(), gps: odch, pauza: S.pauza || 0, createdAt: FV() })
+    refOdchod.set({ ...spolecne, akce: 'Odchod', pid: zTady.id, time: nowTime(), gps: odch, createdAt: FV() })
       .catch(e => console.warn('prechod odchod', e));
-    vynulovatPauzu();
+    await ukoncitPauzu(true);   // pauza patri ke stavbe, ze ktere odchazi
     refPrichod.set({ ...spolecne, akce: 'Příchod', pid: naTam.id, time: nowTime(), gps: prich, createdAt: FV() })
       .catch(e => console.warn('prechod prichod', e));
     S.workerProject = naTam.id;
@@ -3087,8 +3133,10 @@ async function workerSubmit() {
   const txt = $('#wt').value.trim();
   if (!txt && !S.draftPhotos.length) { toast('Napiš text nebo přidej fotku'); return; }
   $('#w-save').disabled = true;
-  await addEntry(S.workerProject, fullName(S.me || {}), txt, parseInt($('#wpers').value) || 1);
-  zapomen('wt', 'wpers');
+  /* Pocet osob pracovnik nezadava — kdo byl na stavbe, je videt z dochazky
+     a rucni cislo bylo jen dalsi udaj, ktery mohl byt spatne. */
+  await addEntry(S.workerProject, fullName(S.me || {}), txt, null);
+  zapomen('wt');
   toast('Odesláno — čeká na schválení vedením ✓'); render();
 }
 
