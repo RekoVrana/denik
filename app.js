@@ -251,7 +251,7 @@ function listen(col, target, opts) {
 }
 function startData() {
   const role = S.meAuth.role; // 'admin' | 'worker' | 'sub'
-  listen('projects', 'projects', { sort: (a, b) => (b.active - a.active) || String(a.kod).localeCompare(String(b.kod)) });
+  listen('projects', 'projects', { sort: (a, b) => (b.active - a.active) || String(a.cn || a.name).localeCompare(String(b.cn || b.name), 'cs') });
   listen('entries', 'entries', { sort: (a, b) => (b.date || '').localeCompare(a.date || '') || ((b.createdAt && b.createdAt.seconds) || 0) - ((a.createdAt && a.createdAt.seconds) || 0) });
   listen('tasks', 'tasks', { sort: (a, b) => (a.term || '').localeCompare(b.term || '') });
   listen('users', 'users', { sort: (a, b) => (a.prijmeni || '').localeCompare(b.prijmeni || '', 'cs') });
@@ -992,13 +992,12 @@ function pgProjekty() {
   <main>
     <div class="tablecard">
       <div style="overflow-x:auto"><table>
-        <tr><th>Kód</th><th>Název stavby</th><th>Zodpovědný</th><th>Aktivní</th><th>Stav</th><th>Zakázka</th><th>Investor</th><th>Adresa</th><th>Deník</th><th>Průběh</th></tr>
+        <tr><th>Název stavby</th><th>Zodpovědný</th><th>Vidí parta</th><th>Stav</th><th>Zakázka</th><th>Investor</th><th>Adresa</th><th>Deník</th><th>Průběh</th></tr>
         ${S.projects.map(p => `
         <tr class="click" onclick="openProj('${p.id}')">
-          <td>${esc(p.kod)}</td>
           <td><span class="lnk">${esc(p.name)}</span></td>
           <td class="muted">${esc(p.resp || '')}</td>
-          <td onclick="event.stopPropagation();toggleActive('${p.id}')"><span class="toggle ${p.active ? 'on' : ''}"><i></i></span></td>
+          <td onclick="event.stopPropagation();toggleActive('${p.id}')" title="Zapnuto = stavba je v seznamu, kde si parta píchá docházku"><span class="toggle ${p.active ? 'on' : ''}"><i></i></span></td>
           <td>${esc(p.stav || '')}</td>
           <td>${esc((p.cn || '').replace('CN', ''))}</td>
           <td>${esc(p.client || '')}</td>
@@ -1019,7 +1018,6 @@ function projectForm(id) {
   modal(`<h3>${id ? '✏️ Upravit projekt' : '➕ Nový projekt'}</h3>
     <label>Název stavby *</label><input type="text" id="pf-name" value="${esc(p.name || '')}" placeholder="Novodvorská - Pecka">
     <div class="frow">
-      <div><label>Kód stavby</label><input type="text" id="pf-kod" value="${esc(p.kod || '')}" placeholder="020"></div>
       <div><label>Číslo zakázky (CN)</label><input type="text" id="pf-cn" value="${esc(p.cn || '')}" placeholder="CN20260055"></div>
     </div>
     <label>Investor</label><input type="text" id="pf-client" value="${esc(p.client || '')}">
@@ -1038,8 +1036,8 @@ function projectForm(id) {
       <div><label>Stav projektu</label><select id="pf-stav">${['Realizace', 'Příprava', 'Nabídka', 'Dokončeno'].map(s => `<option ${p.stav === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
     </div>
     <div class="frow">
-      <div><label>Fáze</label><input type="text" id="pf-phase" value="${esc(p.phase || '')}" placeholder="Hrubé rozvody"></div>
-      <div><label>Průběh (%)</label><input type="number" id="pf-prog" value="${p.progress || 0}" min="0" max="100"></div>
+      ${id ? `<div><label>Fáze</label><input type="text" id="pf-phase" value="${esc(p.phase || '')}" placeholder="Hrubé rozvody"></div>
+      <div><label>Průběh (%)</label><input type="number" id="pf-prog" value="${p.progress || 0}" min="0" max="100"></div>` : ''}
     </div>
     <div class="frow">
       <div><label>GPS lat</label><input type="text" id="pf-lat" value="${p.gps ? p.gps.lat : ''}" placeholder="50.0236914" oninput="mapFromInputs()"></div>
@@ -1122,10 +1120,13 @@ async function saveProject(id) {
   const lat = parseFloat($('#pf-lat').value), lng = parseFloat($('#pf-lng').value);
   const prevGps = id ? ((proj(id) || {}).gps || null) : null;
   const data = {
-    name, kod: $('#pf-kod').value.trim(), cn: $('#pf-cn').value.trim(), client: $('#pf-client').value.trim(),
+    name, cn: $('#pf-cn').value.trim(), client: $('#pf-client').value.trim(),
     investorEmail: $('#pf-cmail').value.trim(), address: $('#pf-addr').value.trim(), type: $('#pf-type').value.trim(),
-    resp: $('#pf-resp').value.trim(), stav: $('#pf-stav').value, phase: $('#pf-phase').value.trim(),
-    progress: Math.min(100, Math.max(0, parseInt($('#pf-prog').value) || 0)),
+    resp: $('#pf-resp').value.trim(), stav: $('#pf-stav').value,
+    /* Faze a prubeh se pri zalozeni nezadavaji — u stavby, ktera jeste
+       nezacala, nemaji co rikat. Objevi se az pri uprave existujici. */
+    phase: $('#pf-phase') ? $('#pf-phase').value.trim() : '',
+    progress: $('#pf-prog') ? Math.min(100, Math.max(0, parseInt($('#pf-prog').value) || 0)) : 0,
     gps: (lat && lng) ? { lat, lng, tol: CFG.gpsTolerance || 100, label: S.geoLabel || (prevGps && prevGps.label) || '' } : null,
     driveFolderId: $('#pf-drive').value.trim(), handover: $('#pf-hand').value.trim()
   };
@@ -2605,6 +2606,9 @@ function lastUsedProjectId() {
    - kdyz polohu nemame (nepovoleno, suteren, stary telefon) -> naposledy pouzita
      nahore, zbytek abecedne.
    - stavby bez GPS nejdou seradit, jdou na konec s poznamkou. */
+/* Parte se ukazuji jen stavby s active=true. Prepina se to prepinacem
+   ve sloupci "Vidi parta" v tabulce Projekty — zamerne to NEplyne ze stavu
+   projektu, aby na tutez vec nebyly dve cesty, ktere se prebijeji. */
 function workerProjectList() {
   const last = lastUsedProjectId();
   const items = S.projects.filter(x => x.active).map(x => ({
