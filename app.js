@@ -1042,7 +1042,14 @@ function projectForm(id) {
     <label>Typ projektu</label><input type="text" id="pf-type" value="${esc(p.type || '')}" placeholder="Kompletní rekonstrukce · 3+kk panelák">
     <div class="frow">
       <div><label>Zodpovědný</label><input type="text" id="pf-resp" value="${esc(p.resp || 'Zdeno Balúch')}"></div>
-      <div><label>Stav projektu</label><select id="pf-stav">${['Realizace', 'Příprava', 'Nabídka', 'Dokončeno'].map(s => `<option ${p.stav === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
+      <div><label>Stav projektu</label><select id="pf-stav">${
+        /* "Nabidka" tu byla, ale zakazka ve fazi nabidky jeste neni stavba a do
+           deniku nepatri. Kdyby ji nekterá stará zakázka mela zapsanou, necháme
+           ji ve výběru — jinak by se pri ulozeni tise prepsala na "Realizace". */
+        ['Realizace', 'Příprava', 'Dokončeno'].concat(
+          p.stav && ['Realizace', 'Příprava', 'Dokončeno'].indexOf(p.stav) < 0 ? [p.stav] : []
+        ).map(s => `<option ${p.stav === s ? 'selected' : ''}>${esc(s)}</option>`).join('')
+      }</select></div>
     </div>
     <div class="frow">
       ${id ? `<div><label>Fáze</label><input type="text" id="pf-phase" value="${esc(p.phase || '')}" placeholder="Hrubé rozvody"></div>
