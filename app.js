@@ -673,6 +673,7 @@ function render() {
   vratitFormulare();
   if (S.signFor) setTimeout(sigInit, 0);
   setTimeout(mountMaps, 0);
+  if (typeof zkontrolovatPauzu === 'function') setTimeout(zkontrolovatPauzu, 0);
   updBar();
 }
 function viewNotConfigured() {
@@ -2639,20 +2640,32 @@ function trvaniOd(a) {
 }
 /* Cas se prepisuje primo v DOM, ne pres render() — jinak by se pracovnikovi
    pri psani mazal rozepsany zapis do deniku. */
-setInterval(() => {
-  /* Pauza umi bezet dlouho, kdyz na ni clovek zapomene — po hodine na to
-     jednou upozornime. Funguje to jen kdyz ma appku otevrenou; z vypnuteho
-     telefonu upozornit neumime. */
+/* POZOR: na iPhonu se aplikace po zamknuti nebo prepnuti zmrazi a odpocty
+   v ni prestanou bezet. Upozorneni na dlouhou pauzu se proto NEDA postavit
+   na tikajicim casovaci — clovek by musel hodinu koukat do displeje.
+   Misto toho se delka pauzy pokazde DOPOCITA z casu jejiho zacatku, a to
+   i ve chvili, kdy se uzivatel k aplikaci vrati. */
+function zkontrolovatPauzu() {
   const bezici = (typeof mojePauza === 'function' && S.me) ? mojePauza() : null;
+  if (!bezici) { S.pauzaPripomenuto = false; S.pauzaMinut = 0; return; }
+  const minut = Math.floor((Date.now() - zacatekSmeny(bezici).getTime()) / 60000);
+  S.pauzaMinut = minut;
   const ep = document.getElementById('w-pauza');
-  if (bezici && ep) ep.textContent = trvaniOd(bezici);
-  if (bezici) {
-    if ((Date.now() - zacatekSmeny(bezici).getTime()) / 60000 >= 60 && !S.pauzaPripomenuto) {
-      S.pauzaPripomenuto = true;
-      toast('🥪 Pauza běží už přes hodinu — nezapomněl jsi ji vypnout?');
-    }
-  } else if (S.pauzaPripomenuto) S.pauzaPripomenuto = false;
+  if (ep) ep.textContent = trvaniOd(bezici);
+  const box = document.getElementById('w-pauzabox');
+  if (box) box.classList.toggle('dlouha', minut >= 60);
+  if (minut >= 60 && !S.pauzaPripomenuto) {
+    S.pauzaPripomenuto = true;
+    toast('🥪 Pauza běží už ' + trvaniOd(bezici) + ' — nezapomněl jsi ji vypnout?');
+  }
+}
+/* Navrat k aplikaci je jediny okamzik, kdy se na iPhonu da spolehnout,
+   ze kod zase bezi — tak se pauza kontroluje prave tam. */
+document.addEventListener('visibilitychange', () => { if (!document.hidden) zkontrolovatPauzu(); });
+window.addEventListener('focus', zkontrolovatPauzu);
 
+setInterval(() => {
+  zkontrolovatPauzu();
   const el = document.getElementById('w-cas');
   if (!el) return;
   const sm = mojeSmena();
@@ -2797,7 +2810,7 @@ function viewWorker() {
           <div class="kde">od ${sm.posledni.time}${sm.zeVcerejska ? ' <b>(' + fmtISO(sm.posledni.date) + ' — neuzavřeno!)</b>' : ''} · ${esc((proj(sm.pid) || {}).name || '')}</div>
         </div>
         ${(() => { const b = mojePauza(); return b ? `
-        <div class="pauzabox" style="border-color:#f2a91f;background:#fbf1da" onclick="ukoncitPauzu()">
+        <div class="pauzabox bezi${S.pauzaMinut >= 60 ? ' dlouha' : ''}" id="w-pauzabox" onclick="ukoncitPauzu()">
           <span class="toggle on"><i></i></span>
           <div style="flex:1"><b>🥪 Pauza běží — <span id="w-pauza">${trvaniOd(b)}</span></b>
           <small>Ťukni, až se vrátíš do práce. Čas pauzy se odečte od hodin.</small></div>
