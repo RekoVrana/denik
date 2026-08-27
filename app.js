@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '27. 8. 2026 d';
+const VERZE = '27. 8. 2026 e';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -84,6 +84,20 @@ async function aktualizovatApp() {
   u.searchParams.set('v', String(Date.now()).slice(-8));
   location.replace(u.toString());
 }
+/* Majak verze: malicky soubor verze.txt se meni s kazdym nasazenim.
+   Hlidani pres service worker totiz zabere JEN kdyz se zmeni sw.js —
+   a ten se meni vzacne. Zmena samotne aplikace tak drive zadne
+   "je nova verze" nevyvolala a telefony zustavaly na stare. */
+async function zkontrolujVerzi() {
+  if (!navigator.onLine) return;               // offline srovnani nema smysl
+  try {
+    const r = await fetch('verze.txt?ts=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) return;
+    const v = (await r.text()).trim();
+    if (v && v !== VERZE) { S.updateReady = true; updBar(); render(); }
+  } catch (e) { /* bez site apod. — zkusi se to znovu za chvili */ }
+}
+
 function hlidatAktualizace(reg) {
   S.swReg = reg;
   if (reg.waiting && navigator.serviceWorker.controller) { S.updateReady = true; updBar(); }
@@ -94,8 +108,11 @@ function hlidatAktualizace(reg) {
       if (novy.state === 'installed' && navigator.serviceWorker.controller) { S.updateReady = true; updBar(); }
     });
   });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
-  setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) { reg.update().catch(() => {}); zkontrolujVerzi(); }
+  });
+  setInterval(() => { reg.update().catch(() => {}); zkontrolujVerzi(); }, 10 * 60 * 1000);
+  zkontrolujVerzi();
 }
 
 /* ---------- instalace na plochu ---------- */
@@ -3864,4 +3881,14 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') {
     navigator.serviceWorker.register('sw.js').then(hlidatAktualizace).catch(() => {});
   });
 }
+/* Majak verze bezi VZDY — i bez service workeru a i na http (lokalni
+   nahled). Service worker vyse je jen doprava; o tom, ze existuje nova
+   verze, rozhoduje verze.txt. */
+window.addEventListener('load', () => {
+  setTimeout(zkontrolujVerzi, 3000);
+  if (!('serviceWorker' in navigator) || location.protocol !== 'https:') {
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) zkontrolujVerzi(); });
+    setInterval(zkontrolujVerzi, 10 * 60 * 1000);
+  }
+});
 
