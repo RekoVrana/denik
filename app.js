@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '27. 8. 2026 e';
+const VERZE = '27. 8. 2026 f';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -69,10 +69,12 @@ async function aktualizovatApp() {
   if (S.updating) return;
   S.updating = true; render();
   try {
-    const reg = S.swReg || (navigator.serviceWorker ? await navigator.serviceWorker.getRegistration() : null);
-    if (reg) {
-      await reg.update().catch(() => {});
-      if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+    /* Service worker rovnou odhlasit — po nacteni se zaregistruje znovu
+       a cerstvy. "Jemna" aktualizace pres reg.update() nechavala na Macu
+       bezet stary a aplikace zustavala zamrzla na stare verzi. */
+    if (navigator.serviceWorker) {
+      const regs = await navigator.serviceWorker.getRegistrations().catch(() => []);
+      for (const r of regs) await r.unregister().catch(() => {});
     }
     if (window.caches) {
       const klice = await caches.keys();
