@@ -7,6 +7,12 @@
 //  Živá verze: Firebase konzole → Firestore → Rules
 //  Když se změní tam, změň i tady, ať kopie nezastará.
 //
+//  Poslední změny 27. 8. 2026:
+//   5) /tasks: cetlo je KAZDY prihlaseny s roli, tedy i radovy pracovnik
+//      si mohl precist vsechny ukoly ve firme. Nove: vedeni vsechny,
+//      ostatni jen sve pridelene a sve zadane. Pribyl helper mujDocId()
+//      a pole zadalId u ukolu.
+//
 //  Poslední změny 23. 8. 2026:
 //   4) OPRAVA ZÁLOHY: sekce /dashboard tady měla 'if false', ale ostrá
 //      verze má 'if isAdmin()' (změněno v konzoli 23. 8. v 8:40 a do téhle
@@ -37,6 +43,10 @@ service cloud.firestore {
     // má přidělenou roli v systému (users_auth doc) — samému založený účet bez role nemá přístup k ničemu
     function hasRole() {
       return signedIn() && exists(/databases/$(database)/documents/users_auth/$(request.auth.uid));
+    }
+    // id zaznamu v /users, ktery patri prihlasenemu cloveku
+    function mujDocId() {
+      return get(/databases/$(database)/documents/users_auth/$(request.auth.uid)).data.userDocId;
     }
     function isAdmin() {
       return hasRole()
@@ -81,10 +91,24 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Ukoly: vedeni vidi vsechny. Ostatni jen ty, ktere maji prideleny,
+    // nebo ktere sami zadali. Sablony (stav 'sablona') jsou vec vedeni.
+    // POZOR: pravidla dotaz nefiltruji, jen povoli nebo odmitnou cely.
+    // Pracovnik se proto MUSI ptat s where('respId'/'zadalId','==',svoje id) —
+    // dotaz na celou kolekci mu databaze odmitne. Viz listenMojeUkoly().
     match /tasks/{id} {
-      allow read: if hasRole();
-      allow create, update: if hasRole();
-      allow delete: if isAdmin();
+      allow read: if isAdmin()
+        || (hasRole() && (resource.data.respId == mujDocId()
+                          || resource.data.zadalId == mujDocId()));
+      // zadat ukol smi kdokoli komukoli, ale musi se pod nej podepsat
+      allow create: if isAdmin()
+        || (hasRole() && request.resource.data.zadalId == mujDocId());
+      allow update: if isAdmin()
+        || (hasRole() && (resource.data.respId == mujDocId()
+                          || resource.data.zadalId == mujDocId()));
+      // zrusit ukol smi vedeni a ten, kdo ho zadal — ne ten, kdo ho dostal
+      allow delete: if isAdmin()
+        || (hasRole() && resource.data.zadalId == mujDocId());
     }
 
     match /attendance/{id} {

@@ -262,11 +262,34 @@ async function ctiSPokusem(cti, prodleva) {
     throw e;
   }
 }
+const taskSort = (a, b) => (a.term || '').localeCompare(b.term || '');
+function listenMojeUkoly() {
+  const mid = S.me ? S.me.id : '__nikdo__';
+  const casti = { prideleno: [], zadal: [] };
+  const slozit = () => {
+    const mapa = new Map();
+    casti.prideleno.concat(casti.zadal).forEach(t => mapa.set(t.id, t));
+    S.tasks = [...mapa.values()].sort(taskSort);
+    render();
+  };
+  [['respId', 'prideleno'], ['zadalId', 'zadal']].forEach(([pole, kam]) => {
+    S.unsub.push(db.collection('tasks').where(pole, '==', mid).onSnapshot(snap => {
+      casti[kam] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      slozit();
+    }, err => console.warn('ukoly/' + pole, err)));
+  });
+}
+
 function startData() {
   const role = S.meAuth.role; // 'admin' | 'worker' | 'sub'
   listen('projects', 'projects', { sort: (a, b) => (b.active - a.active) || String(a.cn || a.name).localeCompare(String(b.cn || b.name), 'cs') });
   listen('entries', 'entries', { sort: (a, b) => (b.date || '').localeCompare(a.date || '') || ((b.createdAt && b.createdAt.seconds) || 0) - ((a.createdAt && a.createdAt.seconds) || 0) });
-  listen('tasks', 'tasks', { sort: (a, b) => (a.term || '').localeCompare(b.term || '') });
+  /* Ukoly: vedeni vidi vsechny, ostatni jen sve. Pravidla databaze dotaz
+     bud cele povoli, nebo cely odmitnou — filtrovat za nas neumi. Proto se
+     pracovnik pta dvema dotazy (co mam prideleno / co jsem zadal) a vysledky
+     se slozi dohromady. */
+  if (role === 'admin') listen('tasks', 'tasks', { sort: taskSort });
+  else listenMojeUkoly();
   listen('users', 'users', { sort: (a, b) => (a.prijmeni || '').localeCompare(b.prijmeni || '', 'cs') });
   if (role === 'admin') {
     listen('attendance', 'attendance', { sort: (a, b) => attKey(b) - attKey(a) });
@@ -305,6 +328,14 @@ function jeMuj(t) {
   return t.resp === fullName(S.me) || (t.res || []).includes(fullName(S.me));
 }
 const userById = id => S.users.find(u => u.id === id);
+/* Komu se da zadat ukol: jen lide z firmy. Investor je klient — ukol mu
+   nikdo zadavat nema. Subdodavatel zatim nema kam chodit (nema vlastni
+   vchod do aplikace), takze by ukol spadl do prazdna; az vchod vznikne,
+   pridat sem 'sub'. */
+function lideProUkoly() {
+  return S.users.filter(u => u.active !== false && u.typ && (u.typ.kanc || u.typ.teren) && !u.typ.inv)
+    .sort((a, b) => (a.prijmeni || '').localeCompare(b.prijmeni || '', 'cs'));
+}
 function entriesOf(pid) { return S.entries.filter(e => e.pid === pid); }
 function pendingEntries() { return S.entries.filter(e => e.status === 'pending'); }
 function isOverdue(t) { return t.stav !== 'hotovo' && t.stav !== 'sablona' && t.term && t.term < isoToday(); }
@@ -838,7 +869,7 @@ async function doSetup() {
       await db.collection('users').doc(udocId).update({ jmeno, prijmeni: rest.join(' '), authEmail: email, uid: cred.user.uid, active: true });
       for (const d of dup.docs.slice(1)) await d.ref.delete().catch(() => {});
     } else {
-      const udoc = await db.collection('users').add({ jmeno, prijmeni: rest.join(' '), email, kod: '001', typ: { kanc: 1, teren: 1, inv: 0, sub: 0 }, role: 'Admin · vedení', skupina: '', active: true, authEmail: email, uid: cred.user.uid, notU: 1, notD: 1 });
+      const udoc = await db.collection('users').add({ jmeno, prijmeni: rest.join(' '), email, kod: '001', typ: { kanc: 1, teren: 1, inv: 0, sub: 0 }, role: 'Admin · vedení', active: true, authEmail: email, uid: cred.user.uid, notU: 1, notD: 1 });
       udocId = udoc.id;
     }
     await db.collection('users_auth').doc(cred.user.uid).set({ role: 'admin', userDocId: udocId, name });
@@ -1485,7 +1516,38 @@ function openPhoto(driveId, label, el) {
     <div class="vbody" style="padding:0;align-items:center"><img src="${src}" style="width:100%;max-height:80vh"></div></div></div>`;
 }
 function closeDoc() { $('#viewer').innerHTML = ''; }
+/* Priloha muze byt trojiho druhu a kazda se otevira jinak:
+   - driveId  -> lezi na Drive
+   - data     -> stara priloha vlozena primo do zaznamu (pred frontou)
+   - ani jedno -> jeste ceka ve fronte, nebo se nahrani nepovedlo */
+function otevritPrilohu(eid, i) {
+  const e = (S.entries || []).find(x => x.id === eid);
+  const a = e && (e.attachments || [])[i];
+  if (!a) { toast('Příloha nenalezena'); return; }
+  if (a.driveId) return openDriveDoc(a.driveId, a.name);
+  if (a.data) {
+    const obrazek = (a.mime || '').indexOf('image/') === 0;
+    $('#viewer').innerHTML = `<div class="viewer" onclick="if(event.target===this)closeDoc()"><div class="vwrap">
+      <div class="vhead"><b style="flex:1;min-width:120px">${esc(a.name)}</b>
+        <a class="btn ghost sm" href="${a.data}" download="${esc(a.name)}">⬇ Stáhnout</a>
+        <button class="btn dark sm" onclick="closeDoc()">✕ Zavřít</button></div>
+      <div class="vbody" style="padding:0;align-items:center">${obrazek
+        ? `<img src="${a.data}" style="width:100%;max-height:80vh">`
+        : '<div class="empty" style="padding:30px">Náhled tohohle typu souboru neumíme — stáhni si ho tlačítkem nahoře.</div>'}</div></div></div>`;
+    return;
+  }
+  openDriveDoc('', a.name);
+}
 function openDriveDoc(driveId, title) {
+  /* Bez platneho ID by se do adresy Drive dostalo prazdno nebo "undefined"
+     a Google vrati vlastni stranku "400 — pozadavek nema spravny format".
+     Clovek z ni nepozna nic; radeji rekneme rovnou, co se stalo. */
+  if (!driveId || driveId === 'undefined' || driveId === 'null') {
+    modal(`<h3>📎 ${esc(title || 'Příloha')}</h3>
+      <div class="note">Tenhle soubor na Drive není. Buď ještě čeká ve frontě na odeslání, nebo se ho nepodařilo nahrát.</div>
+      <div class="aprv"><button class="btn dark" onclick="closeModal()">Rozumím</button></div>`);
+    return;
+  }
   $('#viewer').innerHTML = `<div class="viewer" onclick="if(event.target===this)closeDoc()"><div class="vwrap">
     <div class="vhead"><b style="flex:1;min-width:120px">${esc(title)}</b>
       <a class="btn ghost sm" href="${driveViewUrl(driveId)}" target="_blank">📁 Otevřít na Drive</a>
@@ -1636,7 +1698,7 @@ function pgDetail() {
         </div>
         <div class="card">
           <h3>📎 Přílohy</h3>
-          ${(e.attachments || []).map(a => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${a.driveId}','${esc(a.name)}')"><span>${(a.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(a.name)}</b><span class="muted" style="margin-left:auto">zobrazit</span></div>`).join('') || '<div class="muted">Žádné přílohy.</div>'}
+          ${(e.attachments || []).map((a, i) => `<div class="urow" style="cursor:pointer" onclick="otevritPrilohu('${e.id}',${i})"><span>${(a.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(a.name)}</b><span class="muted" style="margin-left:auto">${a.driveId ? 'zobrazit' : a.data ? 'zobrazit' : 'čeká na odeslání'}</span></div>`).join('') || '<div class="muted">Žádné přílohy.</div>'}
           <div class="aprv"><input type="file" id="att-${e.id}" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" onchange="addAttsToEntry('${e.id}',this.files)"></div>
         </div>
         <div class="card">
@@ -1675,7 +1737,7 @@ async function delInternal(eid) {
 }
 async function noteToTask(eid) {
   const e = S.entries.find(x => x.id === eid);
-  await db.collection('tasks').add({ title: e.internal.split('—')[0].trim().slice(0, 120), pid: e.pid, respId: S.me ? S.me.id : '', resp: fullName(S.me || {}), created: isoToday(), term: shiftISO(isoToday(), 2), stav: 'nove', res: [fullName(S.me || {})], src: 'z deníku ' + fmtISO(e.date), createdAt: FV() });
+  await db.collection('tasks').add({ title: e.internal.split('—')[0].trim().slice(0, 120), zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}), pid: e.pid, respId: S.me ? S.me.id : '', resp: fullName(S.me || {}), created: isoToday(), term: shiftISO(isoToday(), 2), stav: 'nove', res: [fullName(S.me || {})], src: 'z deníku ' + fmtISO(e.date), createdAt: FV() });
   toast('Interní poznámka převedena na úkol ✓');
 }
 
@@ -1880,11 +1942,10 @@ function pgOrganizace() {
     </div>
     <div class="tablecard">
       <div style="overflow-x:auto"><table>
-        <tr><th>Terénní pracovník</th><th>Skupina</th><th>Činnost</th><th>Na projektu</th><th>Datum a čas</th><th>GPS odchylka</th><th>Foto</th><th></th></tr>
+        <tr><th>Terénní pracovník</th><th>Činnost</th><th>Na projektu</th><th>Datum a čas</th><th>GPS odchylka</th><th>Foto</th><th></th></tr>
         ${rows.map(a => { const u = userById(a.userDocId) || { jmeno: a.userName || '?', prijmeni: '' }; return `
         <tr>
           <td><span class="uav" style="margin-right:6px">${ini(u)}</span>${esc(fullName(u))}</td>
-          <td class="muted">${esc(u.skupina || '—')}</td>
           <td><span class="badge ${a.akce === 'Příchod' ? 'b-ok' : 'b-int'}">${a.akce}</span>${
             a.schvaleno === false ? `<br><span class="badge b-wait">⏳ čeká na schválení</span>${
               a.poznamka ? `<br><span class="muted" style="font-size:11.5px">„${esc(a.poznamka)}"</span>` : ''}` : ''}</td>
@@ -2036,7 +2097,7 @@ function pgUkoly() {
       <label>Název *</label><input type="text" id="tk-t" placeholder="Co je potřeba udělat">
       <div class="frow">
         <div><label>Projekt</label><select id="tk-p">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
-        <div><label>Odpovědná osoba</label><select id="tk-r">${S.users.filter(u => u.active !== false).map(u => `<option value="${u.id}">${esc(fullName(u))}</option>`).join('')}</select></div>
+        <div><label>Odpovědná osoba</label><select id="tk-r">${lideProUkoly().map(u => `<option value="${u.id}">${esc(fullName(u))}</option>`).join('')}</select></div>
       </div>
       <label>Termín</label><input type="date" id="tk-d" value="${shiftISO(isoToday(), 3)}">
       <div class="aprv"><button class="btn amber" onclick="addTask()">💾 ULOŽIT ÚKOL</button></div>
@@ -2103,21 +2164,30 @@ async function tplApply() {
   const pid = $('#tp-p').value, start = $('#tp-d').value || isoToday(), respId = $('#tp-r').value;
   const ru = userById(respId), resp = ru ? fullName(ru) : '';
   for (const it of (tpl.items || [])) {
-    await db.collection('tasks').add({ title: it.title, pid, respId, resp, created: isoToday(), term: shiftISO(start, it.off || 0), stav: 'nove', res: resp ? [resp] : [], src: 'ze šablony ' + tpl.title, createdAt: FV() });
+    await db.collection('tasks').add({ title: it.title, zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}), pid, respId, resp, created: isoToday(), term: shiftISO(start, it.off || 0), stav: 'nove', res: resp ? [resp] : [], src: 'ze šablony ' + tpl.title, createdAt: FV() });
   }
   S.tplOpen = false;
   toast('Vytvořeno ' + (tpl.items || []).length + ' úkolů ze šablony ✓');
 }
 async function taskNext(id) { const t = S.tasks.find(x => x.id === id); await db.collection('tasks').doc(id).update({ stav: nextStav(t.stav) }); }
 async function taskMove(id, dir) { const order = ['nove', 'probiha', 'kontrola', 'hotovo']; const t = S.tasks.find(x => x.id === id); const i = order.indexOf(t.stav) + dir; if (i >= 0 && i < 4) await db.collection('tasks').doc(id).update({ stav: order[i] }); }
-async function taskDone(id) { const t = S.tasks.find(x => x.id === id); await db.collection('tasks').doc(id).update({ stav: t.stav === 'hotovo' ? 'nove' : 'hotovo' }); }
+/* Ukol si pamatuje, KDY byl odskrtnut — aby ho pracovnik jeste tentyz den
+   videl a mohl vratit, kdyz ho ťuknul omylem. Druhy den uz zmizi. */
+async function taskDone(id) {
+  const t = S.tasks.find(x => x.id === id);
+  const uzHotovy = t.stav === 'hotovo';
+  await db.collection('tasks').doc(id).update({
+    stav: uzHotovy ? 'nove' : 'hotovo',
+    hotovoDne: uzHotovy ? '' : isoToday()
+  });
+}
 async function taskShift(id) { const t = S.tasks.find(x => x.id === id); await db.collection('tasks').doc(id).update({ term: shiftISO(t.term, 3) }); toast('Termín posunut'); }
 async function addTask() {
   const title = $('#tk-t').value.trim();
   if (!title) { toast('Vyplň název úkolu'); return; }
   const respId = $('#tk-r').value, ru = userById(respId);
   await db.collection('tasks').add({
-    title, pid: $('#tk-p').value, respId, resp: ru ? fullName(ru) : '', created: isoToday(),
+    title, zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}), pid: $('#tk-p').value, respId, resp: ru ? fullName(ru) : '', created: isoToday(),
     term: $('#tk-d').value || shiftISO(isoToday(), 3), stav: 'nove', res: ru ? [fullName(ru)] : [], createdAt: FV()
   });
   $('#tk-t').value = ''; zapomen('tk-t');
@@ -2266,7 +2336,7 @@ function repTable() {
     if (s && s.c && rowH > 0) anyCista = true;
     totKc += rowKc; totC += (s && s.c) ? rowC : rowKc; totH += rowH;
     const diff = (s && s.c) ? rowKc - rowC : 0;
-    return `<tr><td><span class="uav" style="margin-right:6px">${ini(u)}</span>${esc(fullName(u))}<br><span class="muted" style="margin-left:34px">${esc(u.skupina || '')}</span></td>${cells.join('')}<td style="text-align:center"><b>${s ? kc(rowKc) + ' Kč' : '⚠'}</b>${diff > 0 ? `<br><span class="muted">čistá: ${kc(rowC)} Kč</span><br><span class="badge b-wait">vedoucímu party: ${kc(diff)} Kč</span>` : ''}</td><td style="text-align:center"><b>${fmtH(rowH)}</b></td></tr>`;
+    return `<tr><td><span class="uav" style="margin-right:6px">${ini(u)}</span>${esc(fullName(u))}<br><span class="muted" style="margin-left:34px">${esc(u.role || '')}</span></td>${cells.join('')}<td style="text-align:center"><b>${s ? kc(rowKc) + ' Kč' : '⚠'}</b>${diff > 0 ? `<br><span class="muted">čistá: ${kc(rowC)} Kč</span><br><span class="badge b-wait">vedoucímu party: ${kc(diff)} Kč</span>` : ''}</td><td style="text-align:center"><b>${fmtH(rowH)}</b></td></tr>`;
   });
   // křížová kontrola proti deníku (#25)
   // křížová kontrola (#25): dny z DOCHÁZKY vs. existence zápisu v deníku pro stejný projekt a den
@@ -2325,7 +2395,7 @@ function pgUzivatele() {
     </div>
     <div class="tablecard">
       <div style="overflow-x:auto"><table>
-        <tr><th></th><th>Jméno</th><th>Email</th><th>Kancelářský</th><th>Terénní</th><th>Investor</th><th>Sub</th><th>Sazba hrubá / čistá</th><th>Role / skupina</th><th>Přihlášení</th><th></th></tr>
+        <tr><th></th><th>Jméno</th><th>Email</th><th>Kancelářský</th><th>Terénní</th><th>Investor</th><th>Sub</th><th>Sazba hrubá / čistá</th><th>Popis</th><th>Přihlášení</th><th></th></tr>
         ${S.users.map(u => { const t = u.typ || {}; const s = S.sazby[u.id]; return `
         <tr style="${u.active === false ? 'opacity:.5' : ''}">
           <td><span class="uav">${ini(u)}</span></td>
@@ -2336,7 +2406,7 @@ function pgUzivatele() {
           <td style="text-align:center">${t.inv ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
           <td style="text-align:center">${t.sub ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
           <td>${s ? `<b>${s.h} Kč/h</b>${s.c ? ` / <span style="color:var(--ok);font-weight:700">${s.c} Kč/h</span>` : ''}` : (t.teren && !t.kanc && !t.sub ? '<b style="color:var(--red)">⚠ chybí</b>' : '<span class="muted">—</span>')}</td>
-          <td>${esc(u.role || '—')}${u.skupina ? ` <span class="muted">· ${esc(u.skupina)}</span>` : ''}</td>
+          <td>${esc(u.role || '—')}</td>
           <td style="white-space:nowrap">${u.uid
             ? `<span class="badge b-ok">✓ má účet</span><br><button class="btn ghost sm" style="margin-top:4px" onclick="pinForm('${u.id}')">🔑 nový PIN</button>
                <button class="btn ghost sm" style="margin-top:4px" title="Zrušit přihlášení" onclick="zrusitPrihlaseni('${u.id}')">🚫</button>`
@@ -2544,10 +2614,8 @@ function pgNewUser() {
         <div class="note">Čistou vyplň u pracovníků, kterým vedoucí party sráží z hodinovky — report pak rozdíl ukáže automaticky.</div>
       </div>` : ''}
       <div class="formsec">
-        <h4>👥 Skupiny a role</h4>
-        <label>Skupina</label>
-        <select id="nu-s">${['', 'Zaměstnanci', 'Subdodavatelé'].map(g => `<option ${edit && edit.skupina === g ? 'selected' : ''}>${g || 'Bez skupiny'}</option>`).join('')}</select>
-        <label>Role (jen popisek)</label>
+        <h4>🏷 Popis</h4>
+        <label>Popis — ukáže se pod jménem na přihlašovací obrazovce</label>
         <input type="text" id="nu-r" value="${esc(edit ? edit.role || '' : '')}" placeholder="např. Vedoucí party, Subdodavatel — elektro…">
       </div>
       ${edit ? `<div class="formsec"><label style="display:flex;align-items:center;gap:8px;text-transform:none"><span class="toggle ${edit.active !== false ? 'on' : ''}" onclick="db.collection('users').doc('${edit.id}').update({active:${edit.active === false}}).then(render)"><i></i></span> Aktivní uživatel</label></div>` : ''}
@@ -2565,7 +2633,7 @@ async function saveUser() {
   const data = {
     jmeno: j, prijmeni: p, email: $('#nu-e').value.trim(), tel: $('#nu-tel') ? $('#nu-tel').value.trim() : '',
     typ: { kanc: typKey === 'kanc' ? 1 : 0, teren: (typKey === 'kanc' || typKey === 'teren' || typKey === 'sub') ? 1 : 0, inv: typKey === 'inv' ? 1 : 0, sub: typKey === 'sub' ? 1 : 0 },
-    role: $('#nu-r').value.trim(), skupina: $('#nu-s').value === 'Bez skupiny' ? '' : $('#nu-s').value, active: edit ? edit.active !== false : true
+    role: $('#nu-r').value.trim(), active: edit ? edit.active !== false : true
   };
   // FIX: sazby přečíst z formuláře PŘED zápisem do users — await níže spustí onSnapshot render(),
   // který formulář překreslí a vyprázdní, takže se sazba nikdy neuložila (a existující se mazala).
@@ -2786,6 +2854,11 @@ function viewWorker() {
   const myAtt = S.attendance.filter(a => a.date === isoToday());
   const lastAct = myAtt[0];
   const myTasks = S.tasks.filter(t => t.stav !== 'hotovo' && t.stav !== 'sablona' && jeMuj(t));
+  /* Dnes odskrtnute — zustavaji videt do konce dne, at jde omyl vzit zpet. */
+  const hotoveDnes = S.tasks.filter(t => t.stav === 'hotovo' && t.hotovoDne === isoToday() && jeMuj(t));
+  /* Co jsem zadal nekomu jinemu — vlastni ukoly uz jsou o kus vys. */
+  const zadaneMnou = S.tasks.filter(t => t.stav !== 'hotovo' && t.stav !== 'sablona'
+    && S.me && t.zadalId === S.me.id && t.respId !== S.me.id);
   return topbar() + `<div class="shell"><div class="content">
   <div class="strip"><h1>Můj den na stavbě</h1><span class="sp"></span><span class="muted">${fmtISOFull(isoToday())}</span></div>
   <main class="mobilewrap">
@@ -2853,10 +2926,56 @@ function viewWorker() {
       <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— půdorysy, vizualizace</span></h3>
       ${(p.stavbaDocs || []).map(d => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${esc(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('')}
     </div>` : ''}
-    ${myTasks.length ? `<div class="card">
+    ${(myTasks.length || hotoveDnes.length) ? `<div class="card">
       <h3>📌 Moje úkoly (${myTasks.length})</h3>
-      ${myTasks.map(t => `<div class="urow"><span>${isOverdue(t) ? '❗' : '📌'}</span><div><b>${esc(t.title)}</b><br><span class="muted">${esc((proj(t.pid) || {}).name || '')} · termín ${fmtISO(t.term)}</span></div>
-        <span style="margin-left:auto"><button class="btn ok sm" onclick="taskNext('${t.id}')">✓</button></span></div>`).join('')}
+      ${myTasks.map(t => `<div class="urow" style="align-items:flex-start">
+        <input type="checkbox" onclick="taskDone('${t.id}')" title="Označit jako hotové"
+               style="width:22px;height:22px;flex:none;margin-top:2px;cursor:pointer">
+        <div><b>${esc(t.title)}</b><br>
+          <span class="muted">${esc((proj(t.pid) || {}).name || '')}${t.zadal ? ' · zadal ' + esc(t.zadal) : ''}</span><br>
+          <span class="muted">Zadáno ${fmtISO(t.created)}</span>
+          <span style="${isOverdue(t) ? 'color:var(--red);font-weight:600' : 'color:var(--ink-soft)'}">
+            · Hotovo do ${fmtISO(t.term)}${isOverdue(t) ? ' — po termínu' : ''}</span>
+        </div>
+        ${t.stav !== 'nove' ? `<span class="badge ${STAVCOLOR[t.stav] || 'b-int'}" style="margin-left:auto">${STAVY[t.stav] || t.stav}</span>` : ''}
+      </div>`).join('')}
+      ${hotoveDnes.length ? `${hotoveDnes.map(t => `<div class="urow" style="align-items:flex-start;opacity:.55">
+        <input type="checkbox" checked onclick="taskDone('${t.id}')" title="Vrátit mezi nehotové"
+               style="width:22px;height:22px;flex:none;margin-top:2px;cursor:pointer">
+        <div><b style="text-decoration:line-through">${esc(t.title)}</b><br>
+          <span class="muted">Hotovo dnes${t.zadal ? ' · zadal ' + esc(t.zadal) : ''}</span></div>
+      </div>`).join('')}` : ''}
+      <div class="note">Zaškrtnutím políčka označíš úkol za hotový. ${hotoveDnes.length ? 'Dnes odškrtnuté vidíš do konce dne — ťuknutím je vrátíš zpět.' : ''}</div>
+    </div>` : ''}
+    <div class="card">
+      <h3>📌 Zadat úkol ${S.wtaskOpen ? '' : '<span class="muted" style="font-weight:400">— komukoliv z party</span>'}</h3>
+      ${S.wtaskOpen ? `
+      <label>Co je potřeba udělat *</label>
+      <input type="text" id="wtk-t" placeholder="Dovézt lepidlo na obklady">
+      <label>Komu</label>
+      <select id="wtk-r">${lideProUkoly().map(u => `<option value="${u.id}" ${S.me && u.id === S.me.id ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}</select>
+      <label>Stavba</label>
+      <select id="wtk-p">${S.projects.filter(x => x.active !== false).map(x => `<option value="${x.id}" ${p && x.id === p.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+      <label>Termín</label>
+      <input type="date" id="wtk-d" value="${shiftISO(isoToday(), 3)}">
+      <div class="aprv">
+        <button class="btn amber" onclick="workerAddTask()">➕ Zadat</button>
+        <button class="btn ghost" onclick="S.wtaskOpen=false;render()">Zrušit</button>
+      </div>` : `
+      <div class="aprv"><button class="btn dark" onclick="S.wtaskOpen=true;render()">➕ Nový úkol</button></div>`}
+    </div>
+    ${zadaneMnou.length ? `<div class="card">
+      <h3>📤 Zadal jsem (${zadaneMnou.length})</h3>
+      ${zadaneMnou.map(t => `<div class="urow" style="align-items:flex-start"><span style="margin-top:2px">${isOverdue(t) ? '❗' : '📌'}</span>
+        <div><b>${esc(t.title)}</b><br>
+          <span class="muted">${esc(t.resp || 'nikomu')} · ${esc((proj(t.pid) || {}).name || '')}</span><br>
+          <span class="muted">Zadáno ${fmtISO(t.created)}</span>
+          <span style="${isOverdue(t) ? 'color:var(--red);font-weight:600' : 'color:var(--ink-soft)'}">
+            · Hotovo do ${fmtISO(t.term)}${isOverdue(t) ? ' — po termínu' : ''}</span>
+        </div>
+        <span class="badge ${STAVCOLOR[t.stav] || 'b-int'}" style="margin-left:auto">${STAVY[t.stav] || t.stav}</span>
+        <span class="lnk" style="font-size:13px;margin-left:10px" onclick="smazatMujUkol('${t.id}')" title="Zrušit úkol">✕</span></div>`).join('')}
+      <div class="note">Úkoly, které jsi zadal někomu jinému. Křížkem úkol zrušíš. Odškrtnout je může jen ten, kdo je má přidělené.</div>
     </div>` : ''}
     <div class="card">
       <h3>✍️ Nový zápis do deníku</h3>
@@ -3008,6 +3127,33 @@ function posErrText(e) {
   if (e.code === 3) return 'Zjišťování polohy trvalo moc dlouho.';
   return 'Polohu se nepodařilo zjistit.';
 }
+/* Ukol z terenu. Zadat ho smi kdokoli komukoli — vedeni pak vidi vsechny,
+   ostatni jen co maji prideleno nebo sami zadali (viz listenMojeUkoly). */
+/* Zrusit ukol smi ten, kdo ho zadal (a vedeni). Kdo ho ma prideleny, ho
+   muze odskrtnout jako hotovy, ale ne smazat — jinak by slo zadani zahodit. */
+async function smazatMujUkol(id) {
+  const t = S.tasks.find(x => x.id === id);
+  if (!t) return;
+  if (!confirm('Zrušit úkol „' + t.title + '"?\n\nZmizí i tomu, komu jsi ho zadal.')) return;
+  try { await db.collection('tasks').doc(id).delete(); toast('Úkol zrušen ✓'); }
+  catch (e) { toast('Nepovedlo se zrušit: ' + (e.code || e.message)); }
+}
+
+async function workerAddTask() {
+  const title = $('#wtk-t').value.trim();
+  if (!title) { toast('Napiš, co je potřeba udělat'); return; }
+  const respId = $('#wtk-r').value, ru = userById(respId);
+  try {
+    await db.collection('tasks').add({
+      title, zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}),
+      pid: $('#wtk-p').value, respId, resp: ru ? fullName(ru) : '',
+      created: isoToday(), term: $('#wtk-d').value || shiftISO(isoToday(), 3),
+      stav: 'nove', res: ru ? [fullName(ru)] : [], createdAt: FV()
+    });
+    S.wtaskOpen = false; toast('Úkol zadán ✓'); render();
+  } catch (e) { toast('Nepovedlo se zadat: ' + (e.code || e.message)); }
+}
+
 async function workerCheck(akce) {
   if (S.checking) return;
   const p = proj(S.workerProject);
@@ -3320,15 +3466,15 @@ async function seedData() {
     milestones: [{ t: 'Přípravné práce, demontáže', s: 'done' }, { t: 'Elektro a ZTI — hrubé rozvody', s: 'now' }, { t: 'SDK konstrukce', s: 'next' }, { t: 'Obklady, dlažba', s: 'next' }, { t: 'Podlahy, malování, kompletace', s: 'next' }], createdAt: FV()
   });
   const U = [
-    { jmeno: 'Ruslan', prijmeni: 'Gorbunov', email: 'gorbunovruslan430@gmail.com', typ: { kanc: 0, teren: 1, inv: 0, sub: 0 }, role: 'Vedoucí party Ruslan', skupina: 'Zaměstnanci', sazba: { h: 300 } },
-    { jmeno: 'Vasyl', prijmeni: 'Fedorin', email: 'vasilfedorin0@gmail.com', typ: { kanc: 0, teren: 1, inv: 0, sub: 0 }, role: '', skupina: 'Zaměstnanci', sazba: { h: 275, c: 230 } },
-    { jmeno: 'Oleg', prijmeni: 'Starostag', email: 'olegstarostak570@gmail.com', typ: { kanc: 0, teren: 1, inv: 0, sub: 0 }, role: '', skupina: 'Zaměstnanci' },
-    { jmeno: 'Lukáš', prijmeni: 'Poštolka', email: 'postolin@gmail.com', typ: { kanc: 0, teren: 1, inv: 0, sub: 1 }, role: 'Subdodavatel — elektro', skupina: 'Subdodavatelé' },
-    { jmeno: 'Marek', prijmeni: 'Valečko', email: 'marekvalecko@seznam.cz', typ: { kanc: 0, teren: 1, inv: 0, sub: 1 }, role: 'Subdodavatel — voda / topení', skupina: 'Subdodavatelé' },
-    { jmeno: 'DS', prijmeni: 'Podlahy', email: 'dspodlahy@email.cz', typ: { kanc: 0, teren: 1, inv: 0, sub: 1 }, role: 'Subdodavatel — podlahy', skupina: 'Subdodavatelé' },
-    { jmeno: 'David', prijmeni: 'Falat', email: 'falyn.ji@seznam.cz', typ: { kanc: 1, teren: 1, inv: 0, sub: 0 }, role: 'Vedoucí projektu', skupina: '' },
-    { jmeno: 'Štěpán', prijmeni: 'Pecka', email: 'stepan.pecka@seznam.cz', typ: { kanc: 0, teren: 0, inv: 1, sub: 0 }, role: 'Investor (Novodvorská)', skupina: '' },
-    { jmeno: 'Šárka', prijmeni: 'Šaarová', email: 'saarovas@seznam.cz', typ: { kanc: 0, teren: 0, inv: 1, sub: 0 }, role: 'Investor (V Předpolí)', skupina: '' }
+    { jmeno: 'Ruslan', prijmeni: 'Gorbunov', email: 'gorbunovruslan430@gmail.com', typ: { kanc: 0, teren: 1, inv: 0, sub: 0 }, role: 'Vedoucí party Ruslan', sazba: { h: 300 } },
+    { jmeno: 'Vasyl', prijmeni: 'Fedorin', email: 'vasilfedorin0@gmail.com', typ: { kanc: 0, teren: 1, inv: 0, sub: 0 }, role: '', sazba: { h: 275, c: 230 } },
+    { jmeno: 'Oleg', prijmeni: 'Starostag', email: 'olegstarostak570@gmail.com', typ: { kanc: 0, teren: 1, inv: 0, sub: 0 }, role: '' },
+    { jmeno: 'Lukáš', prijmeni: 'Poštolka', email: 'postolin@gmail.com', typ: { kanc: 0, teren: 1, inv: 0, sub: 1 }, role: 'Subdodavatel — elektro' },
+    { jmeno: 'Marek', prijmeni: 'Valečko', email: 'marekvalecko@seznam.cz', typ: { kanc: 0, teren: 1, inv: 0, sub: 1 }, role: 'Subdodavatel — voda / topení' },
+    { jmeno: 'DS', prijmeni: 'Podlahy', email: 'dspodlahy@email.cz', typ: { kanc: 0, teren: 1, inv: 0, sub: 1 }, role: 'Subdodavatel — podlahy' },
+    { jmeno: 'David', prijmeni: 'Falat', email: 'falyn.ji@seznam.cz', typ: { kanc: 1, teren: 1, inv: 0, sub: 0 }, role: 'Vedoucí projektu' },
+    { jmeno: 'Štěpán', prijmeni: 'Pecka', email: 'stepan.pecka@seznam.cz', typ: { kanc: 0, teren: 0, inv: 1, sub: 0 }, role: 'Investor (Novodvorská)' },
+    { jmeno: 'Šárka', prijmeni: 'Šaarová', email: 'saarovas@seznam.cz', typ: { kanc: 0, teren: 0, inv: 1, sub: 0 }, role: 'Investor (V Předpolí)' }
   ];
   for (const u of U) {
     const { sazba, ...rest } = u;
