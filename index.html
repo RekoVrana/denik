@@ -130,6 +130,31 @@
   .stat .sn{font-size:24px;font-weight:800;margin-left:auto}
   .stat .sn.warn{color:var(--red)}
   .stat .st2{font-size:12px;color:var(--ink2);font-weight:600}
+  /* ---- ukoly v terenu: jedna karta, dve zalozky, dlazdice ----
+     Barevny prouzek vlevo nese naléhavost, aby se to dalo prejet okem
+     na telefonu ve svetle na stavbe. Zaskrtavatko je velke kvuli rukavicim. */
+  .ukhead{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .uktabs{display:flex;gap:6px;margin:12px 0 10px}
+  .uktabs .t{flex:1;text-align:center;padding:9px 6px;font-size:12.5px;font-weight:700;
+    border-radius:9px;background:#f1f4f8;color:var(--int);cursor:pointer;user-select:none}
+  .uktabs .t.active{background:var(--navy);color:#fff}
+  .uk{display:flex;flex-direction:column;gap:8px}
+  .ukol{display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:start;
+    background:#fff;border:1px solid var(--line);border-left:4px solid var(--st,#c8d2dc);
+    border-radius:10px;padding:11px 13px}
+  .ukol.po{--st:var(--red);background:#fffbfa}
+  .ukol.dnes{--st:var(--amber);background:#fffdf7}
+  .ukol.hot{--st:var(--ok);opacity:.5}
+  .ukol .bx{width:26px;height:26px;border:2px solid #cbd4dd;border-radius:8px;display:grid;
+    place-items:center;font-size:15px;font-weight:800;cursor:pointer;flex:none;background:#fff;color:#fff}
+  .ukol .bx.on{background:var(--ok);border-color:var(--ok)}
+  .ukol .tt{font-weight:700;font-size:14.5px;line-height:1.3;color:var(--navy-d)}
+  .ukol.hot .tt{text-decoration:line-through}
+  .ukol .mt{color:var(--int);font-size:12px;margin-top:5px;display:flex;flex-wrap:wrap;
+    gap:5px 9px;align-items:center}
+  .ukform{background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:12px 13px;margin-bottom:4px}
+  .ukform label{margin-top:8px}
+  .ukform label:first-child{margin-top:0}
   .uav{width:28px;height:28px;border-radius:50%;background:var(--amber);color:#132c46;display:inline-flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:800;flex:none}
   .urow{display:flex;align-items:center;gap:10px;padding:7px 4px;border-bottom:1px solid #f0f3f6;font-size:13px}
   .urow:last-child{border-bottom:none}

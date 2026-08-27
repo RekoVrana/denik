@@ -280,10 +280,42 @@ function listenMojeUkoly() {
   });
 }
 
+/* ---------- kolik dat drzime naživo ----------
+   Firestore uctuje kazdy precteny zaznam. Kdyz aplikace pri kazdem otevreni
+   stahovala celou historii, rostla cena s kazdym dnem provozu — za rok by
+   jedno otevreni stalo pres 4 000 cteni a bezplatny strop 50 000/den by
+   doslo po jedenacti otevrenich. Proto zive sledujeme jen posledni mesic.
+   Starsi data se dotahuji, az kdyz si o ne nekdo rekne (report za minuly
+   mesic). POZOR: bez toho dotahovani by report za starsi obdobi tise
+   ukazal nuly — a to je podklad pro vyplaty. */
+const OKNO_DNU = 30;
+function oknoOd() { return shiftISO(isoToday(), -OKNO_DNU); }
+
+/* Uz dotazene starsi useky, at se totez nestahuje dvakrat. */
+S.dotazeno = S.dotazeno || [];
+async function dotahniDochazku(from, to) {
+  if (!from || !to || from > to) return;
+  if (from >= oknoOd()) return;                       // uz to mame naživo
+  const klic = from + '..' + to;
+  if (S.dotazeno.includes(klic)) return;
+  S.dotahuji = true; render();
+  try {
+    const snap = await db.collection('attendance')
+      .where('date', '>=', from).where('date', '<=', to).get();
+    const mam = new Set(S.attendance.map(a => a.id));
+    snap.docs.forEach(d => { if (!mam.has(d.id)) S.attendance.push({ id: d.id, ...d.data() }); });
+    S.attendance.sort((a, b) => attKey(b) - attKey(a));
+    S.dotazeno.push(klic);
+  } catch (e) {
+    toast('Starší docházku se nepodařilo načíst: ' + (e.code || e.message));
+  }
+  S.dotahuji = false; render();
+}
+
 function startData() {
   const role = S.meAuth.role; // 'admin' | 'worker' | 'sub'
   listen('projects', 'projects', { sort: (a, b) => (b.active - a.active) || String(a.cn || a.name).localeCompare(String(b.cn || b.name), 'cs') });
-  listen('entries', 'entries', { sort: (a, b) => (b.date || '').localeCompare(a.date || '') || ((b.createdAt && b.createdAt.seconds) || 0) - ((a.createdAt && a.createdAt.seconds) || 0) });
+  listen('entries', 'entries', { where: [['date', '>=', oknoOd()]], sort: (a, b) => (b.date || '').localeCompare(a.date || '') || ((b.createdAt && b.createdAt.seconds) || 0) - ((a.createdAt && a.createdAt.seconds) || 0) });
   /* Ukoly: vedeni vidi vsechny, ostatni jen sve. Pravidla databaze dotaz
      bud cele povoli, nebo cely odmitnou — filtrovat za nas neumi. Proto se
      pracovnik pta dvema dotazy (co mam prideleno / co jsem zadal) a vysledky
@@ -292,7 +324,7 @@ function startData() {
   else listenMojeUkoly();
   listen('users', 'users', { sort: (a, b) => (a.prijmeni || '').localeCompare(b.prijmeni || '', 'cs') });
   if (role === 'admin') {
-    listen('attendance', 'attendance', { sort: (a, b) => attKey(b) - attKey(a) });
+    listen('attendance', 'attendance', { where: [['date', '>=', oknoOd()]], sort: (a, b) => attKey(b) - attKey(a) });
     listen('viceprace', 'viceprace', {});
     listen('zadosti', 'zadosti', { sort: (a, b) => (b.date || '').localeCompare(a.date || '') });
     S.unsub.push(db.collection('sazby').onSnapshot(s => { S.sazby = {}; s.docs.forEach(d => S.sazby[d.id] = d.data()); render(); }, () => {}));
@@ -322,6 +354,21 @@ function respName(t) {
   const u = t && t.respId ? S.users.find(x => x.id === t.respId) : null;
   return u ? fullName(u) : ((t && t.resp) || '');
 }
+/* Naléhavost úkolu se pozná barevným prouzkem, ne cudnou poznamkou —
+   na stavbe se na telefon kouka vterinu, ne minutu. */
+function ukolNaleh(t) {
+  const d = isoToday();
+  if (!t.term) return '';
+  return t.term < d ? 'po' : t.term === d ? 'dnes' : '';
+}
+function terminChip(t) {
+  const d = isoToday();
+  if (!t.term) return '';
+  if (t.term < d) return '<span class="badge b-red">❗ po termínu</span>';
+  if (t.term === d) return '<span class="badge b-wait">📅 dnes</span>';
+  return '<span class="badge b-int">📅 do ' + fmtISO(t.term) + '</span>';
+}
+
 function jeMuj(t) {
   if (!S.me) return false;
   if (t.respId) return t.respId === S.me.id;
@@ -1574,6 +1621,7 @@ function pgDenik() {
     <button class="btn amber" onclick="goPage('novy')">➕ PŘIDAT</button></div>
   <div class="sectabs">
     <div class="t active">📓 Denní záznamy</div>
+    <div class="t" style="margin-left:auto;color:var(--navy)" onclick="dotahniZapisy()">${S.dotahuji ? '⏳ načítám…' : '⤓ Načíst starší'}</div>
     ${f ? `<div class="t" onclick="S.adminFilter=null;render()">✕ Zrušit filtr projektu</div>` : ''}
   </div>
   <main>
@@ -2306,13 +2354,38 @@ function pgReporty() {
       <div class="aprv" style="align-items:center">
         <span class="muted">Od</span><input type="date" id="rep-from" value="${S.repFrom}" style="max-width:150px" onchange="S.repFrom=this.value">
         <span class="muted">do</span><input type="date" id="rep-to" value="${S.repTo}" style="max-width:150px" onchange="S.repTo=this.value">
-        <button class="btn amber" onclick="S.repLoaded=true;render()">NAČÍST REPORT</button>
+        <button class="btn amber" onclick="nactiReport()">${S.dotahuji ? '<span class="spin"></span> NAČÍTÁM…' : 'NAČÍST REPORT'}</button>
       </div>
     </div>
+    ${S.repFrom < oknoOd() ? `<div class="note">📅 Období sahá před posledních ${OKNO_DNU} dní — starší docházka se dotáhne z databáze při načtení reportu.</div>` : ''}
     ${S.repLoaded ? repTable() : `
     <div class="card"><div class="empty">ℹ️ Žádný report není načten<br><span class="muted">1. Vyber pracovníky · 2. Vyber projekty · 3. Načíst report</span></div></div>`}
   </main>`;
 }
+/* Report za starsi obdobi potrebuje data, ktera nemame naživo (viz OKNO_DNU).
+   Bez tohohle by tabulka tise ukazala nuly — a to je podklad pro vyplaty. */
+/* Zapisy starsi nez okno nejsou naživo — dotahnou se na pozadani. */
+async function dotahniZapisy() {
+  const nejstarsi = S.entries.reduce((m, e) => (e.date && e.date < m ? e.date : m), oknoOd());
+  const do_ = shiftISO(nejstarsi, -1), od = shiftISO(nejstarsi, -91);
+  S.dotahuji = true; render();
+  try {
+    const snap = await db.collection('entries').where('date', '>=', od).where('date', '<=', do_).get();
+    const mam = new Set(S.entries.map(e => e.id));
+    let pribylo = 0;
+    snap.docs.forEach(d => { if (!mam.has(d.id)) { S.entries.push({ id: d.id, ...d.data() }); pribylo++; } });
+    S.entries.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    S.starsiOd = od;
+    toast(pribylo ? 'Načteno ' + pribylo + ' starších zápisů ✓' : 'Starší zápisy už nejsou');
+  } catch (e) { toast('Nepovedlo se načíst: ' + (e.code || e.message)); }
+  S.dotahuji = false; render();
+}
+
+async function nactiReport() {
+  await dotahniDochazku(S.repFrom, S.repTo);
+  S.repLoaded = true; render();
+}
+
 function repTogW(id) { const i = S.repWorkers.indexOf(id); i >= 0 ? S.repWorkers.splice(i, 1) : S.repWorkers.push(id); S.repLoaded = false; render(); }
 function repTogP(id) { const i = S.repProjects.indexOf(id); i >= 0 ? S.repProjects.splice(i, 1) : S.repProjects.push(id); S.repLoaded = false; render(); }
 function repTable() {
@@ -2854,6 +2927,7 @@ function viewWorker() {
   const myAtt = S.attendance.filter(a => a.date === isoToday());
   const lastAct = myAtt[0];
   const myTasks = S.tasks.filter(t => t.stav !== 'hotovo' && t.stav !== 'sablona' && jeMuj(t));
+  const ut = S.ukolTab || 'moje';
   /* Dnes odskrtnute — zustavaji videt do konce dne, at jde omyl vzit zpet. */
   const hotoveDnes = S.tasks.filter(t => t.stav === 'hotovo' && t.hotovoDne === isoToday() && jeMuj(t));
   /* Co jsem zadal nekomu jinemu — vlastni ukoly uz jsou o kus vys. */
@@ -2926,57 +3000,48 @@ function viewWorker() {
       <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— půdorysy, vizualizace</span></h3>
       ${(p.stavbaDocs || []).map(d => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${esc(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('')}
     </div>` : ''}
-    ${(myTasks.length || hotoveDnes.length) ? `<div class="card">
-      <h3>📌 Moje úkoly (${myTasks.length})</h3>
-      ${myTasks.map(t => `<div class="urow" style="align-items:flex-start">
-        <input type="checkbox" onclick="taskDone('${t.id}')" title="Označit jako hotové"
-               style="width:22px;height:22px;flex:none;margin-top:2px;cursor:pointer">
-        <div><b>${esc(t.title)}</b><br>
-          <span class="muted">${esc((proj(t.pid) || {}).name || '')}${t.zadal ? ' · zadal ' + esc(t.zadal) : ''}</span><br>
-          <span class="muted">Zadáno ${fmtISO(t.created)}</span>
-          <span style="${isOverdue(t) ? 'color:var(--red);font-weight:600' : 'color:var(--ink-soft)'}">
-            · Hotovo do ${fmtISO(t.term)}${isOverdue(t) ? ' — po termínu' : ''}</span>
-        </div>
-        ${t.stav !== 'nove' ? `<span class="badge ${STAVCOLOR[t.stav] || 'b-int'}" style="margin-left:auto">${STAVY[t.stav] || t.stav}</span>` : ''}
-      </div>`).join('')}
-      ${hotoveDnes.length ? `${hotoveDnes.map(t => `<div class="urow" style="align-items:flex-start;opacity:.55">
-        <input type="checkbox" checked onclick="taskDone('${t.id}')" title="Vrátit mezi nehotové"
-               style="width:22px;height:22px;flex:none;margin-top:2px;cursor:pointer">
-        <div><b style="text-decoration:line-through">${esc(t.title)}</b><br>
-          <span class="muted">Hotovo dnes${t.zadal ? ' · zadal ' + esc(t.zadal) : ''}</span></div>
-      </div>`).join('')}` : ''}
-      <div class="note">Zaškrtnutím políčka označíš úkol za hotový. ${hotoveDnes.length ? 'Dnes odškrtnuté vidíš do konce dne — ťuknutím je vrátíš zpět.' : ''}</div>
-    </div>` : ''}
     <div class="card">
-      <h3>📌 Zadat úkol ${S.wtaskOpen ? '' : '<span class="muted" style="font-weight:400">— komukoliv z party</span>'}</h3>
+      <div class="ukhead">
+        <h3 style="margin:0;flex:1">📌 Úkoly</h3>
+        <button class="btn ${S.wtaskOpen ? 'ghost' : 'dark'} sm" onclick="S.wtaskOpen=!S.wtaskOpen;render()">${S.wtaskOpen ? '✕ Zavřít' : '＋ Zadat'}</button>
+      </div>
       ${S.wtaskOpen ? `
-      <label>Co je potřeba udělat *</label>
-      <input type="text" id="wtk-t" placeholder="Dovézt lepidlo na obklady">
-      <label>Komu</label>
-      <select id="wtk-r">${lideProUkoly().map(u => `<option value="${u.id}" ${S.me && u.id === S.me.id ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}</select>
-      <label>Stavba</label>
-      <select id="wtk-p">${S.projects.filter(x => x.active !== false).map(x => `<option value="${x.id}" ${p && x.id === p.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
-      <label>Termín</label>
-      <input type="date" id="wtk-d" value="${shiftISO(isoToday(), 3)}">
-      <div class="aprv">
-        <button class="btn amber" onclick="workerAddTask()">➕ Zadat</button>
-        <button class="btn ghost" onclick="S.wtaskOpen=false;render()">Zrušit</button>
-      </div>` : `
-      <div class="aprv"><button class="btn dark" onclick="S.wtaskOpen=true;render()">➕ Nový úkol</button></div>`}
-    </div>
-    ${zadaneMnou.length ? `<div class="card">
-      <h3>📤 Zadal jsem (${zadaneMnou.length})</h3>
-      ${zadaneMnou.map(t => `<div class="urow" style="align-items:flex-start"><span style="margin-top:2px">${isOverdue(t) ? '❗' : '📌'}</span>
-        <div><b>${esc(t.title)}</b><br>
-          <span class="muted">${esc(t.resp || 'nikomu')} · ${esc((proj(t.pid) || {}).name || '')}</span><br>
-          <span class="muted">Zadáno ${fmtISO(t.created)}</span>
-          <span style="${isOverdue(t) ? 'color:var(--red);font-weight:600' : 'color:var(--ink-soft)'}">
-            · Hotovo do ${fmtISO(t.term)}${isOverdue(t) ? ' — po termínu' : ''}</span>
+      <div class="ukform">
+        <label>Co je potřeba udělat *</label>
+        <input type="text" id="wtk-t" placeholder="Dovézt lepidlo na obklady">
+        <div class="frow">
+          <div><label>Komu</label>
+            <select id="wtk-r">${lideProUkoly().map(u => `<option value="${u.id}" ${S.me && u.id === S.me.id ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}</select></div>
+          <div><label>Termín</label><input type="date" id="wtk-d" value="${shiftISO(isoToday(), 3)}"></div>
         </div>
-        <span class="badge ${STAVCOLOR[t.stav] || 'b-int'}" style="margin-left:auto">${STAVY[t.stav] || t.stav}</span>
-        <span class="lnk" style="font-size:13px;margin-left:10px" onclick="smazatMujUkol('${t.id}')" title="Zrušit úkol">✕</span></div>`).join('')}
-      <div class="note">Úkoly, které jsi zadal někomu jinému. Křížkem úkol zrušíš. Odškrtnout je může jen ten, kdo je má přidělené.</div>
-    </div>` : ''}
+        <label>Stavba</label>
+        <select id="wtk-p">${S.projects.filter(x => x.active !== false).map(x => `<option value="${x.id}" ${p && x.id === p.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+        <div class="aprv"><button class="btn amber" onclick="workerAddTask()">➕ Zadat úkol</button></div>
+      </div>` : ''}
+      <div class="uktabs">
+        <div class="t ${ut === 'moje' ? 'active' : ''}" onclick="S.ukolTab='moje';render()">Moje${myTasks.length ? ' · ' + myTasks.length : ''}</div>
+        <div class="t ${ut === 'zadal' ? 'active' : ''}" onclick="S.ukolTab='zadal';render()">Zadal jsem${zadaneMnou.length ? ' · ' + zadaneMnou.length : ''}</div>
+      </div>
+      ${ut === 'moje' ? `<div class="uk">
+        ${myTasks.map(t => `<div class="ukol ${ukolNaleh(t)}">
+          <span class="bx" onclick="taskDone('${t.id}')" title="Označit jako hotové"></span>
+          <div><div class="tt">${esc(t.title)}</div>
+            <div class="mt">${terminChip(t)}<span>🏗 ${esc((proj(t.pid) || {}).name || '')}</span>${t.zadal ? `<span>👤 ${esc(t.zadal)}</span>` : ''}</div>
+          </div></div>`).join('')}
+        ${hotoveDnes.map(t => `<div class="ukol hot">
+          <span class="bx on" onclick="taskDone('${t.id}')" title="Vrátit mezi nehotové">✓</span>
+          <div><div class="tt">${esc(t.title)}</div><div class="mt"><span>Hotovo dnes — ťuknutím vrátíš</span></div></div></div>`).join('')}
+        ${(!myTasks.length && !hotoveDnes.length) ? '<div class="empty">Žádné úkoly. Můžeš dělat svoje. 👍</div>' : ''}
+      </div>` : `<div class="uk">
+        ${zadaneMnou.map(t => `<div class="ukol ${ukolNaleh(t)}">
+          <span class="uav">${ini(userById(t.respId) || { jmeno: t.resp || '?', prijmeni: '' })}</span>
+          <div><div class="tt">${esc(t.title)}</div>
+            <div class="mt">${terminChip(t)}<span class="badge ${STAVCOLOR[t.stav] || 'b-int'}">${STAVY[t.stav] || t.stav}</span><span>${esc(t.resp || 'nikomu')}</span>
+              <span class="lnk" style="margin-left:auto" onclick="smazatMujUkol('${t.id}')">✕ zrušit</span></div>
+          </div></div>`).join('')}
+        ${!zadaneMnou.length ? '<div class="empty">Zatím jsi nikomu nic nezadal.</div>' : ''}
+      </div>`}
+    </div>
     <div class="card">
       <h3>✍️ Nový zápis do deníku</h3>
       <textarea id="wt" placeholder="Co se dnes dělalo… každá věta = jedna odrážka"></textarea>
