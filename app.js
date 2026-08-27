@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '27. 8. 2026 c';
+const VERZE = '27. 8. 2026 d';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -3033,7 +3033,7 @@ function viewSub() {
   const dnesni = S.hlaseni.filter(h => h.date === isoToday());
   return topbar() + `<div class="shell"><div class="content">
   <div class="strip"><h1>Můj den na stavbě</h1><span class="sp"></span><span class="muted">${fmtISOFull(isoToday())}</span></div>
-  <main>
+  <main class="mobilewrap">
     <div class="card">
       <h3>🧰 Hlášení přítomnosti</h3>
       <label>Stavba *</label>
