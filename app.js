@@ -3,6 +3,11 @@
    Ostrá verze v1 (Etapy 1+2+jádro 3 dle MASTER_PLAN_v4 + dodatky #30–37)
    PWA + Firebase (Auth, Firestore offline) + Google Drive přes Apps Script
    ============================================================ */
+/* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
+   a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
+   dorazila nova verze — bez toho se to nedalo zjistit vubec. */
+const VERZE = '27. 8. 2026 c';
+
 'use strict';
 const CFG = window.VRANA_CONFIG;
 const CONFIGURED = CFG.firebase.apiKey !== 'VYPLNIT';
@@ -880,7 +885,8 @@ function viewLogin() {
         : JE_IOS ? 'Vznikne ikona jako u běžné aplikace. Ukážu ti jak.'
         : 'Ať ho nemusíš pokaždé hledat. Ukážu ti jak.'}</span></span>
     </button>`}
-    <div class="ls" style="margin-top:14px;margin-bottom:0">${CFG.firmName} · ${S.online ? '' : '⚠ offline'}</div>
+    <div class="ls" style="margin-top:14px;margin-bottom:0">${CFG.firmName} · verze ${VERZE}${S.online ? '' : ' · ⚠ offline'}</div>
+    <div class="ls" style="margin-top:6px;margin-bottom:0"><span class="lnk" onclick="aktualizovatApp()">${S.updating ? '⏳ stahuji novou verzi…' : '⟳ Zkontrolovat aktualizaci'}</span></div>
   </div></div>`;
 }
 /* Firebase vraci kody; uzivateli je musime prelozit. Drive se vsechny chyby
@@ -957,6 +963,7 @@ function topbar() {
     <span class="offdot ${S.online ? '' : 'off'}">${S.online ? '' : '⚠ OFFLINE — změny se uloží po připojení'}</span>
     ${S.uploading ? '<span class="badge b-wait">📤 nahrávám na Drive…</span>' : ''}
     ${S.frontaPocet ? `<span class="badge ${S.online ? 'b-wait' : 'b-int'}" title="Fotky a přílohy čekají, až bude signál. Neztratí se — appka je odešle sama.">🕓 ${S.frontaPocet} čeká na odeslání</span>` : ''}
+    <span class="muted" style="font-size:10.5px;white-space:nowrap" title="Verze aplikace">${VERZE}</span>
     <button class="btn ghost sm" title="Zkontrolovat a stáhnout novou verzi" onclick="aktualizovatApp()" style="padding:6px 10px">${S.updating ? '<span class="updspin"></span>' : '⟳'}</button>
     <div class="avatar" title="Odhlásit" onclick="if(confirm('Odhlásit se?'))doLogout()">${S.me ? ini(S.me) : '?'}</div>
   </div>`;
