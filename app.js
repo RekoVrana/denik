@@ -582,8 +582,11 @@ async function processPhotos(files, label) {
     try {
       const img = await fileToImage(f);
       const thumb = scaleJpeg(img, 360, 0.62);
+      /* stredni verze jde do databaze — parta si fotku prohledne primo
+         v aplikaci, bez Drive a bez prihlaseni ke Googlu */
+      const mid = scaleJpeg(img, 1100, 0.72);
       const full = scaleJpeg(img, 1600, 0.82);
-      S.draftPhotos.push({ tmp: uid8(), thumb, full, label: label || f.name.replace(/\.[^.]+$/, ''), status: 'pending', driveId: null });
+      S.draftPhotos.push({ tmp: uid8(), thumb, mid, full, label: label || f.name.replace(/\.[^.]+$/, ''), status: 'pending', driveId: null });
       URL.revokeObjectURL(img.src);
     } catch (e) { toast('Fotku se nepodařilo načíst: ' + f.name); }
   }
@@ -596,6 +599,13 @@ async function zaraditFotky(p, entryId) {
   for (const ph of S.draftPhotos) {
     const id = uid8();
     out.push({ id, thumb: ph.thumb, label: ph.label, status: 'pending', driveId: null });
+    /* Stredni nahled do vlastni kolekce, ne do zaznamu: zaznam ma limit
+       1 MB a osm fotek by ho prestrelilo. Cte se az po tuknuti na fotku,
+       takze bezne listovani nic nestoji. Offline: Firestore si zapis
+       podrzi a odesle sam. */
+    if (ph.mid) db.collection('fotonahledy').doc(id).set({
+      data: ph.mid, pid: (p && p.id) || '', entryId, date: isoToday(), createdAt: FV()
+    }).catch(e => console.warn('fotonahled', e));
     try {
       await frontaPridat({
         druh: 'foto', entryId, photoId: id, name: (ph.label || 'foto') + '.jpg', mime: 'image/jpeg',
@@ -1550,7 +1560,7 @@ async function addNote(pid) {
 /* ---- fotka: dlaždice ---- */
 function phTile(ph, clientView, eid) {
   const st = clientView ? '' : `<span class="st" ${eid ? `onclick="event.stopPropagation();cyclePhoto('${eid}','${ph.id}')"` : ''}>${ph.status === 'approved' ? '✓' : ph.status === 'pending' ? '⏳' : '🔒'}</span>`;
-  return `<div class="ph" onclick="openPhoto('${ph.driveId || ''}','${esc(ph.label)}',this)">
+  return `<div class="ph" onclick="otevritFoto('${ph.id || ''}','${ph.driveId || ''}','${esc(ph.label)}',this)">
     <img src="${ph.thumb}" alt="">${st}<small>${esc(ph.label || '')}</small></div>`;
 }
 function openPhoto(driveId, label, el) {
@@ -1563,6 +1573,20 @@ function openPhoto(driveId, label, el) {
     <div class="vbody" style="padding:0;align-items:center"><img src="${src}" style="width:100%;max-height:80vh"></div></div></div>`;
 }
 function closeDoc() { $('#viewer').innerHTML = ''; }
+/* Fotka se otevre hned z maleho nahledu a lepsi kvalita se doplni, jakmile
+   dorazi z databaze. Parta tak nepotrebuje Drive ani ucet Google — ten
+   zustava jen jako tlacitko pro plne rozliseni (vedeni). Stare fotky
+   stredni verzi nemaji; u nich zustane maly nahled a Drive. */
+async function otevritFoto(photoId, driveId, label, el) {
+  openPhoto(driveId, label, el);
+  if (!photoId) return;
+  try {
+    const d = await db.collection('fotonahledy').doc(photoId).get();
+    if (!d.exists) return;
+    const img = $('#viewer') && $('#viewer').querySelector('.vbody img');
+    if (img) img.src = d.data().data;
+  } catch (e) { /* nahled nedorazil — zustava maly, to neni chyba */ }
+}
 /* Priloha muze byt trojiho druhu a kazda se otevira jinak:
    - driveId  -> lezi na Drive
    - data     -> stara priloha vlozena primo do zaznamu (pred frontou)
@@ -2591,6 +2615,9 @@ async function delEntry(id) {
     '\n\nZmizí i z portálu investora. Smazání nejde vrátit zpět.')) return;
   try {
     if (p.portalToken) await db.collection('portals').doc(p.portalToken).collection('feed').doc(id).delete().catch(() => {});
+    for (const ph of (e.photos || [])) {
+      if (ph.id) db.collection('fotonahledy').doc(ph.id).delete().catch(() => {});
+    }
     await db.collection('entries').doc(id).delete();
     S.detail = null; toast('Záznam smazán ✓'); render();
   } catch (err) { toast('Nepovedlo se: ' + (err.code || err.message)); }

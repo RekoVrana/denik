@@ -13,6 +13,9 @@
 //      ostatni jen sve pridelene a sve zadane. Pribyl helper mujDocId()
 //      a pole zadalId u ukolu.
 //
+//   6) NOVA kolekce /fotonahledy — stredni nahledy fotek pro partu
+//      (Drive je soukromy, bez uctu Google se fotky neotevrou).
+//
 //  Poslední změny 23. 8. 2026:
 //   4) OPRAVA ZÁLOHY: sekce /dashboard tady měla 'if false', ale ostrá
 //      verze má 'if isAdmin()' (změněno v konzoli 23. 8. v 8:40 a do téhle
@@ -109,6 +112,19 @@ service cloud.firestore {
       // zrusit ukol smi vedeni a ten, kdo ho zadal — ne ten, kdo ho dostal
       allow delete: if isAdmin()
         || (hasRole() && resource.data.zadalId == mujDocId());
+    }
+
+    // Stredni nahledy fotek (~1100 px) — parta si fotku prohledne primo
+    // v aplikaci; soubory na Drive jsou soukrome a bez uctu Google se
+    // neotevrou. Cte se jen po tuknuti na fotku, ne pri listovani.
+    match /fotonahledy/{id} {
+      allow read: if hasRole();
+      // strop velikosti: zaznam ma tvrdy limit 1 MB, tohle ho hlida uz tady
+      allow create: if hasRole()
+        && request.resource.data.data is string
+        && request.resource.data.data.size() < 950000;
+      allow update: if false;
+      allow delete: if isAdmin();
     }
 
     match /attendance/{id} {
