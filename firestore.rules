@@ -19,6 +19,9 @@
 //   7) NOVA kolekce /hlaseni — pritomnost subdodavatelu (stavba, pocet
 //      lidi, cinnost). Neni to dochazka, hodiny se z ni nepocitaji.
 //
+//   8) NOVA kolekce /klice — evidence klicu zakazek: kdo je drzi
+//      a komu je kdy predal, s potvrzenim prijemce.
+//
 //  Poslední změny 23. 8. 2026:
 //   4) OPRAVA ZÁLOHY: sekce /dashboard tady měla 'if false', ale ostrá
 //      verze má 'if isAdmin()' (změněno v konzoli 23. 8. v 8:40 a do téhle
@@ -126,6 +129,16 @@ service cloud.firestore {
       // odchod: sub dopisuje do vlastniho hlaseni cas a zaznam
       allow update: if isAdmin() || (hasRole() && resource.data.authUid == request.auth.uid);
       allow delete: if isAdmin() || (hasRole() && resource.data.authUid == request.auth.uid);
+    }
+
+    // Klice zakazky: pocet volitelny, zaklada a maze vedeni. Predat smi
+    // vedeni nebo ten, kdo klic prave drzi; po predani je novym drzitelem
+    // prijemce, ktery prevzeti potvrzuje — ale predani plati i bez
+    // potvrzeni (Marco 27. 8.). Historie zustava v dokumentu klice.
+    match /klice/{id} {
+      allow read: if hasRole();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (hasRole() && resource.data.drzitelId == mujDocId());
     }
 
     // Stredni nahledy fotek (~1100 px) — parta si fotku prohledne primo

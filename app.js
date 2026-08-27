@@ -181,6 +181,7 @@ const S = {
   projDetailId: null, projDetailTab: 'info', newUserType: null, editUserId: null,
   ukolyView: 'seznam', orgFilter: 'vse', taskFormOpen: false, attFormOpen: false, vpFormOpen: false,
   hlaseni: [], subProject: null, subPocet: 1, subOdchodOpen: false, subZaznam: '',
+  klice: [],
   repWorkers: [], repProjects: [], repLoaded: false, repFrom: isoToday().slice(0, 8) + '01', repTo: isoToday(),
   workerProject: null, draftPhotos: [], draftAtts: [], uploading: 0, signFor: null, tplOpen: false,
   loginMode: 'teren', loginWorker: null,
@@ -332,6 +333,7 @@ function startData() {
   if (role === 'admin') listen('hlaseni', 'hlaseni', { where: [['date', '>=', oknoOd()]], sort: hlasSort });
   else if (role === 'sub') listen('hlaseni', 'hlaseni', { where: [['authUid', '==', S.authUser.uid]], sort: hlasSort });
   else listenMojeUkoly();
+  listen('klice', 'klice', {});
   listen('users', 'users', { sort: (a, b) => (a.prijmeni || '').localeCompare(b.prijmeni || '', 'cs') });
   if (role === 'admin') {
     listen('attendance', 'attendance', { where: [['date', '>=', oknoOd()]], sort: (a, b) => attKey(b) - attKey(a) });
@@ -1354,6 +1356,7 @@ function pgProjDetail() {
         <div class="aprv"><button class="btn amber" onclick="projectForm('${p.id}')">✏️ Upravit</button>
           <button class="btn ghost" onclick="delProject('${p.id}')">🗑 Smazat stavbu</button></div>
       </div>
+      ${sekceKliceProjektu(p)}
       <div class="card">
         <h3>📍 Pozice projektu (GPS check-in)</h3>
         ${p.gps ? `
@@ -2967,6 +2970,100 @@ function workerProjectList() {
   });
 }
 
+/* ============ EVIDENCE KLICU ============
+   Ke kazde zakazce par klicu (pocet volitelny). Predava je vedeni nebo
+   ten, kdo klic prave drzi. Prijemce prevzeti potvrzuje, ale predani
+   plati hned — potvrzeni je stvrzenka, ne podminka (Marco 27. 8. 2026).
+   Cela historie predani zustava u klice. */
+function kartaKlice() {
+  const moje = S.klice.filter(k => S.me && k.drzitelId === S.me.id);
+  if (!moje.length) return '';
+  return `<div class="card">
+    <h3>🔑 Klíče u mě (${moje.length})</h3>
+    ${moje.map(k => { const pr = proj(k.pid) || {}; return `
+    <div class="urow" style="align-items:flex-start"><span style="font-size:17px">🔑</span>
+      <div><b>${esc(k.nazev)}</b> · ${esc(pr.name || '')}<br>
+        ${k.potvrzeno ? `<span class="muted">převzetí potvrzeno</span>`
+          : `<span class="badge b-wait">čeká na tvoje potvrzení</span> <span class="lnk" onclick="potvrditKlic('${k.id}')">✓ Mám ho</span>`}
+      </div>
+      <button class="btn ghost sm" style="margin-left:auto;flex:none" onclick="predatKlicDialog('${k.id}')">Předat</button>
+    </div>`; }).join('')}
+    <div class="note">Když klíč někomu dáš, zapiš to hned tlačítkem Předat — ať se ví, kde klíče jsou.</div>
+  </div>`;
+}
+
+function sekceKliceProjektu(p) {
+  const ks = S.klice.filter(k => k.pid === p.id);
+  return `<div class="card">
+    <h3>🔑 Klíče zakázky (${ks.length})</h3>
+    ${ks.map(k => `<div class="urow" style="align-items:flex-start"><span>🔑</span>
+      <div><b>${esc(k.nazev)}</b><br>
+        <span class="muted">drží: <b>${esc(k.drzitelJmeno || '— kancelář')}</b>${k.drzitelJmeno ? (k.potvrzeno ? ' · potvrzeno' : ' · <span style="color:var(--wait)">nepotvrzeno</span>') : ''}</span></div>
+      <span style="margin-left:auto;white-space:nowrap">
+        <button class="btn ghost sm" onclick="predatKlicDialog('${k.id}')">Předat</button>
+        <span class="lnk" style="font-size:12px;margin-left:8px" onclick="historieKlice('${k.id}')">historie</span>
+        <span class="lnk" style="font-size:12px;margin-left:8px" onclick="smazatKlic('${k.id}')">✕</span>
+      </span></div>`).join('') || '<div class="muted">Zatím žádné klíče.</div>'}
+    <div class="aprv"><button class="btn dark sm" onclick="pridatKlic('${p.id}')">➕ Přidat klíč</button></div>
+  </div>`;
+}
+
+async function pridatKlic(pid) {
+  const n = S.klice.filter(k => k.pid === pid).length + 1;
+  const nazev = prompt('Název klíče:', 'Klíč č. ' + n);
+  if (!nazev) return;
+  await db.collection('klice').add({ pid, nazev: nazev.trim(), drzitelId: '', drzitelJmeno: '', potvrzeno: true, historie: [], createdAt: FV() })
+    .then(() => toast('Klíč přidán ✓')).catch(e => toast('Nejde přidat: ' + (e.code || e.message)));
+}
+async function smazatKlic(id) {
+  const k = S.klice.find(x => x.id === id); if (!k) return;
+  if (!confirm('Smazat „' + k.nazev + '" včetně historie předání?')) return;
+  await db.collection('klice').doc(id).delete().catch(e => toast('Nejde smazat: ' + (e.code || e.message)));
+}
+function predatKlicDialog(id) {
+  const k = S.klice.find(x => x.id === id); if (!k) return;
+  modal(`<h3>🔑 Předat ${esc(k.nazev)}</h3>
+    <label>Komu</label>
+    <select id="pk-komu">
+      <option value="">— vyber —</option>
+      ${lideProUkoly().filter(u => u.id !== k.drzitelId).map(u => `<option value="${u.id}">${esc(fullName(u))}</option>`).join('')}
+    </select>
+    <div class="aprv"><button class="btn amber" onclick="predatKlic('${id}')">Předat</button>
+      <button class="btn ghost" onclick="closeModal()">Zrušit</button></div>
+    <div class="note">Předání platí hned. ${esc(k.nazev)} se objeví příjemci v aplikaci a ten potvrdí převzetí.</div>`);
+}
+async function predatKlic(id) {
+  const k = S.klice.find(x => x.id === id); if (!k) return;
+  const komuId = $('#pk-komu').value; if (!komuId) { toast('Vyber, komu klíč předáváš'); return; }
+  const ku = userById(komuId); if (!ku) return;
+  const zapis = { odId: k.drzitelId || '', odJmeno: k.drzitelJmeno || 'kancelář', komuId, komuJmeno: fullName(ku),
+                  date: isoToday(), time: nowTime(), potvrzeno: false };
+  try {
+    await db.collection('klice').doc(id).update({
+      drzitelId: komuId, drzitelJmeno: fullName(ku), potvrzeno: false,
+      historie: firebase.firestore.FieldValue.arrayUnion(zapis)
+    });
+    closeModal(); toast('Předáno — ' + fullName(ku) + ' potvrdí převzetí ✓');
+  } catch (e) { toast('Nejde předat: ' + (e.code || e.message)); }
+}
+async function potvrditKlic(id) {
+  const k = S.klice.find(x => x.id === id); if (!k) return;
+  const h = [...(k.historie || [])];
+  if (h.length) h[h.length - 1] = { ...h[h.length - 1], potvrzeno: true, potvrzenoDate: isoToday(), potvrzenoTime: nowTime() };
+  try { await db.collection('klice').doc(id).update({ potvrzeno: true, historie: h }); toast('Převzetí potvrzeno ✓'); }
+  catch (e) { toast('Nejde potvrdit: ' + (e.code || e.message)); }
+}
+function historieKlice(id) {
+  const k = S.klice.find(x => x.id === id); if (!k) return;
+  const h = [...(k.historie || [])].reverse();
+  modal(`<h3>🔑 ${esc(k.nazev)} — historie předání</h3>
+    ${h.map(z => `<div class="urow" style="align-items:flex-start"><span>${z.potvrzeno ? '✅' : '⏳'}</span>
+      <div><b>${esc(z.odJmeno)}</b> → <b>${esc(z.komuJmeno)}</b><br>
+        <span class="muted">${fmtISO(z.date)} ${z.time}${z.potvrzeno ? ` · potvrzeno ${z.potvrzenoDate ? fmtISO(z.potvrzenoDate) + ' ' + (z.potvrzenoTime || '') : ''}` : ' · zatím nepotvrzeno'}</span></div></div>`).join('')
+      || '<div class="muted">Zatím žádné předání.</div>'}
+    <div class="aprv"><button class="btn dark" onclick="closeModal()">Zavřít</button></div>`);
+}
+
 /* Karta ukolu je spolecna pro pracovnika i subdodavatele — jeden kod,
    jedno chovani, jedna udrzba. */
 function kartaUkoly(p) {
@@ -3081,10 +3178,23 @@ function viewSub() {
       </div>` : ''}
     </div>
     ${kartaUkoly(p)}
+    ${kartaKlice()}
     ${p && (p.stavbaDocs || []).length ? `<div class="card">
       <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— půdorysy, vizualizace</span></h3>
       ${(p.stavbaDocs || []).map(d => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${esc(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('')}
     </div>` : ''}
+    ${(() => {
+      /* prilohy ze zapisu vybrane stavby — sub je potrebuje (revize,
+         protokoly, objednavky), rekl Marco 27. 8. */
+      if (!p) return '';
+      const pril = S.entries.filter(e => e.pid === p.id)
+        .flatMap(e => (e.attachments || []).map((a, i) => ({ ...a, eid: e.id, i, date: e.date })));
+      if (!pril.length) return '';
+      return `<div class="card">
+      <h3>📎 Přílohy ze zápisů <span class="muted" style="font-weight:400">— ${esc(p.name)}</span></h3>
+      ${pril.map(a => `<div class="urow" style="cursor:pointer" onclick="otevritPrilohu('${a.eid}',${a.i})"><span>${(a.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(a.name)}</b><span class="muted" style="margin-left:auto">${fmtISO(a.date)}</span></div>`).join('')}
+      </div>`;
+    })()}
   </main></div></div>`;
 }
 
@@ -3216,6 +3326,7 @@ function viewWorker() {
       ${(p.stavbaDocs || []).map(d => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${esc(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('')}
     </div>` : ''}
     ${kartaUkoly(p)}
+    ${kartaKlice()}
     <div class="card">
       <h3>✍️ Nový zápis do deníku</h3>
       <textarea id="wt" placeholder="Co se dnes dělalo… každá věta = jedna odrážka"></textarea>
