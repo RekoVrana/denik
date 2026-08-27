@@ -175,6 +175,7 @@ const S = {
   view: 'nastenka', nastenkaTab: 'prehled', adminFilter: null, detail: null,
   projDetailId: null, projDetailTab: 'info', newUserType: null, editUserId: null,
   ukolyView: 'seznam', orgFilter: 'vse', taskFormOpen: false, attFormOpen: false, vpFormOpen: false,
+  hlaseni: [], subProject: null, subPocet: 1,
   repWorkers: [], repProjects: [], repLoaded: false, repFrom: isoToday().slice(0, 8) + '01', repTo: isoToday(),
   workerProject: null, draftPhotos: [], draftAtts: [], uploading: 0, signFor: null, tplOpen: false,
   loginMode: 'teren', loginWorker: null,
@@ -321,6 +322,10 @@ function startData() {
      pracovnik pta dvema dotazy (co mam prideleno / co jsem zadal) a vysledky
      se slozi dohromady. */
   if (role === 'admin') listen('tasks', 'tasks', { sort: taskSort });
+  /* Hlaseni subdodavatelu: vedeni vidi vse (v okne), sub jen svoje. */
+  const hlasSort = (a, b) => ((b.date || '') + (b.time || '')).localeCompare((a.date || '') + (a.time || ''));
+  if (role === 'admin') listen('hlaseni', 'hlaseni', { where: [['date', '>=', oknoOd()]], sort: hlasSort });
+  else if (role === 'sub') listen('hlaseni', 'hlaseni', { where: [['authUid', '==', S.authUser.uid]], sort: hlasSort });
   else listenMojeUkoly();
   listen('users', 'users', { sort: (a, b) => (a.prijmeni || '').localeCompare(b.prijmeni || '', 'cs') });
   if (role === 'admin') {
@@ -770,7 +775,7 @@ function render() {
   if (!CONFIGURED) root.innerHTML = viewNotConfigured();
   else if (S.portalToken) root.innerHTML = viewPortal();
   else if (!S.authUser || !S.meAuth) root.innerHTML = viewLogin();
-  else root.innerHTML = (S.meAuth.role === 'admin') ? viewAdmin() : viewWorker();
+  else root.innerHTML = (S.meAuth.role === 'admin') ? viewAdmin() : (S.meAuth.role === 'sub' ? viewSub() : viewWorker());
   vratitFormulare();
   if (S.signFor) setTimeout(sigInit, 0);
   setTimeout(mountMaps, 0);
@@ -1962,8 +1967,22 @@ function pgOrganizace() {
     <div class="t ${f === 'vse' ? 'active' : ''}" onclick="S.orgFilter='vse';render()">🗂 Všechny záznamy</div>
     <div class="t ${f === 'gps' ? 'active' : ''}" onclick="S.orgFilter='gps';render()">📍 Podezřelá GPS (${S.attendance.filter(a => a.gps > TOL).length})</div>
     <div class="t ${f === 'schvalit' ? 'active' : ''}" onclick="S.orgFilter='schvalit';render()">⏳ Ke schválení (${cekaNaSchvaleni().length})</div>
+    <div class="t ${f === 'subi' ? 'active' : ''}" onclick="S.orgFilter='subi';render()">🧰 Subdodavatelé (${S.hlaseni.length})</div>
   </div>
-  <main>
+  ${f === 'subi' ? `<main>
+    <div class="tablecard"><table>
+      <tr><th>Datum</th><th>Čas</th><th>Subdodavatel</th><th>Stavba</th><th>Lidí</th><th>Činnost</th><th></th></tr>
+      ${S.hlaseni.map(h => `<tr>
+        <td>${fmtISO(h.date)}</td><td>${h.time || ''}</td>
+        <td><span class="uav" style="margin-right:6px">${ini(userById(h.userDocId) || { jmeno: h.userName })}</span>${esc(h.userName || '')}</td>
+        <td>${esc((proj(h.pid) || {}).name || '')}</td>
+        <td style="text-align:center"><b>${h.pocet || 1}</b></td>
+        <td>${esc(h.cinnost || '')}</td>
+        <td><span class="lnk" onclick="subSmazatHlaseni('${h.id}')">✕</span></td>
+      </tr>`).join('') || '<tr><td colspan="7"><div class="empty">Zatím žádná hlášení. Subdodavatelé je zapisují ve svém vchodu.</div></td></tr>'}
+    </table></div>
+    <div class="note">Hlášení přítomnosti od subdodavatelů — kdo, kde, s kolika lidmi a co dělali. Podklad pro měsíční kontrolu fakturace. Hodiny se z nich nepočítají.</div>
+  </main>` : `<main>
     ${cekajiciZadosti().length ? `
     <div class="card" style="border:2px solid var(--amber)">
       <h3>🕗 Žádosti od party — doplnění zapomenutého odchodu (${cekajiciZadosti().length})</h3>
@@ -2037,7 +2056,7 @@ function pgOrganizace() {
       <div class="pagefoot"><span>${rows.length} záznamů</span></div>
     </div>
     <div class="note">GPS nad povolenou odchylku (${TOL} m) se flaguje ⚠. Záznam jde <b>✏️ opravit</b> nebo <b>🗑 smazat</b> — u opravy se uloží kdo, kdy a proč, ať je to při sporu o výplatu dohledatelné. Měsíční kontrola hodin Ruslana (#25) = záložka Reporty.</div>
-  </main>`;
+  </main>`}`;
 }
 /* POZOR na authUid: rozhoduje o tom, komu se zaznam v mobilu ZOBRAZI.
    Drive se sem psalo uid toho, kdo zaznam pridal (tedy vedeni), takze oprava
@@ -2939,6 +2958,140 @@ function workerProjectList() {
   });
 }
 
+/* Karta ukolu je spolecna pro pracovnika i subdodavatele — jeden kod,
+   jedno chovani, jedna udrzba. */
+function kartaUkoly(p) {
+  const myTasks = S.tasks.filter(t => t.stav !== 'hotovo' && t.stav !== 'sablona' && jeMuj(t));
+  const ut = S.ukolTab || 'moje';
+  /* Dnes odskrtnute — zustavaji videt do konce dne, at jde omyl vzit zpet. */
+  const hotoveDnes = S.tasks.filter(t => t.stav === 'hotovo' && t.hotovoDne === isoToday() && jeMuj(t));
+  /* Co jsem zadal nekomu jinemu — vlastni ukoly uz jsou o kus vys. */
+  const zadaneMnou = S.tasks.filter(t => t.stav !== 'hotovo' && t.stav !== 'sablona'
+    && S.me && t.zadalId === S.me.id && t.respId !== S.me.id);
+  return `    <div class="card">
+      <div class="ukhead">
+        <h3 style="margin:0;flex:1">📌 Úkoly</h3>
+        <button class="btn ${S.wtaskOpen ? 'ghost' : 'dark'} sm" onclick="S.wtaskOpen=!S.wtaskOpen;render()">${S.wtaskOpen ? '✕ Zavřít' : '＋ Zadat'}</button>
+      </div>
+      ${S.wtaskOpen ? `
+      <div class="ukform">
+        <label>Co je potřeba udělat *</label>
+        <input type="text" id="wtk-t" placeholder="Dovézt lepidlo na obklady">
+        <div class="frow">
+          <div><label>Komu</label>
+            <select id="wtk-r">
+              <option value="">— vyber, komu —</option>
+              ${S.me ? `<option value="${S.me.id}">🙋 Já sám (${esc(fullName(S.me))})</option>` : ''}
+              ${lideProUkoly().filter(u => !S.me || u.id !== S.me.id).map(u => `<option value="${u.id}">${esc(fullName(u))}</option>`).join('')}
+            </select></div>
+          <div><label>Termín</label><input type="date" id="wtk-d" value="${shiftISO(isoToday(), 3)}"></div>
+        </div>
+        <label>Stavba</label>
+        <select id="wtk-p">${S.projects.filter(x => x.active !== false).map(x => `<option value="${x.id}" ${p && x.id === p.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+        <div class="aprv"><button class="btn amber" onclick="workerAddTask()">➕ Zadat úkol</button></div>
+      </div>` : ''}
+      <div class="uktabs">
+        <div class="t ${ut === 'moje' ? 'active' : ''}" onclick="S.ukolTab='moje';render()">Moje${myTasks.length ? ' · ' + myTasks.length : ''}</div>
+        <div class="t ${ut === 'zadal' ? 'active' : ''}" onclick="S.ukolTab='zadal';render()">Zadal jsem${zadaneMnou.length ? ' · ' + zadaneMnou.length : ''}</div>
+      </div>
+      ${ut === 'moje' ? `<div class="uk">
+        ${myTasks.map(t => `<div class="ukol ${ukolNaleh(t)}">
+          <span class="bx" onclick="taskDone('${t.id}')" title="Označit jako hotové"></span>
+          <div><div class="tt">${esc(t.title)}</div>
+            <div class="mt">${terminChip(t)}<span>🏗 ${esc((proj(t.pid) || {}).name || '')}</span>${t.zadal ? `<span>👤 ${esc(t.zadal)}</span>` : ''}${S.me && t.zadalId === S.me.id ? `<span class="lnk" style="margin-left:auto" onclick="event.stopPropagation();smazatMujUkol('${t.id}')">✕ zrušit</span>` : ''}</div>
+          </div></div>`).join('')}
+        ${hotoveDnes.map(t => `<div class="ukol hot">
+          <span class="bx on" onclick="taskDone('${t.id}')" title="Vrátit mezi nehotové">✓</span>
+          <div><div class="tt">${esc(t.title)}</div><div class="mt"><span>Hotovo dnes — ťuknutím vrátíš</span></div></div></div>`).join('')}
+        ${(!myTasks.length && !hotoveDnes.length) ? '<div class="empty">Žádné úkoly. Můžeš dělat svoje. 👍</div>' : ''}
+      </div>` : `<div class="uk">
+        ${zadaneMnou.map(t => `<div class="ukol ${ukolNaleh(t)}">
+          <span class="uav">${ini(userById(t.respId) || { jmeno: t.resp || '?', prijmeni: '' })}</span>
+          <div><div class="tt">${esc(t.title)}</div>
+            <div class="mt">${terminChip(t)}<span class="badge ${STAVCOLOR[t.stav] || 'b-int'}">${STAVY[t.stav] || t.stav}</span><span>${esc(t.resp || 'nikomu')}</span>
+              <span class="lnk" style="margin-left:auto" onclick="smazatMujUkol('${t.id}')">✕ zrušit</span></div>
+          </div></div>`).join('')}
+        ${!zadaneMnou.length ? '<div class="empty">Zatím jsi nikomu nic nezadal.</div>' : ''}
+      </div>`}
+    </div>`;
+}
+
+/* ============ VCHOD SUBDODAVATELE ============
+   Sub NEPICHA hodiny — fakturuje praci podle smlouvy. Misto dochazky hlasi
+   pritomnost: na ktere stavbe je, s kolika lidmi a co tam delaji. Vedeni
+   tim dostane zaznam pro mesicni kontrolu (drive pres Stavario). K tomu
+   ukoly, fotky ke schvaleni a podklady stavby. Zadal Marco 27. 8. 2026. */
+function viewSub() {
+  const p = proj(S.subProject);
+  const dnesni = S.hlaseni.filter(h => h.date === isoToday());
+  return topbar() + `<div class="shell"><div class="content">
+  <div class="strip"><h1>Můj den na stavbě</h1><span class="sp"></span><span class="muted">${fmtISOFull(isoToday())}</span></div>
+  <main>
+    <div class="card">
+      <h3>🧰 Hlášení přítomnosti</h3>
+      <label>Stavba *</label>
+      <select id="sh-p" onchange="S.subProject=this.value;render()">
+        <option value="">— vyber stavbu —</option>
+        ${S.projects.filter(x => x.active !== false).map(x => `<option value="${x.id}" ${S.subProject === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
+      </select>
+      <div class="frow">
+        <div><label>Kolik vás tu je (i s tebou)</label><input type="number" id="sh-n" min="1" max="30" value="${S.subPocet || 1}"></div>
+      </div>
+      <label>Co tu dnes děláte *</label>
+      <input type="text" id="sh-c" placeholder="Rozvody vody v koupelně, 2. patro" onkeydown="if(event.key==='Enter')subZapsatHlaseni()">
+      <div class="aprv"><button class="btn amber velke" onclick="subZapsatHlaseni()">✅ ZAPSAT PŘÍTOMNOST</button></div>
+      ${dnesni.length ? `<div style="margin-top:10px">
+        ${dnesni.map(h => `<div class="urow"><span>✅</span><div><b>${esc((proj(h.pid) || {}).name || '')}</b><br>
+          <span class="muted">${esc(h.cinnost)} · ${h.pocet} ${h.pocet === 1 ? 'člověk' : h.pocet <= 4 ? 'lidi' : 'lidí'} · ${h.time || ''}</span></div>
+          <span class="lnk" style="margin-left:auto" onclick="subSmazatHlaseni('${h.id}')">✕</span></div>`).join('')}
+      </div>` : ''}
+      <div class="note">Hlášení vidí vedení — je to záznam pro kontrolu, hodiny ti z něj nevznikají. Fakturuješ podle smlouvy.</div>
+    </div>
+    ${kartaUkoly(p)}
+    <div class="card">
+      <h3>📷 Fotky ze stavby</h3>
+      ${!p ? '<div class="muted">Nejdřív nahoře vyber stavbu.</div>' : `
+      <input type="file" accept="image/*" capture="environment" multiple onchange="processPhotos(this.files)">
+      <div class="photos">${S.draftPhotos.map((ph, i) => `<div class="ph"><img src="${ph.thumb}"><span class="del" onclick="S.draftPhotos.splice(${i},1);render()">✕</span><small>${esc(ph.label || '')}</small></div>`).join('')}</div>
+      ${S.draftPhotos.length ? `<div class="aprv"><button class="btn amber" onclick="subOdeslatFotky()">📤 ODESLAT FOTKY (${S.draftPhotos.length})</button></div>` : ''}
+      <div class="note">Fotky jdou vedení ke schválení a uloží se do složky zakázky na Drive.</div>`}
+    </div>
+    ${p && (p.stavbaDocs || []).length ? `<div class="card">
+      <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— půdorysy, vizualizace</span></h3>
+      ${(p.stavbaDocs || []).map(d => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${esc(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('')}
+    </div>` : ''}
+  </main></div></div>`;
+}
+
+async function subZapsatHlaseni() {
+  const pid = $('#sh-p').value, n = Math.max(1, parseInt($('#sh-n').value) || 1), c = $('#sh-c').value.trim();
+  if (!pid) { toast('Vyber stavbu'); return; }
+  if (!c) { toast('Napiš, co tu dnes děláte'); return; }
+  S.subProject = pid; S.subPocet = n;
+  try {
+    await db.collection('hlaseni').add({
+      userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid,
+      pid, date: isoToday(), time: nowTime(), pocet: n, cinnost: c, createdAt: FV()
+    });
+    $('#sh-c').value = '';
+    toast('Přítomnost zapsána ✓'); render();
+  } catch (e) { toast('Nepovedlo se zapsat: ' + (e.code || e.message)); }
+}
+async function subSmazatHlaseni(id) {
+  const h = S.hlaseni.find(x => x.id === id); if (!h) return;
+  if (!confirm('Smazat dnešní hlášení?')) return;
+  try { await db.collection('hlaseni').doc(id).delete(); toast('Smazáno ✓'); }
+  catch (e) { toast('Nejde smazat: ' + (e.code || e.message)); }
+}
+async function subOdeslatFotky() {
+  if (!S.subProject) { toast('Vyber stavbu'); return; }
+  if (!S.draftPhotos.length) return;
+  /* addEntry vyrobi cekajici zapis "jen fotodokumentace" — stejna cesta
+     jako fotky od party: schvaleni, fronta na Drive, stredni nahledy. */
+  await addEntry(S.subProject, fullName(S.me || {}), '', null);
+  toast('Fotky odeslány vedení ke schválení ✓'); render();
+}
+
 function viewWorker() {
   ensureMyPos();
   const sm = mojeSmena();
@@ -2953,13 +3106,6 @@ function viewWorker() {
   const myEntries = p ? entriesOf(p.id).slice(0, 8) : [];
   const myAtt = S.attendance.filter(a => a.date === isoToday());
   const lastAct = myAtt[0];
-  const myTasks = S.tasks.filter(t => t.stav !== 'hotovo' && t.stav !== 'sablona' && jeMuj(t));
-  const ut = S.ukolTab || 'moje';
-  /* Dnes odskrtnute — zustavaji videt do konce dne, at jde omyl vzit zpet. */
-  const hotoveDnes = S.tasks.filter(t => t.stav === 'hotovo' && t.hotovoDne === isoToday() && jeMuj(t));
-  /* Co jsem zadal nekomu jinemu — vlastni ukoly uz jsou o kus vys. */
-  const zadaneMnou = S.tasks.filter(t => t.stav !== 'hotovo' && t.stav !== 'sablona'
-    && S.me && t.zadalId === S.me.id && t.respId !== S.me.id);
   return topbar() + `<div class="shell"><div class="content">
   <div class="strip"><h1>Můj den na stavbě</h1><span class="sp"></span><span class="muted">${fmtISOFull(isoToday())}</span></div>
   <main class="mobilewrap">
@@ -3027,52 +3173,7 @@ function viewWorker() {
       <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— půdorysy, vizualizace</span></h3>
       ${(p.stavbaDocs || []).map(d => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${esc(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('')}
     </div>` : ''}
-    <div class="card">
-      <div class="ukhead">
-        <h3 style="margin:0;flex:1">📌 Úkoly</h3>
-        <button class="btn ${S.wtaskOpen ? 'ghost' : 'dark'} sm" onclick="S.wtaskOpen=!S.wtaskOpen;render()">${S.wtaskOpen ? '✕ Zavřít' : '＋ Zadat'}</button>
-      </div>
-      ${S.wtaskOpen ? `
-      <div class="ukform">
-        <label>Co je potřeba udělat *</label>
-        <input type="text" id="wtk-t" placeholder="Dovézt lepidlo na obklady">
-        <div class="frow">
-          <div><label>Komu</label>
-            <select id="wtk-r">
-              <option value="">— vyber, komu —</option>
-              ${S.me ? `<option value="${S.me.id}">🙋 Já sám (${esc(fullName(S.me))})</option>` : ''}
-              ${lideProUkoly().filter(u => !S.me || u.id !== S.me.id).map(u => `<option value="${u.id}">${esc(fullName(u))}</option>`).join('')}
-            </select></div>
-          <div><label>Termín</label><input type="date" id="wtk-d" value="${shiftISO(isoToday(), 3)}"></div>
-        </div>
-        <label>Stavba</label>
-        <select id="wtk-p">${S.projects.filter(x => x.active !== false).map(x => `<option value="${x.id}" ${p && x.id === p.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
-        <div class="aprv"><button class="btn amber" onclick="workerAddTask()">➕ Zadat úkol</button></div>
-      </div>` : ''}
-      <div class="uktabs">
-        <div class="t ${ut === 'moje' ? 'active' : ''}" onclick="S.ukolTab='moje';render()">Moje${myTasks.length ? ' · ' + myTasks.length : ''}</div>
-        <div class="t ${ut === 'zadal' ? 'active' : ''}" onclick="S.ukolTab='zadal';render()">Zadal jsem${zadaneMnou.length ? ' · ' + zadaneMnou.length : ''}</div>
-      </div>
-      ${ut === 'moje' ? `<div class="uk">
-        ${myTasks.map(t => `<div class="ukol ${ukolNaleh(t)}">
-          <span class="bx" onclick="taskDone('${t.id}')" title="Označit jako hotové"></span>
-          <div><div class="tt">${esc(t.title)}</div>
-            <div class="mt">${terminChip(t)}<span>🏗 ${esc((proj(t.pid) || {}).name || '')}</span>${t.zadal ? `<span>👤 ${esc(t.zadal)}</span>` : ''}${S.me && t.zadalId === S.me.id ? `<span class="lnk" style="margin-left:auto" onclick="event.stopPropagation();smazatMujUkol('${t.id}')">✕ zrušit</span>` : ''}</div>
-          </div></div>`).join('')}
-        ${hotoveDnes.map(t => `<div class="ukol hot">
-          <span class="bx on" onclick="taskDone('${t.id}')" title="Vrátit mezi nehotové">✓</span>
-          <div><div class="tt">${esc(t.title)}</div><div class="mt"><span>Hotovo dnes — ťuknutím vrátíš</span></div></div></div>`).join('')}
-        ${(!myTasks.length && !hotoveDnes.length) ? '<div class="empty">Žádné úkoly. Můžeš dělat svoje. 👍</div>' : ''}
-      </div>` : `<div class="uk">
-        ${zadaneMnou.map(t => `<div class="ukol ${ukolNaleh(t)}">
-          <span class="uav">${ini(userById(t.respId) || { jmeno: t.resp || '?', prijmeni: '' })}</span>
-          <div><div class="tt">${esc(t.title)}</div>
-            <div class="mt">${terminChip(t)}<span class="badge ${STAVCOLOR[t.stav] || 'b-int'}">${STAVY[t.stav] || t.stav}</span><span>${esc(t.resp || 'nikomu')}</span>
-              <span class="lnk" style="margin-left:auto" onclick="smazatMujUkol('${t.id}')">✕ zrušit</span></div>
-          </div></div>`).join('')}
-        ${!zadaneMnou.length ? '<div class="empty">Zatím jsi nikomu nic nezadal.</div>' : ''}
-      </div>`}
-    </div>
+    ${kartaUkoly(p)}
     <div class="card">
       <h3>✍️ Nový zápis do deníku</h3>
       <textarea id="wt" placeholder="Co se dnes dělalo… každá věta = jedna odrážka"></textarea>

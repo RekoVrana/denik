@@ -16,6 +16,9 @@
 //   6) NOVA kolekce /fotonahledy — stredni nahledy fotek pro partu
 //      (Drive je soukromy, bez uctu Google se fotky neotevrou).
 //
+//   7) NOVA kolekce /hlaseni — pritomnost subdodavatelu (stavba, pocet
+//      lidi, cinnost). Neni to dochazka, hodiny se z ni nepocitaji.
+//
 //  Poslední změny 23. 8. 2026:
 //   4) OPRAVA ZÁLOHY: sekce /dashboard tady měla 'if false', ale ostrá
 //      verze má 'if isAdmin()' (změněno v konzoli 23. 8. v 8:40 a do téhle
@@ -112,6 +115,16 @@ service cloud.firestore {
       // zrusit ukol smi vedeni a ten, kdo ho zadal — ne ten, kdo ho dostal
       allow delete: if isAdmin()
         || (hasRole() && resource.data.zadalId == mujDocId());
+    }
+
+    // Hlaseni pritomnosti subdodavatelu: "jsem na stavbe X s N lidmi
+    // a delame Y". NENI to dochazka — hodiny se z toho nepocitaji, sub
+    // fakturuje podle smlouvy. Vedeni vidi vse, sub jen svoje.
+    match /hlaseni/{id} {
+      allow read: if isAdmin() || (hasRole() && resource.data.authUid == request.auth.uid);
+      allow create: if hasRole() && request.resource.data.authUid == request.auth.uid;
+      allow update: if false;
+      allow delete: if isAdmin() || (hasRole() && resource.data.authUid == request.auth.uid);
     }
 
     // Stredni nahledy fotek (~1100 px) — parta si fotku prohledne primo
