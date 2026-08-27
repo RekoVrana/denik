@@ -3011,7 +3011,11 @@ function viewWorker() {
         <input type="text" id="wtk-t" placeholder="Dovézt lepidlo na obklady">
         <div class="frow">
           <div><label>Komu</label>
-            <select id="wtk-r">${lideProUkoly().map(u => `<option value="${u.id}" ${S.me && u.id === S.me.id ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}</select></div>
+            <select id="wtk-r">
+              <option value="">— vyber, komu —</option>
+              ${S.me ? `<option value="${S.me.id}">🙋 Já sám (${esc(fullName(S.me))})</option>` : ''}
+              ${lideProUkoly().filter(u => !S.me || u.id !== S.me.id).map(u => `<option value="${u.id}">${esc(fullName(u))}</option>`).join('')}
+            </select></div>
           <div><label>Termín</label><input type="date" id="wtk-d" value="${shiftISO(isoToday(), 3)}"></div>
         </div>
         <label>Stavba</label>
@@ -3026,7 +3030,7 @@ function viewWorker() {
         ${myTasks.map(t => `<div class="ukol ${ukolNaleh(t)}">
           <span class="bx" onclick="taskDone('${t.id}')" title="Označit jako hotové"></span>
           <div><div class="tt">${esc(t.title)}</div>
-            <div class="mt">${terminChip(t)}<span>🏗 ${esc((proj(t.pid) || {}).name || '')}</span>${t.zadal ? `<span>👤 ${esc(t.zadal)}</span>` : ''}</div>
+            <div class="mt">${terminChip(t)}<span>🏗 ${esc((proj(t.pid) || {}).name || '')}</span>${t.zadal ? `<span>👤 ${esc(t.zadal)}</span>` : ''}${S.me && t.zadalId === S.me.id ? `<span class="lnk" style="margin-left:auto" onclick="event.stopPropagation();smazatMujUkol('${t.id}')">✕ zrušit</span>` : ''}</div>
           </div></div>`).join('')}
         ${hotoveDnes.map(t => `<div class="ukol hot">
           <span class="bx on" onclick="taskDone('${t.id}')" title="Vrátit mezi nehotové">✓</span>
@@ -3208,6 +3212,9 @@ async function workerAddTask() {
   const title = $('#wtk-t').value.trim();
   if (!title) { toast('Napiš, co je potřeba udělat'); return; }
   const respId = $('#wtk-r').value, ru = userById(respId);
+  /* Drive bylo policko predvyplnene na sebe, takze kdo ho preskocil, zadal
+     ukol tise sam sobe a pak ho hledal v "Zadal jsem". Ted se musi vybrat. */
+  if (!respId) { toast('Vyber, komu úkol patří'); return; }
   try {
     await db.collection('tasks').add({
       title, zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}),
@@ -3215,7 +3222,12 @@ async function workerAddTask() {
       created: isoToday(), term: $('#wtk-d').value || shiftISO(isoToday(), 3),
       stav: 'nove', res: ru ? [fullName(ru)] : [], createdAt: FV()
     });
-    S.wtaskOpen = false; toast('Úkol zadán ✓'); render();
+    /* Skocit na zalozku, kde ukol doopravdy skoncil — at ho clovek nehleda. */
+    const sobe = S.me && respId === S.me.id;
+    S.ukolTab = sobe ? 'moje' : 'zadal';
+    S.wtaskOpen = false;
+    toast(sobe ? 'Úkol přidán mezi tvoje ✓' : 'Úkol zadán — ' + (ru ? fullName(ru) : '') + ' ✓');
+    render();
   } catch (e) { toast('Nepovedlo se zadat: ' + (e.code || e.message)); }
 }
 
