@@ -123,7 +123,8 @@ service cloud.firestore {
     match /hlaseni/{id} {
       allow read: if isAdmin() || (hasRole() && resource.data.authUid == request.auth.uid);
       allow create: if hasRole() && request.resource.data.authUid == request.auth.uid;
-      allow update: if false;
+      // odchod: sub dopisuje do vlastniho hlaseni cas a zaznam
+      allow update: if isAdmin() || (hasRole() && resource.data.authUid == request.auth.uid);
       allow delete: if isAdmin() || (hasRole() && resource.data.authUid == request.auth.uid);
     }
 

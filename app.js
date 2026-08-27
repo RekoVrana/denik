@@ -180,7 +180,7 @@ const S = {
   view: 'nastenka', nastenkaTab: 'prehled', adminFilter: null, detail: null,
   projDetailId: null, projDetailTab: 'info', newUserType: null, editUserId: null,
   ukolyView: 'seznam', orgFilter: 'vse', taskFormOpen: false, attFormOpen: false, vpFormOpen: false,
-  hlaseni: [], subProject: null, subPocet: 1,
+  hlaseni: [], subProject: null, subPocet: 1, subOdchodOpen: false, subZaznam: '',
   repWorkers: [], repProjects: [], repLoaded: false, repFrom: isoToday().slice(0, 8) + '01', repTo: isoToday(),
   workerProject: null, draftPhotos: [], draftAtts: [], uploading: 0, signFor: null, tplOpen: false,
   loginMode: 'teren', loginWorker: null,
@@ -1978,13 +1978,15 @@ function pgOrganizace() {
   </div>
   ${f === 'subi' ? `<main>
     <div class="tablecard"><table>
-      <tr><th>Datum</th><th>Čas</th><th>Subdodavatel</th><th>Stavba</th><th>Lidí</th><th>Činnost</th><th></th></tr>
+      <tr><th>Datum</th><th>Příchod</th><th>Odchod</th><th>Doba</th><th>Subdodavatel</th><th>Stavba</th><th>Lidí</th><th>Činnost</th><th></th></tr>
       ${S.hlaseni.map(h => `<tr>
-        <td>${fmtISO(h.date)}</td><td>${h.time || ''}</td>
+        <td>${fmtISO(h.date)}</td><td>${h.prichod || h.time || ''}</td>
+        <td>${h.odchod || '<span class="badge b-wait">na stavbě</span>'}</td>
+        <td>${h.odchod ? dobaText(h.prichod || h.time, h.odchod) : (h.date === isoToday() ? dobaText(h.prichod || h.time) + '…' : '<b style="color:var(--red)">bez odchodu</b>')}</td>
         <td><span class="uav" style="margin-right:6px">${ini(userById(h.userDocId) || { jmeno: h.userName })}</span>${esc(h.userName || '')}</td>
         <td>${esc((proj(h.pid) || {}).name || '')}</td>
         <td style="text-align:center"><b>${h.pocet || 1}</b></td>
-        <td>${esc(h.cinnost || '')}</td>
+        <td>${esc(h.cinnost || '')}${h.zaznam ? `<br><span class="muted" title="${esc(h.zaznam)}">📝 ${esc(h.zaznam.slice(0, 60))}${h.zaznam.length > 60 ? '…' : ''}</span>` : ''}</td>
         <td><span class="lnk" onclick="subSmazatHlaseni('${h.id}')">✕</span></td>
       </tr>`).join('') || '<tr><td colspan="7"><div class="empty">Zatím žádná hlášení. Subdodavatelé je zapisují ve svém vchodu.</div></td></tr>'}
     </table></div>
@@ -3024,45 +3026,61 @@ function kartaUkoly(p) {
 }
 
 /* ============ VCHOD SUBDODAVATELE ============
-   Sub NEPICHA hodiny — fakturuje praci podle smlouvy. Misto dochazky hlasi
-   pritomnost: na ktere stavbe je, s kolika lidmi a co tam delaji. Vedeni
-   tim dostane zaznam pro mesicni kontrolu (drive pres Stavario). K tomu
-   ukoly, fotky ke schvaleni a podklady stavby. Zadal Marco 27. 8. 2026. */
+   Sub NEPICHA hodiny — fakturuje praci podle smlouvy. Hlasi ale navstevu
+   stavby s prichodem a odchodem, aby vedeni videlo, jak dlouho tam byl:
+   - PRICHOD: stavba + kolik jich je + co tam budou delat
+   - ODCHOD: vyzva k sepsani zaznamu a nahrani fotek toho, co udelali;
+     zaznam jde do deniku ke schvaleni jako kazdy jiny zapis.
+   Zadal Marco 27. 8. 2026 (upresneno tehoz dne vecer). */
 function viewSub() {
-  const p = proj(S.subProject);
-  const dnesni = S.hlaseni.filter(h => h.date === isoToday());
+  const otevrena = S.hlaseni.find(h => h.date === isoToday() && !h.odchod);
+  const hotoveDnesNav = S.hlaseni.filter(h => h.date === isoToday() && h.odchod);
+  const p = proj(otevrena ? otevrena.pid : S.subProject);
   return topbar() + `<div class="shell"><div class="content">
   <div class="strip"><h1>Můj den na stavbě</h1><span class="sp"></span><span class="muted">${fmtISOFull(isoToday())}</span></div>
   <main class="mobilewrap">
     <div class="card">
-      <h3>🧰 Hlášení přítomnosti</h3>
-      <label>Stavba *</label>
-      <select id="sh-p" onchange="S.subProject=this.value;render()">
-        <option value="">— vyber stavbu —</option>
-        ${S.projects.filter(x => x.active !== false).map(x => `<option value="${x.id}" ${S.subProject === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
-      </select>
-      <div class="frow">
-        <div><label>Kolik vás tu je (i s tebou)</label><input type="number" id="sh-n" min="1" max="30" value="${S.subPocet || 1}"></div>
-      </div>
-      <label>Co tu dnes děláte *</label>
-      <input type="text" id="sh-c" placeholder="Rozvody vody v koupelně, 2. patro" onkeydown="if(event.key==='Enter')subZapsatHlaseni()">
-      <div class="aprv"><button class="btn amber velke" onclick="subZapsatHlaseni()">✅ ZAPSAT PŘÍTOMNOST</button></div>
-      ${dnesni.length ? `<div style="margin-top:10px">
-        ${dnesni.map(h => `<div class="urow"><span>✅</span><div><b>${esc((proj(h.pid) || {}).name || '')}</b><br>
-          <span class="muted">${esc(h.cinnost)} · ${h.pocet} ${h.pocet === 1 ? 'člověk' : h.pocet <= 4 ? 'lidi' : 'lidí'} · ${h.time || ''}</span></div>
+      <h3>🧰 ${otevrena ? 'Jsem na stavbě' : 'Příchod na stavbu'}</h3>
+      ${otevrena ? `
+        <div class="urow" style="align-items:flex-start"><span style="font-size:19px">🏗</span>
+          <div><b>${esc((proj(otevrena.pid) || {}).name || '')}</b><br>
+            <span class="muted">od ${otevrena.prichod || otevrena.time || ''} · ${otevrena.pocet} ${otevrena.pocet === 1 ? 'člověk' : otevrena.pocet <= 4 ? 'lidi' : 'lidí'} · ${esc(otevrena.cinnost || '')}</span><br>
+            <b style="color:var(--ok)">Na stavbě ${dobaText(otevrena.prichod || otevrena.time)}</b></div></div>
+        ${S.subOdchodOpen ? `
+        <div class="ukform" style="margin-top:10px">
+          <label>Co jste dnes udělali? *</label>
+          <textarea id="so-z" placeholder="Rozvody vody v koupelně hotové, zbývá napojit pračku…">${esc(S.subZaznam || '')}</textarea>
+          <label>Fotky toho, co jste udělali</label>
+          <input type="file" accept="image/*" capture="environment" multiple onchange="S.subZaznam=document.querySelector('#so-z').value;processPhotos(this.files)">
+          <div class="photos">${S.draftPhotos.map((ph, i) => `<div class="ph"><img src="${ph.thumb}"><span class="del" onclick="S.draftPhotos.splice(${i},1);render()">✕</span></div>`).join('')}</div>
+          <div class="aprv">
+            <button class="btn amber velke" onclick="subOdchod()">🏁 ODESLAT A ZAPSAT ODCHOD</button>
+            <button class="btn ghost" onclick="S.subOdchodOpen=false;render()">Zpět</button>
+          </div>
+          <div class="note">Záznam s fotkami jde vedení ke schválení — jako zápis do deníku.</div>
+        </div>` : `
+        <div class="aprv" style="margin-top:10px"><button class="btn dark velke" onclick="S.subOdchodOpen=true;render()">🏁 ZAPSAT ODCHOD</button></div>
+        <div class="note">Při odchodu tě to vyzve sepsat, co jste udělali, a přidat fotky.</div>`}
+      ` : `
+        <label>Stavba *</label>
+        <select id="sh-p" onchange="S.subProject=this.value;render()">
+          <option value="">— vyber stavbu —</option>
+          ${S.projects.filter(x => x.active !== false).map(x => `<option value="${x.id}" ${S.subProject === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
+        </select>
+        <div class="frow">
+          <div><label>Kolik vás tu je (i s tebou)</label><input type="number" id="sh-n" min="1" max="30" value="${S.subPocet || 1}"></div>
+        </div>
+        <label>Co tu dnes budete dělat? *</label>
+        <input type="text" id="sh-c" placeholder="Rozvody vody v koupelně, 2. patro" onkeydown="if(event.key==='Enter')subPrichod()">
+        <div class="aprv"><button class="btn amber velke" onclick="subPrichod()">✅ ZAPSAT PŘÍCHOD</button></div>
+        <div class="note">Hlášení vidí vedení — je to záznam pro kontrolu, hodiny se z něj nepočítají. Fakturuješ podle smlouvy.</div>`}
+      ${hotoveDnesNav.length ? `<div style="margin-top:10px">
+        ${hotoveDnesNav.map(h => `<div class="urow"><span>✅</span><div><b>${esc((proj(h.pid) || {}).name || '')}</b><br>
+          <span class="muted">${h.prichod || h.time || ''}–${h.odchod} (${dobaText(h.prichod || h.time, h.odchod)}) · ${h.pocet} lidí · ${esc(h.cinnost || '')}</span></div>
           <span class="lnk" style="margin-left:auto" onclick="subSmazatHlaseni('${h.id}')">✕</span></div>`).join('')}
       </div>` : ''}
-      <div class="note">Hlášení vidí vedení — je to záznam pro kontrolu, hodiny ti z něj nevznikají. Fakturuješ podle smlouvy.</div>
     </div>
     ${kartaUkoly(p)}
-    <div class="card">
-      <h3>📷 Fotky ze stavby</h3>
-      ${!p ? '<div class="muted">Nejdřív nahoře vyber stavbu.</div>' : `
-      <input type="file" accept="image/*" capture="environment" multiple onchange="processPhotos(this.files)">
-      <div class="photos">${S.draftPhotos.map((ph, i) => `<div class="ph"><img src="${ph.thumb}"><span class="del" onclick="S.draftPhotos.splice(${i},1);render()">✕</span><small>${esc(ph.label || '')}</small></div>`).join('')}</div>
-      ${S.draftPhotos.length ? `<div class="aprv"><button class="btn amber" onclick="subOdeslatFotky()">📤 ODESLAT FOTKY (${S.draftPhotos.length})</button></div>` : ''}
-      <div class="note">Fotky jdou vedení ke schválení a uloží se do složky zakázky na Drive.</div>`}
-    </div>
     ${p && (p.stavbaDocs || []).length ? `<div class="card">
       <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— půdorysy, vizualizace</span></h3>
       ${(p.stavbaDocs || []).map(d => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${esc(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('')}
@@ -3070,33 +3088,50 @@ function viewSub() {
   </main></div></div>`;
 }
 
-async function subZapsatHlaseni() {
+/* Doba mezi dvema casy "HH:MM" jako lidsky text. Bez odchodu se meri do ted. */
+function dobaText(od, do_) {
+  if (!od) return '';
+  const [oh, om] = od.split(':').map(Number);
+  let kh, km;
+  if (do_) { [kh, km] = do_.split(':').map(Number); }
+  else { const d = new Date(); kh = d.getHours(); km = d.getMinutes(); }
+  let min = (kh * 60 + km) - (oh * 60 + om);
+  if (min < 0) min = 0;
+  return Math.floor(min / 60) + ' h ' + String(min % 60).padStart(2, '0') + ' min';
+}
+
+async function subPrichod() {
   const pid = $('#sh-p').value, n = Math.max(1, parseInt($('#sh-n').value) || 1), c = $('#sh-c').value.trim();
   if (!pid) { toast('Vyber stavbu'); return; }
-  if (!c) { toast('Napiš, co tu dnes děláte'); return; }
+  if (!c) { toast('Napiš, co tu dnes budete dělat'); return; }
   S.subProject = pid; S.subPocet = n;
   try {
     await db.collection('hlaseni').add({
       userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid,
-      pid, date: isoToday(), time: nowTime(), pocet: n, cinnost: c, createdAt: FV()
+      pid, date: isoToday(), prichod: nowTime(), odchod: null, pocet: n, cinnost: c, createdAt: FV()
     });
-    $('#sh-c').value = '';
-    toast('Přítomnost zapsána ✓'); render();
+    toast('Příchod zapsán ✓'); render();
   } catch (e) { toast('Nepovedlo se zapsat: ' + (e.code || e.message)); }
+}
+
+async function subOdchod() {
+  const otevrena = S.hlaseni.find(h => h.date === isoToday() && !h.odchod);
+  if (!otevrena) { S.subOdchodOpen = false; render(); return; }
+  const text = $('#so-z').value.trim();
+  if (!text) { toast('Sepiš aspoň větu, co jste udělali'); return; }
+  try {
+    /* zaznam + fotky jdou do deniku ke schvaleni stejne jako od party */
+    await addEntry(otevrena.pid, fullName(S.me || {}), text, null);
+    await db.collection('hlaseni').doc(otevrena.id).update({ odchod: nowTime(), zaznam: text });
+    S.subOdchodOpen = false; S.subZaznam = '';
+    toast('Odchod zapsán — záznam šel vedení ke schválení ✓'); render();
+  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
 }
 async function subSmazatHlaseni(id) {
   const h = S.hlaseni.find(x => x.id === id); if (!h) return;
   if (!confirm('Smazat dnešní hlášení?')) return;
   try { await db.collection('hlaseni').doc(id).delete(); toast('Smazáno ✓'); }
   catch (e) { toast('Nejde smazat: ' + (e.code || e.message)); }
-}
-async function subOdeslatFotky() {
-  if (!S.subProject) { toast('Vyber stavbu'); return; }
-  if (!S.draftPhotos.length) return;
-  /* addEntry vyrobi cekajici zapis "jen fotodokumentace" — stejna cesta
-     jako fotky od party: schvaleni, fronta na Drive, stredni nahledy. */
-  await addEntry(S.subProject, fullName(S.me || {}), '', null);
-  toast('Fotky odeslány vedení ke schválení ✓'); render();
 }
 
 function viewWorker() {
