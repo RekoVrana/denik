@@ -200,6 +200,7 @@ const S = {
   projDetailId: null, projDetailTab: 'info', newUserType: null, editUserId: null,
   ukolyView: 'seznam', orgFilter: 'vse', taskFormOpen: false, attFormOpen: false, vpFormOpen: false,
   hlaseni: [], subProject: null, subPocet: 1, subOdchodOpen: false, subZaznam: '',
+  taskFoto: [],
   klice: [],
   repWorkers: [], repProjects: [], repLoaded: false, repFrom: isoToday().slice(0, 8) + '01', repTo: isoToday(),
   workerProject: null, draftPhotos: [], draftAtts: [], uploading: 0, signFor: null, tplOpen: false,
@@ -290,7 +291,10 @@ async function ctiSPokusem(cti, prodleva) {
 }
 const taskSort = (a, b) => (a.term || '').localeCompare(b.term || '');
 function listenMojeUkoly() {
-  const mid = S.me ? S.me.id : '__nikdo__';
+  /* POZOR na zavod: profil (S.me) se nacita az PO spusteni posluchacu,
+     takze tady jeste nemusi byt. users_auth (S.meAuth) uz nacteny je
+     a userDocId nese — jinak ukoly mlcky zustaly prazdne do restartu. */
+  const mid = (S.meAuth && S.meAuth.userDocId) || (S.me && S.me.id) || '__nikdo__';
   const casti = { prideleno: [], zadal: [] };
   const slozit = () => {
     const mapa = new Map();
@@ -387,6 +391,11 @@ function respName(t) {
 }
 /* Naléhavost úkolu se pozná barevným prouzkem, ne cudnou poznamkou —
    na stavbe se na telefon kouka vterinu, ne minutu. */
+function fotkyUkolu(t) {
+  if (!(t.photos || []).length) return '';
+  return `<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">${t.photos.map(f =>
+    `<span onclick="event.stopPropagation();otevritFoto('${f.id}','','${esc(t.title)}',this)" style="cursor:pointer"><img src="${f.thumb}" style="width:46px;height:46px;object-fit:cover;border-radius:8px;border:1px solid var(--line)"></span>`).join('')}</div>`;
+}
 function ukolNaleh(t) {
   const d = isoToday();
   if (!t.term) return '';
@@ -2236,7 +2245,7 @@ function ukolySeznam() {
       ${rows.map(t => `
       <tr style="${isOverdue(t) ? 'background:#fdeceb' : ''}">
         <td><input type="checkbox" ${t.stav === 'hotovo' ? 'checked' : ''} onclick="taskDone('${t.id}')"></td>
-        <td><b>${esc(t.title)}</b>${t.src ? ` <span class="badge b-int">${esc(t.src)}</span>` : ''}</td>
+        <td><b>${esc(t.title)}</b>${(t.photos || []).length ? ` <span class="muted">📷${t.photos.length}</span>` : ''}${t.src ? ` <span class="badge b-int">${esc(t.src)}</span>` : ''}</td>
         <td>${esc((proj(t.pid) || {}).name || '')}</td>
         <td>${esc(respName(t))}</td>
         <td><span class="badge ${STAVCOLOR[t.stav]}">${STAVY[t.stav]}</span></td>
@@ -3113,6 +3122,9 @@ function kartaUkoly(p) {
         </div>
         <label>Stavba</label>
         <select id="wtk-p">${S.projects.filter(x => x.active !== false).map(x => `<option value="${x.id}" ${p && x.id === p.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+        <label>Fotka k úkolu <span class="muted" style="text-transform:none;font-weight:400">— vyfoť nebo přilož</span></label>
+        <input type="file" accept="image/*" capture="environment" multiple onchange="ukolFotoPridat(this.files)">
+        ${(S.taskFoto || []).length ? `<div class="photos">${S.taskFoto.map((f, i) => `<div class="ph"><img src="${f.thumb}"><span class="del" onclick="S.taskFoto.splice(${i},1);render()">✕</span></div>`).join('')}</div>` : ''}
         <div class="aprv"><button class="btn amber" onclick="workerAddTask()">➕ Zadat úkol</button></div>
       </div>` : ''}
       <div class="uktabs">
@@ -3124,6 +3136,7 @@ function kartaUkoly(p) {
           <span class="bx" onclick="taskDone('${t.id}')" title="Označit jako hotové"></span>
           <div><div class="tt">${esc(t.title)}</div>
             <div class="mt">${terminChip(t)}<span>🏗 ${esc((proj(t.pid) || {}).name || '')}</span>${t.zadal ? `<span>👤 ${esc(t.zadal)}</span>` : ''}${S.me && t.zadalId === S.me.id ? `<span class="lnk" style="margin-left:auto" onclick="event.stopPropagation();smazatMujUkol('${t.id}')">✕ zrušit</span>` : ''}</div>
+            ${fotkyUkolu(t)}
           </div></div>`).join('')}
         ${hotoveDnes.map(t => `<div class="ukol hot">
           <span class="bx on" onclick="taskDone('${t.id}')" title="Vrátit mezi nehotové">✓</span>
@@ -3135,6 +3148,7 @@ function kartaUkoly(p) {
           <div><div class="tt">${esc(t.title)}</div>
             <div class="mt">${terminChip(t)}<span class="badge ${STAVCOLOR[t.stav] || 'b-int'}">${STAVY[t.stav] || t.stav}</span><span>${esc(t.resp || 'nikomu')}</span>
               <span class="lnk" style="margin-left:auto" onclick="smazatMujUkol('${t.id}')">✕ zrušit</span></div>
+            ${fotkyUkolu(t)}
           </div></div>`).join('')}
         ${!zadaneMnou.length ? '<div class="empty">Zatím jsi nikomu nic nezadal.</div>' : ''}
       </div>`}
@@ -3178,18 +3192,18 @@ function viewSub() {
         <div class="aprv" style="margin-top:10px"><button class="btn dark velke" onclick="S.subOdchodOpen=true;render()">🏁 ZAPSAT ODCHOD</button></div>
         <div class="note">Při odchodu tě to vyzve sepsat, co jste udělali, a přidat fotky.</div>`}
       ` : `
-        <label>Stavba *</label>
-        <select id="sh-p" onchange="S.subProject=this.value;render()">
-          <option value="">— vyber stavbu —</option>
-          ${S.projects.filter(x => x.active !== false).map(x => `<option value="${x.id}" ${S.subProject === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
-        </select>
-        <div class="frow">
-          <div><label>Kolik vás tu je (i s tebou)</label><input type="number" id="sh-n" min="1" max="30" value="${S.subPocet || 1}"></div>
+        <label>Stavba * <span class="muted" style="text-transform:none;font-weight:400">· vpravo kolik vás tu je (i s tebou)</span></label>
+        <div style="display:flex;gap:8px;align-items:stretch">
+          <select id="sh-p" style="flex:1;min-width:0" onchange="S.subProject=this.value;render()">
+            <option value="">— vyber stavbu —</option>
+            ${S.projects.filter(x => x.active !== false).map(x => `<option value="${x.id}" ${S.subProject === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
+          </select>
+          <input type="number" id="sh-n" min="1" max="30" value="${S.subPocet || 1}" title="Kolik vás tu je (i s tebou)" style="width:74px;flex:none;text-align:center">
         </div>
         <label>Co tu dnes budete dělat? *</label>
         <input type="text" id="sh-c" placeholder="Rozvody vody v koupelně, 2. patro" onkeydown="if(event.key==='Enter')subPrichod()">
         <div class="aprv"><button class="btn amber velke" onclick="subPrichod()">✅ ZAPSAT PŘÍCHOD</button></div>
-        <div class="note">Hlášení vidí vedení — je to záznam pro kontrolu, hodiny se z něj nepočítají. Fakturuješ podle smlouvy.</div>`}
+        <div class="note">Hlášení vidí vedení — je to záznam pro kontrolu.</div>`}
       ${hotoveDnesNav.length ? `<div style="margin-top:10px">
         ${hotoveDnesNav.map(h => `<div class="urow"><span>✅</span><div><b>${esc((proj(h.pid) || {}).name || '')}</b><br>
           <span class="muted">${h.prichod || h.time || ''}–${h.odchod} (${dobaText(h.prichod || h.time, h.odchod)}) · ${h.pocet} lidí · ${esc(h.cinnost || '')}</span></div>
@@ -3508,6 +3522,22 @@ async function smazatMujUkol(id) {
   catch (e) { toast('Nepovedlo se zrušit: ' + (e.code || e.message)); }
 }
 
+/* Fotky k ukolu: maly nahled primo v ukolu (at je videt, o co jde),
+   stredni verze ve fotonahledy pro prohlizeni. Na Drive nejdou — ukol
+   je provozni vec, ne dokumentace stavby. Nejvyse 6, at se zaznam
+   ukolu vejde do limitu databaze. */
+async function ukolFotoPridat(files) {
+  for (const f of files) {
+    if ((S.taskFoto || []).length >= 6) { toast('Nejvýš 6 fotek k úkolu'); break; }
+    try {
+      const img = await fileToImage(f);
+      S.taskFoto.push({ id: uid8(), thumb: scaleJpeg(img, 360, 0.62), mid: scaleJpeg(img, 1100, 0.72) });
+      URL.revokeObjectURL(img.src);
+    } catch (e) { toast('Fotku se nepodařilo načíst'); }
+  }
+  render();
+}
+
 async function workerAddTask() {
   const title = $('#wtk-t').value.trim();
   if (!title) { toast('Napiš, co je potřeba udělat'); return; }
@@ -3516,12 +3546,18 @@ async function workerAddTask() {
      ukol tise sam sobe a pak ho hledal v "Zadal jsem". Ted se musi vybrat. */
   if (!respId) { toast('Vyber, komu úkol patří'); return; }
   try {
+    const fotky = (S.taskFoto || []).map(f => ({ id: f.id, thumb: f.thumb }));
+    for (const f of (S.taskFoto || [])) {
+      db.collection('fotonahledy').doc(f.id).set({ data: f.mid, pid: $('#wtk-p').value, entryId: '', date: isoToday(), createdAt: FV() })
+        .catch(e => console.warn('fotonahled ukolu', e));
+    }
     await db.collection('tasks').add({
       title, zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}),
       pid: $('#wtk-p').value, respId, resp: ru ? fullName(ru) : '',
       created: isoToday(), term: $('#wtk-d').value || shiftISO(isoToday(), 3),
-      stav: 'nove', res: ru ? [fullName(ru)] : [], createdAt: FV()
+      stav: 'nove', res: ru ? [fullName(ru)] : [], photos: fotky, createdAt: FV()
     });
+    S.taskFoto = [];
     /* Skocit na zalozku, kde ukol doopravdy skoncil — at ho clovek nehleda. */
     const sobe = S.me && respId === S.me.id;
     S.ukolTab = sobe ? 'moje' : 'zadal';
