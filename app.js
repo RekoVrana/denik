@@ -426,12 +426,15 @@ function startData() {
      bud cele povoli, nebo cely odmitnou — filtrovat za nas neumi. Proto se
      pracovnik pta dvema dotazy (co mam prideleno / co jsem zadal) a vysledky
      se slozi dohromady. */
+  /* POZOR: tohle if/else je jeden celek pro UKOLY — nevkladat mezi ne nic.
+     Presne tim tu vznikla chyba: vlozeny blok hlaseni si prisvojil "else"
+     a subdodavatelum se ukoly prestaly nacitat uplne. */
   if (role === 'admin') listen('tasks', 'tasks', { sort: taskSort });
+  else listenMojeUkoly();
   /* Hlaseni subdodavatelu: vedeni vidi vse (v okne), sub jen svoje. */
   const hlasSort = (a, b) => ((b.date || '') + (b.time || '')).localeCompare((a.date || '') + (a.time || ''));
   if (role === 'admin') listen('hlaseni', 'hlaseni', { where: [['date', '>=', oknoOd()]], sort: hlasSort });
   else if (role === 'sub') listen('hlaseni', 'hlaseni', { where: [['authUid', '==', S.authUser.uid]], sort: hlasSort });
-  else listenMojeUkoly();
   listen('klice', 'klice', {});
   /* Tickety: kazdy vidi sve, vedeni vsechny. */
   const tsort = (a, b) => ((b.date || '') + (b.time || '')).localeCompare((a.date || '') + (a.time || ''));
@@ -472,10 +475,48 @@ function respName(t) {
 }
 /* Naléhavost úkolu se pozná barevným prouzkem, ne cudnou poznamkou —
    na stavbe se na telefon kouka vterinu, ne minutu. */
+/* Odpovedi u ukolu: kratka konverzace primo pod ukolem ("hotovo, ale
+   chybelo lepidlo"). Pridat ji smi ten, kdo ukol vidi — prijemce,
+   zadavatel, vedeni. */
+async function ukolOdpovedet(id) {
+  const inp = $('#up-' + id); if (!inp) return;
+  const text = inp.value.trim(); if (!text) { toast('Napiš odpověď'); return; }
+  try {
+    await db.collection('tasks').doc(id).update({
+      odpovedi: firebase.firestore.FieldValue.arrayUnion({
+        autorId: S.me ? S.me.id : '', autorJmeno: fullName(S.me || {}),
+        text, date: isoToday(), time: nowTime()
+      })
+    });
+    inp.value = ''; toast('Odpověď přidána ✓');
+  } catch (e) { toast('Nejde přidat: ' + (e.code || e.message)); }
+}
+function ukolDetailHtml(t) {
+  return `
+    ${t.popis ? `<div class="muted" style="font-size:13.5px;margin-top:4px;white-space:pre-line">${esc(t.popis)}</div>` : ''}
+    ${(t.odpovedi || []).length ? `<div style="margin-top:8px;display:flex;flex-direction:column;gap:5px">
+      ${t.odpovedi.map(o => `<div style="background:#f4f6f9;border-radius:8px;padding:6px 10px;font-size:13px">
+        <b>${esc(o.autorJmeno || '')}</b> <span class="muted">${fmtISO(o.date)} ${o.time || ''}</span><br>
+        <span style="white-space:pre-line">${esc(o.text || '')}</span></div>`).join('')}
+    </div>` : ''}
+    <div style="display:flex;gap:7px;margin-top:8px">
+      <input type="text" id="up-${t.id}" placeholder="Napsat odpověď…" style="flex:1;min-width:0"
+             onclick="event.stopPropagation()" onkeydown="event.stopPropagation();if(event.key==='Enter')ukolOdpovedet('${t.id}')">
+      <button class="btn dark sm" style="flex:none" onclick="event.stopPropagation();ukolOdpovedet('${t.id}')">Odpovědět</button>
+    </div>`;
+}
 function fotkyUkolu(t) {
   if (!(t.photos || []).length) return '';
   return `<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">${t.photos.map(f =>
     `<span onclick="event.stopPropagation();otevritFoto('${f.id}','','${esc(t.title)}',this)" style="cursor:pointer"><img src="${f.thumb}" style="width:46px;height:46px;object-fit:cover;border-radius:8px;border:1px solid var(--line)"></span>`).join('')}</div>`;
+}
+function ukolModal(id) {
+  const t = S.tasks.find(x => x.id === id); if (!t) return;
+  modal(`<h3>📌 ${esc(t.title)}</h3>
+    <div class="muted" style="font-size:13px">🏗 ${esc((proj(t.pid) || {}).name || '')} · zadal <b>${esc(t.zadal || '?')}</b> ➜ <b>${esc(t.resp || 'nikomu')}</b> · ${terminChip(t)} ${(t.photos || []).length ? '📷' + t.photos.length : ''}</div>
+    ${fotkyUkolu(t)}
+    ${ukolDetailHtml(t)}
+    <div class="aprv"><button class="btn dark" onclick="closeModal()">Zavřít</button></div>`);
 }
 function ukolNaleh(t) {
   const d = isoToday();
@@ -2309,7 +2350,7 @@ function pgUkoly() {
     <div class="card">
       <h3>➕ Nový úkol</h3>
       <label>Nadpis *</label><input type="text" id="tk-t" placeholder="Co je potřeba udělat">
-      <label>Popis (nepovinný)</label><input type="text" id="tk-popis" placeholder="Podrobnosti — parta je uvidí u úkolu">
+      <label>Popis (nepovinný) <span class="muted" style="text-transform:none;font-weight:400">— enter dělá odrážku</span></label><textarea id="tk-popis" placeholder="- podrobnost&#10;- další bod" style="min-height:54px"></textarea>
       <div class="frow">
         <div><label>Projekt</label><select id="tk-p">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
         <div><label>Odpovědná osoba</label><select id="tk-r">${lideProUkoly().map(u => `<option value="${u.id}">${esc(fullName(u))}</option>`).join('')}</select></div>
@@ -2329,7 +2370,7 @@ function ukolySeznam() {
       ${rows.map(t => `
       <tr style="${isOverdue(t) ? 'background:#fdeceb' : ''}">
         <td><input type="checkbox" ${t.stav === 'hotovo' ? 'checked' : ''} onclick="taskDone('${t.id}')"></td>
-        <td><b>${esc(t.title)}</b>${(t.photos || []).length ? ` <span class="muted">📷${t.photos.length}</span>` : ''}${t.popis ? `<br><span class="muted" style="font-weight:400">${esc(t.popis.slice(0, 90))}</span>` : ''}${t.src ? ` <span class="badge b-int">${esc(t.src)}</span>` : ''}</td>
+        <td style="cursor:pointer" onclick="ukolModal('${t.id}')"><b>${esc(t.title)}</b>${(t.odpovedi || []).length ? ` <span class="muted">💬${t.odpovedi.length}</span>` : ''}${(t.photos || []).length ? ` <span class="muted">📷${t.photos.length}</span>` : ''}${t.popis ? `<br><span class="muted" style="font-weight:400">${esc(t.popis.slice(0, 90))}</span>` : ''}${t.src ? ` <span class="badge b-int">${esc(t.src)}</span>` : ''}</td>
         <td>${esc((proj(t.pid) || {}).name || '')}</td>
         <td>${esc(respName(t))}</td>
         <td><span class="badge ${STAVCOLOR[t.stav]}">${STAVY[t.stav]}</span></td>
@@ -3223,21 +3264,21 @@ function kartaUkoly(p) {
       ${ut === 'moje' ? `<div class="uk">
         ${myTasks.map(t => `<div class="ukol ${ukolNaleh(t)}">
           <span class="bx" onclick="taskDone('${t.id}')" title="Označit jako hotové"></span>
-          <div><div class="tt">${esc(t.title)}</div>
-            ${t.popis ? `<div class="muted" style="font-size:13px;margin-top:2px;cursor:pointer" onclick="event.stopPropagation();S.ukolDetail=S.ukolDetail==='${t.id}'?null:'${t.id}';render()">${S.ukolDetail === t.id ? esc(t.popis) : esc(t.popis.slice(0, 90)) + (t.popis.length > 90 ? '… <b>víc</b>' : '')}</div>` : ''}
-            <div class="mt">${terminChip(t)}<span>🏗 ${esc((proj(t.pid) || {}).name || '')}</span>${t.zadal ? `<span>👤 ${esc(t.zadal)}</span>` : ''}${S.me && t.zadalId === S.me.id ? `<span class="lnk" style="margin-left:auto" onclick="event.stopPropagation();smazatMujUkol('${t.id}')">✕ zrušit</span>` : ''}</div>
+          <div style="cursor:pointer" onclick="S.ukolDetail=S.ukolDetail==='${t.id}'?null:'${t.id}';render()"><div class="tt">${esc(t.title)}${(t.odpovedi || []).length ? ` <span class="muted" style="font-weight:400">💬${t.odpovedi.length}</span>` : ''}</div>
+            ${S.ukolDetail === t.id ? ukolDetailHtml(t) : (t.popis ? `<div class="muted" style="font-size:13px;margin-top:2px">${esc(t.popis.split('\n')[0].slice(0, 90))}${(t.popis.length > 90 || t.popis.includes('\n')) ? '…' : ''}</div>` : '')}
+            <div class="mt">${terminChip(t)}<span>🏗 ${esc((proj(t.pid) || {}).name || '')}</span>${t.zadal ? `<span>👤 zadal ${esc(t.zadal)}</span>` : ''}${t.resp && (!S.me || t.respId !== S.me.id) ? `<span>➜ ${esc(t.resp)}</span>` : ''}${S.me && t.zadalId === S.me.id ? `<span class="lnk" style="margin-left:auto" onclick="event.stopPropagation();smazatMujUkol('${t.id}')">✕ zrušit</span>` : ''}</div>
             ${fotkyUkolu(t)}
           </div></div>`).join('')}
         ${hotoveDnes.map(t => `<div class="ukol hot">
           <span class="bx on" onclick="taskDone('${t.id}')" title="Vrátit mezi nehotové">✓</span>
-          <div><div class="tt">${esc(t.title)}</div><div class="mt"><span>Hotovo dnes — ťuknutím vrátíš</span></div></div></div>`).join('')}
+          <div style="cursor:pointer" onclick="S.ukolDetail=S.ukolDetail==='${t.id}'?null:'${t.id}';render()"><div class="tt">${esc(t.title)}${(t.odpovedi || []).length ? ` <span class="muted" style="font-weight:400">💬${t.odpovedi.length}</span>` : ''}</div><div class="mt"><span>Hotovo dnes — ťuknutím vrátíš</span></div></div></div>`).join('')}
         ${(!myTasks.length && !hotoveDnes.length) ? '<div class="empty">Žádné úkoly. Můžeš dělat svoje. 👍</div>' : ''}
       </div>` : `<div class="uk">
         ${zadaneMnou.map(t => `<div class="ukol ${ukolNaleh(t)}">
           <span class="uav">${ini(userById(t.respId) || { jmeno: t.resp || '?', prijmeni: '' })}</span>
-          <div><div class="tt">${esc(t.title)}</div>
-            ${t.popis ? `<div class="muted" style="font-size:13px;margin-top:2px;cursor:pointer" onclick="event.stopPropagation();S.ukolDetail=S.ukolDetail==='${t.id}'?null:'${t.id}';render()">${S.ukolDetail === t.id ? esc(t.popis) : esc(t.popis.slice(0, 90)) + (t.popis.length > 90 ? '… <b>víc</b>' : '')}</div>` : ''}
-            <div class="mt">${terminChip(t)}<span class="badge ${STAVCOLOR[t.stav] || 'b-int'}">${STAVY[t.stav] || t.stav}</span><span>${esc(t.resp || 'nikomu')}</span>
+          <div style="cursor:pointer" onclick="S.ukolDetail=S.ukolDetail==='${t.id}'?null:'${t.id}';render()"><div class="tt">${esc(t.title)}${(t.odpovedi || []).length ? ` <span class="muted" style="font-weight:400">💬${t.odpovedi.length}</span>` : ''}</div>
+            ${S.ukolDetail === t.id ? ukolDetailHtml(t) : (t.popis ? `<div class="muted" style="font-size:13px;margin-top:2px">${esc(t.popis.split('\n')[0].slice(0, 90))}${(t.popis.length > 90 || t.popis.includes('\n')) ? '…' : ''}</div>` : '')}
+            <div class="mt">${terminChip(t)}<span class="badge ${STAVCOLOR[t.stav] || 'b-int'}">${STAVY[t.stav] || t.stav}</span><span>➜ ${esc(t.resp || 'nikomu')}</span>
               <span class="lnk" style="margin-left:auto" onclick="smazatMujUkol('${t.id}')">✕ zrušit</span></div>
             ${fotkyUkolu(t)}
           </div></div>`).join('')}
