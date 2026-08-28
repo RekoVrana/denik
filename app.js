@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '28. 8. 2026 k';
+const VERZE = '28. 8. 2026 l';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -437,7 +437,13 @@ function startData() {
   if (role === 'admin') listen('hlaseni', 'hlaseni', { where: [['date', '>=', oknoOd()]], sort: hlasSort });
   else if (role === 'sub') listen('hlaseni', 'hlaseni', { where: [['authUid', '==', S.authUser.uid]], sort: hlasSort });
   listen('klice', 'klice', {});
-  listen('poznamky', 'poznamky', { sort: (a, b) => (a.nadpis || '').localeCompare(b.nadpis || '', 'cs') });
+  /* Poznamky: vedeni vidi vsechny, parta krome tech "jen vedeni",
+     subdodavatel jen ty pro vsechny. Filtrovat musi uz dotaz — pravidla
+     databaze umi jen povolit nebo odmitnout cely dotaz. */
+  const pzSort = (a, b) => (a.nadpis || '').localeCompare(b.nadpis || '', 'cs');
+  if (role === 'admin') { listen('poznamky', 'poznamky', { sort: pzSort }); dopisViditelnost(); }
+  else if (role === 'sub') listen('poznamky', 'poznamky', { where: [['viditelnost', '==', 'vsichni']], sort: pzSort });
+  else listen('poznamky', 'poznamky', { where: [['viditelnost', 'in', ['vsichni', 'parta']]], sort: pzSort });
   /* tajny klic k mostu — bez nej se soubory z Drive oteviraji postaru
      (pres Google), s nim je vydava most primo aplikaci */
   db.collection('config').doc('tajne').get().then(d => { S.tajne = d.exists ? d.data() : null; }).catch(() => {});
@@ -3246,6 +3252,17 @@ function kartaPodklady(p) {
    Veci, ktere u stavby ZUSTAVAJI (kody, kontakty, "voda se zavira v
    suterenu"). Nadpis + text, ktery jde upravovat, a komentare pod tim.
    Zadal Marco 28. 8. 2026. */
+// Poznamky zalozene driv nemaji pole viditelnost. Bez nej by je filtrovane
+// dotazy party ani subu nevratily, takze vedeni je pri prihlaseni dopise.
+async function dopisViditelnost() {
+  const snap = await db.collection('poznamky').get().catch(() => null);
+  if (!snap) return;
+  const chybi = snap.docs.filter(d => !d.data().viditelnost);
+  for (const d of chybi) await d.ref.update({ viditelnost: 'vsichni' }).catch(() => {});
+  if (chybi.length) console.log('doplnena viditelnost u ' + chybi.length + ' poznamek');
+}
+
+const VIDI = { vsichni: '👥 Všichni na stavbě', parta: '👷 Jen naši lidé', vedeni: '🗂 Jen vedení' };
 function kartaPoznamky(p) {
   if (!p) return '';
   const mp = S.poznamky.filter(z => z.pid === p.id);
@@ -3254,13 +3271,16 @@ function kartaPoznamky(p) {
     ${mp.map(z => S.poznamkaEdit === z.id ? `
       <div class="ukform" style="margin-bottom:8px">
         <label>Nadpis</label><input type="text" id="pz-n-${z.id}" value="${esc(z.nadpis || '')}">
+        <label>Kdo ji uvidí</label>
+        <select id="pz-v-${z.id}">${Object.keys(VIDI).map(k => `<option value="${k}" ${(z.viditelnost || 'vsichni') === k ? 'selected' : ''}>${VIDI[k]}</option>`).join('')}</select>
         <label>Text</label><textarea id="pz-t-${z.id}" style="min-height:70px">${esc(z.text || '')}</textarea>
         <div class="aprv"><button class="btn amber sm" onclick="ulozPoznamku('${z.id}')">Uložit</button>
           <button class="btn ghost sm" onclick="S.poznamkaEdit=null;render()">Zrušit</button>
           <span class="lnk" style="margin-left:auto" onclick="smazPoznamku('${z.id}')">✕ smazat</span></div>
       </div>` : `
       <div style="border:1px solid var(--line);border-radius:10px;padding:11px 13px;margin-bottom:8px">
-        <div style="display:flex;gap:8px;align-items:baseline"><b style="flex:1">${esc(z.nadpis || '')}</b>
+        <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap"><b style="flex:1;min-width:120px">${esc(z.nadpis || '')}</b>
+          <span class="badge ${z.viditelnost === 'vedeni' ? 'b-red' : z.viditelnost === 'parta' ? 'b-wait' : 'b-int'}">${VIDI[z.viditelnost] || VIDI.vsichni}</span>
           <span class="lnk" style="font-size:12px" onclick="S.poznamkaEdit='${z.id}';render()">upravit</span></div>
         <div class="muted" style="white-space:pre-line;font-size:14px;margin-top:3px">${esc(z.text || '')}</div>
         ${(z.komentare || []).length ? `<div style="margin-top:8px;display:flex;flex-direction:column;gap:5px">
@@ -3277,9 +3297,23 @@ function kartaPoznamky(p) {
   </div>`;
 }
 async function novaPoznamka(pid) {
-  const nadpis = await zeptejSe('Nová poznámka ke stavbě', 'Nadpis poznámky — text a komentáře doplníš potom.', '');
-  if (!nadpis || !nadpis.trim()) return;
-  const r = await db.collection('poznamky').add({ pid, nadpis: nadpis.trim(), text: '', komentare: [],
+  const v = await new Promise(hotovo => {
+    window._pzHotovo = x => { window._pzHotovo = null; closeModal(); hotovo(x); };
+    modal(`<h3>📝 Nová poznámka ke stavbě</h3>
+      <label>Nadpis *</label>
+      <input type="text" id="pz-nadpis" placeholder="">
+      <label>Kdo ji uvidí</label>
+      <select id="pz-vid">${Object.keys(VIDI).map(k => `<option value="${k}">${VIDI[k]}</option>`).join('')}</select>
+      <div class="note">Vedení vidí všechny poznámky vždy. Text a komentáře doplníš potom.</div>
+      <div class="aprv">
+        <button class="btn amber" onclick="window._pzHotovo({n:document.querySelector('#pz-nadpis').value,v:document.querySelector('#pz-vid').value})">Vytvořit</button>
+        <button class="btn ghost" onclick="window._pzHotovo(null)">Zrušit</button>
+      </div>`);
+    setTimeout(() => { const el = document.querySelector('#pz-nadpis'); if (el) el.focus(); }, 60);
+  });
+  if (!v || !v.n || !v.n.trim()) return;
+  const r = await db.collection('poznamky').add({ pid, nadpis: v.n.trim(), text: '', komentare: [],
+    viditelnost: v.v || 'vsichni',
     autorId: S.me ? S.me.id : '', autor: fullName(S.me || {}), createdAt: FV() })
     .catch(e => { toast('Nejde přidat: ' + (e.code || e.message)); return null; });
   if (r) { S.poznamkaEdit = r.id; render(); }
@@ -3287,7 +3321,8 @@ async function novaPoznamka(pid) {
 async function ulozPoznamku(id) {
   const n = $('#pz-n-' + id).value.trim(), t = $('#pz-t-' + id).value;
   if (!n) { toast('Nadpis nesmí být prázdný'); return; }
-  await db.collection('poznamky').doc(id).update({ nadpis: n, text: t })
+  const v = $('#pz-v-' + id) ? $('#pz-v-' + id).value : 'vsichni';
+  await db.collection('poznamky').doc(id).update({ nadpis: n, text: t, viditelnost: v })
     .then(() => { S.poznamkaEdit = null; toast('Uloženo ✓'); render(); })
     .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
 }

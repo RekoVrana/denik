@@ -57,6 +57,10 @@ service cloud.firestore {
     function mujDocId() {
       return get(/databases/$(database)/documents/users_auth/$(request.auth.uid)).data.userDocId;
     }
+    // role prihlaseneho ('admin' | 'worker' | 'sub')
+    function mojeRole() {
+      return get(/databases/$(database)/documents/users_auth/$(request.auth.uid)).data.role;
+    }
     function isAdmin() {
       return hasRole()
         && get(/databases/$(database)/documents/users_auth/$(request.auth.uid)).data.role == 'admin';
@@ -149,7 +153,11 @@ service cloud.firestore {
     // Poznamky ke stavbe: veci, ktere u zakazky zustavaji (kody, kontakty).
     // Cist a komentovat smi kdokoli s roli, mazat vedeni.
     match /poznamky/{id} {
-      allow read: if hasRole();
+      // vedeni vsechny; parta krome "jen vedeni"; sub jen ty pro vsechny
+      allow read: if isAdmin()
+        || (hasRole() && (!('viditelnost' in resource.data)
+            || resource.data.viditelnost == 'vsichni'
+            || (resource.data.viditelnost == 'parta' && mojeRole() == 'worker')));
       allow create, update: if hasRole();
       allow delete: if isAdmin();
     }
