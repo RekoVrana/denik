@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '28. 8. 2026 l';
+const VERZE = '28. 8. 2026 m';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -402,7 +402,7 @@ async function ticketVyridit(id) {
     .then(() => toast('Vyřízeno ✓')).catch(e => toast('Nejde: ' + (e.code || e.message)));
 }
 async function ticketSmazat(id) {
-  if (!confirm('Smazat ticket?')) return;
+  if (!await potvrd('Smazat ticket?')) return;
   await db.collection('tickety').doc(id).delete().catch(e => toast('Nejde: ' + (e.code || e.message)));
 }
 function nastenkaTickety() {
@@ -437,13 +437,16 @@ function startData() {
   if (role === 'admin') listen('hlaseni', 'hlaseni', { where: [['date', '>=', oknoOd()]], sort: hlasSort });
   else if (role === 'sub') listen('hlaseni', 'hlaseni', { where: [['authUid', '==', S.authUser.uid]], sort: hlasSort });
   listen('klice', 'klice', {});
-  /* Poznamky: vedeni vidi vsechny, parta krome tech "jen vedeni",
-     subdodavatel jen ty pro vsechny. Filtrovat musi uz dotaz — pravidla
-     databaze umi jen povolit nebo odmitnout cely dotaz. */
+  /* Poznamky: vedeni vidi vsechny, ostatni jen ty sve. Filtrovat musi
+     uz dotaz — pravidla umi cely dotaz jen povolit, nebo odmitnout.
+     Kazdy klic (vsichni / parta / ja) ma vlastni posluchac a vysledky
+     se skladaji dohromady, stejne jako u ukolu. */
   const pzSort = (a, b) => (a.nadpis || '').localeCompare(b.nadpis || '', 'cs');
-  if (role === 'admin') { listen('poznamky', 'poznamky', { sort: pzSort }); dopisViditelnost(); }
-  else if (role === 'sub') listen('poznamky', 'poznamky', { where: [['viditelnost', '==', 'vsichni']], sort: pzSort });
-  else listen('poznamky', 'poznamky', { where: [['viditelnost', 'in', ['vsichni', 'parta']]], sort: pzSort });
+  if (role === 'admin') { listen('poznamky', 'poznamky', { sort: pzSort }); prevedStarePoznamky(); }
+  else {
+    const pzMid = (S.meAuth && S.meAuth.userDocId) || '__nikdo__';
+    listenPoznamky(role === 'sub' ? ['vsichni', pzMid] : ['vsichni', 'parta', pzMid]);
+  }
   /* tajny klic k mostu — bez nej se soubory z Drive oteviraji postaru
      (pres Google), s nim je vydava most primo aplikaci */
   db.collection('config').doc('tajne').get().then(d => { S.tajne = d.exists ? d.data() : null; }).catch(() => {});
@@ -1119,6 +1122,13 @@ async function doSetup() {
       : 'Chyba: ' + e.message);
   }
 }
+async function odhlasitDotaz() {
+  if (await potvrd('Odhlásit se?', 'Odhlásit')) doLogout();
+}
+async function smazVicepraci(id) {
+  if (!await potvrd('Smazat vícepráci?', 'Smazat')) return;
+  db.collection('viceprace').doc(id).delete();
+}
 function doLogout() { auth.signOut(); }
 
 /* ============ ADMIN (Vedení) ============ */
@@ -1132,7 +1142,7 @@ function topbar() {
     <button class="btn ghost sm" style="padding:6px 10px" title="Nahlásit chybu nebo navrhnout zlepšení" onclick="ticketDialog()">💬</button>
     <span class="muted" style="font-size:10.5px;white-space:nowrap" title="Verze aplikace">${VERZE}</span>
     <button class="btn ghost sm" title="Zkontrolovat a stáhnout novou verzi" onclick="aktualizovatApp()" style="padding:6px 10px">${S.updating ? '<span class="updspin"></span>' : '⟳'}</button>
-    <div class="avatar" title="Odhlásit" onclick="if(confirm('Odhlásit se?'))doLogout()">${S.me ? ini(S.me) : '?'}</div>
+    <div class="avatar" title="Odhlásit" onclick="odhlasitDotaz()">${S.me ? ini(S.me) : '?'}</div>
   </div>`;
 }
 function sidebar() {
@@ -1524,7 +1534,6 @@ function pgProjDetail() {
       </div>
       ${sekceKliceProjektu(p)}
       ${kartaPodklady(p)}
-      ${kartaPoznamky(p)}
       <div class="card">
         <h3>📍 Pozice projektu (GPS check-in)</h3>
         ${p.gps ? `
@@ -1600,12 +1609,7 @@ function pgProjDetail() {
       <div class="aprv"><button class="btn amber sm" onclick="S.taskFormOpen=true;goPage('ukoly')">➕ Přidat úkol</button></div>
     </div></main>`;
   } else if (t === 'poznamky') {
-    body = `<main><div class="card">
-      <h3>📝 Poznámky k projektu</h3>
-      ${(p.notes || []).map(n => `<div class="urow"><span>📝</span><div><b>${esc(n.author)}</b> · <span class="muted">${fmtISO(n.date)}</span><br>${esc(n.text)}</div></div>`).join('') || '<div class="empty">Zatím žádné poznámky.</div>'}
-      <label>Nová poznámka</label><textarea id="pn-t" style="min-height:60px"></textarea>
-      <div class="aprv"><button class="btn amber sm" onclick="addNote('${p.id}')">💾 Uložit poznámku</button></div>
-    </div></main>`;
+    body = `<main>${kartaPoznamky(p)}</main>`;
   } else if (t === 'dokumenty') {
     body = pgProjDocs(p);
   }
@@ -1617,7 +1621,7 @@ function pgProjDetail() {
     <div class="t ${t === 'podklady' ? 'active' : ''}" onclick="S.projDetailTab='podklady';render()">📐 Podklady stavby (${(p.stavbaDocs || []).length})</div>
     <div class="t ${t === 'dokumenty' ? 'active' : ''}" onclick="S.projDetailTab='dokumenty';render()">📁 Dokumenty pro investora</div>
     <div class="t ${t === 'ukoly' ? 'active' : ''}" onclick="S.projDetailTab='ukoly';render()">📌 Úkoly (${S.tasks.filter(x => x.pid === p.id && x.stav !== 'hotovo' && x.stav !== 'sablona').length})</div>
-    <div class="t ${t === 'poznamky' ? 'active' : ''}" onclick="S.projDetailTab='poznamky';render()">📝 Poznámky</div>
+    <div class="t ${t === 'poznamky' ? 'active' : ''}" onclick="S.projDetailTab='poznamky';render()">📝 Poznámky (${S.poznamky.filter(z => z.pid === p.id).length})</div>
     <div class="t" onclick="S.adminFilter='${p.id}';goPage('denik')">📓 Stavební deník</div>
   </div>${body}`;
 }
@@ -1732,13 +1736,7 @@ async function delMile(pid, i) {
   const p = proj(pid); const ms = (p.milestones || []).slice(); ms.splice(i, 1);
   await db.collection('projects').doc(pid).update({ milestones: ms, ...msRecalc(ms, p) });
 }
-async function addNote(pid) {
-  const t = $('#pn-t').value.trim(); if (!t) { toast('Napiš text poznámky'); return; }
-  const p = proj(pid);
-  await db.collection('projects').doc(pid).update({ notes: [{ date: isoToday(), author: fullName(S.me || {}), text: t }, ...(p.notes || [])] });
-  $('#pn-t').value = ''; zapomen('pn-t');
-  toast('Poznámka uložena ✓');
-}
+
 
 /* ---- fotka: dlaždice ---- */
 function phTile(ph, clientView, eid) {
@@ -1840,6 +1838,27 @@ async function openDriveDoc(driveId, title) {
    — na iPhonu ho system proste nezobrazi a tlacitko vypada, jako by bylo
    mrtve. Vlastni okenko funguje vsude stejne. Vraci Promise s textem,
    nebo null pri zruseni. */
+/* Nahrada za confirm()/await oznam() — v aplikaci pridane na plochu se
+   systemova okna na iPhonu vubec nezobrazi (stejne jako prompt). */
+function potvrd(text, tlacitko) {
+  return new Promise(hotovo => {
+    window._potvrdHotovo = v => { window._potvrdHotovo = null; closeModal(); hotovo(v); };
+    modal(`<h3>❓ Opravdu?</h3>
+      <div style="white-space:pre-line;margin:6px 0 2px">${esc(text)}</div>
+      <div class="aprv">
+        <button class="btn amber" onclick="window._potvrdHotovo(true)">${esc(tlacitko || 'Ano')}</button>
+        <button class="btn ghost" onclick="window._potvrdHotovo(false)">Zrušit</button>
+      </div>`);
+  });
+}
+function oznam(text) {
+  return new Promise(hotovo => {
+    window._potvrdHotovo = () => { window._potvrdHotovo = null; closeModal(); hotovo(); };
+    modal(`<h3>ℹ️ Upozornění</h3>
+      <div style="white-space:pre-line;margin:6px 0 2px">${esc(text)}</div>
+      <div class="aprv"><button class="btn amber" onclick="window._potvrdHotovo()">Rozumím</button></div>`);
+  });
+}
 function zeptejSe(nadpis, popis, vychozi, viceradkove) {
   return new Promise(hotovo => {
     window._zeptejSeHotovo = v => { window._zeptejSeHotovo = null; closeModal(); hotovo(v); };
@@ -2033,7 +2052,7 @@ async function saveInternal(eid) {
   toast(t ? 'Interní poznámka uložena ✓' : 'Interní poznámka smazána');
 }
 async function delInternal(eid) {
-  if (!confirm('Smazat interní poznámku?')) return;
+  if (!await potvrd('Smazat interní poznámku?')) return;
   await db.collection('entries').doc(eid).update({ internal: '' });
   zapomen('int-' + eid);
   toast('Interní poznámka smazána');
@@ -2364,7 +2383,7 @@ async function attSchvalit(id) {
 async function attZamitnout(id) {
   const a = S.attendance.find(x => x.id === id); if (!a) return;
   const u = userById(a.userDocId) || {};
-  if (!confirm('Zamítnout doplněný odchod?\n\n' + (fullName(u) || a.userName || '?') + ' — ' +
+  if (!await potvrd('Zamítnout doplněný odchod?\n\n' + (fullName(u) || a.userName || '?') + ' — ' +
                fmtISO(a.date) + ' ' + a.time + '\n\nZáznam se smaže a den zůstane neuzavřený.')) return;
   try { await db.collection('attendance').doc(id).delete(); toast('Zamítnuto — záznam smazán'); }
   catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
@@ -2372,7 +2391,7 @@ async function attZamitnout(id) {
 async function attSmazat(id) {
   const a = S.attendance.find(x => x.id === id); if (!a) return;
   const u = userById(a.userDocId) || {};
-  if (!confirm('Opravdu smazat tento záznam?\n\n' + (fullName(u) || a.userName || '?') + ' — ' +
+  if (!await potvrd('Opravdu smazat tento záznam?\n\n' + (fullName(u) || a.userName || '?') + ' — ' +
                a.akce + ' ' + fmtISO(a.date) + ' ' + a.time + '\n\nSmazání nejde vrátit zpět.')) return;
   try { await db.collection('attendance').doc(id).delete(); toast('Záznam smazán ✓'); }
   catch (e) { toast('Smazání se nepovedlo: ' + (e.code || e.message)); }
@@ -2548,7 +2567,7 @@ function pgViceprace() {
         ${v.stav === 'navrh' ? `<input type="number" id="vpc-${v.id}" placeholder="Cena v Kč" style="max-width:140px" value="${v.cena || ''}"><button class="btn amber sm" onclick="vpNacenit('${v.id}')">💰 Nacenit a poslat investorovi</button>` : ''}
         ${v.stav === 'u_investora' ? `<button class="btn dark sm" onclick="vpPapir('${v.id}')">🖨 Klient bez PC — podpis na stavbě</button>
           <span class="muted" style="align-self:center;font-size:11.5px">investor vidí na portálu tlačítko Schválit</span>` : ''}
-        ${(v.stav === 'schvaleno' || v.stav === 'papir' || v.stav === 'zamitnuto') ? `<button class="btn ghost sm" onclick="if(confirm('Smazat vícepráci?'))db.collection('viceprace').doc('${v.id}').delete()">🗑</button>` : ''}
+        ${(v.stav === 'schvaleno' || v.stav === 'papir' || v.stav === 'zamitnuto') ? `<button class="btn ghost sm" onclick="smazVicepraci('${v.id}')">🗑</button>` : ''}
       </div>
     </div>`; }).join('') || '<div class="card"><div class="empty">Zatím žádné vícepráce.</div></div>'}
     <div class="note">Tok (#35): záznam → nacenění → schválení investorem (klik na portálu, nebo papír u klienta bez PC) → propis do listu Vícepráce v CN + PDF do složky zakázky na Drive.</div>
@@ -2838,7 +2857,7 @@ async function resetPin(udi) {
 }
 async function zrusitPrihlaseni(udi) {
   const u = userById(udi); if (!u || !u.uid) return;
-  if (!confirm('Zrušit přihlášení pro ' + fullName(u) + '?\n\nJeho PIN přestane platit a zmizí z přihlašovací obrazovky.\nZáznamy docházky a zápisy v deníku zůstanou.')) return;
+  if (!await potvrd('Zrušit přihlášení pro ' + fullName(u) + '?\n\nJeho PIN přestane platit a zmizí z přihlašovací obrazovky.\nZáznamy docházky a zápisy v deníku zůstanou.')) return;
   try {
     await db.collection('users_auth').doc(u.uid).delete().catch(() => {});
     await db.collection('roster').doc(udi).delete().catch(() => {});
@@ -2853,7 +2872,7 @@ async function zrusitPrihlaseni(udi) {
    a rekne se proc. Prazdna polozka (preklep, testovaci zaznam) jde pryc. */
 async function delTask(id) {
   const t = S.tasks.find(x => x.id === id); if (!t) return;
-  if (!confirm('Smazat úkol?\n\n„' + (t.title || '') + '"\n\nSmazání nejde vrátit zpět.')) return;
+  if (!await potvrd('Smazat úkol?\n\n„' + (t.title || '') + '"\n\nSmazání nejde vrátit zpět.')) return;
   const _t = S.tasks.find(x => x.id === id) || {};
   for (const f of (_t.photos || [])) db.collection('fotonahledy').doc(f.id).delete().catch(() => {});
   try { await db.collection('tasks').doc(id).delete(); toast('Úkol smazán ✓'); }
@@ -2862,7 +2881,7 @@ async function delTask(id) {
 async function delEntry(id) {
   const e = S.entries.find(x => x.id === id); if (!e) return;
   const p = proj(e.pid) || {};
-  if (!confirm('Smazat denní záznam?\n\n' + fmtISOFull(e.date) + ' · ' + (p.name || '') + '\nZapsal: ' + (e.author || '') +
+  if (!await potvrd('Smazat denní záznam?\n\n' + fmtISOFull(e.date) + ' · ' + (p.name || '') + '\nZapsal: ' + (e.author || '') +
     '\n\nZmizí i z portálu investora. Smazání nejde vrátit zpět.')) return;
   try {
     if (p.portalToken) await db.collection('portals').doc(p.portalToken).collection('feed').doc(id).delete().catch(() => {});
@@ -2880,13 +2899,13 @@ async function delProject(pid) {
   const ukolu = S.tasks.filter(t => t.pid === pid && t.stav !== 'sablona').length;
   const vp = S.viceprace.filter(v => v.pid === pid).length;
   if (dochazky) {
-    alert('Stavbu „' + p.name + '" smazat nejde.\n\nVisí na ní ' + dochazky + ' záznamů docházky — to je podklad pro výplaty ' +
+    await oznam('Stavbu „' + p.name + '" smazat nejde.\n\nVisí na ní ' + dochazky + ' záznamů docházky — to je podklad pro výplaty ' +
       'a nesmí zmizet.\n\nPřepni ji na neaktivní: zmizí z výběru na stavbě i z nabídky nových zápisů, ale historie zůstane.');
     return;
   }
-  if (!confirm('Opravdu smazat stavbu „' + p.name + '"?\n\nSmaže se i: ' + zapisu + ' zápisů deníku, ' + ukolu + ' úkolů, ' + vp +
+  if (!await potvrd('Opravdu smazat stavbu „' + p.name + '"?\n\nSmaže se i: ' + zapisu + ' zápisů deníku, ' + ukolu + ' úkolů, ' + vp +
     ' víceprací a portál investora.\n\nSmazání nejde vrátit zpět.')) return;
-  if (zapisu + ukolu + vp > 0 && !confirm('Ještě jednou pro jistotu — smazat ' + (zapisu + ukolu + vp) + ' navázaných záznamů?')) return;
+  if (zapisu + ukolu + vp > 0 && !await potvrd('Ještě jednou pro jistotu — smazat ' + (zapisu + ukolu + vp) + ' navázaných záznamů?')) return;
   try {
     for (const e of S.entries.filter(x => x.pid === pid)) await db.collection('entries').doc(e.id).delete().catch(() => {});
     for (const t of S.tasks.filter(x => x.pid === pid)) await db.collection('tasks').doc(t.id).delete().catch(() => {});
@@ -2907,12 +2926,12 @@ async function delUser(udi) {
   const dochazky = S.attendance.filter(a => a.userDocId === udi).length;
   const zapisu = S.entries.filter(e => e.author === fullName(u) || (u.uid && e.authorUid === u.uid)).length;
   if (dochazky || zapisu) {
-    alert(fullName(u) + ' smazat nejde.\n\nMá ' + dochazky + ' záznamů docházky a ' + zapisu + ' zápisů v deníku — ' +
+    await oznam(fullName(u) + ' smazat nejde.\n\nMá ' + dochazky + ' záznamů docházky a ' + zapisu + ' zápisů v deníku — ' +
       'to je podklad pro výplaty a stavební deník.\n\nMísto smazání: zruš mu přihlášení (🚫) a přepni ho na neaktivního. ' +
       'Zmizí ze všech výběrů, ale historie zůstane dohledatelná.');
     return;
   }
-  if (!confirm('Opravdu smazat ' + fullName(u) + '?\n\nNemá žádnou docházku ani zápisy. Smazání nejde vrátit zpět.')) return;
+  if (!await potvrd('Opravdu smazat ' + fullName(u) + '?\n\nNemá žádnou docházku ani zápisy. Smazání nejde vrátit zpět.')) return;
   try {
     if (u.uid) await db.collection('users_auth').doc(u.uid).delete().catch(() => {});
     await db.collection('roster').doc(udi).delete().catch(() => {});
@@ -3134,7 +3153,7 @@ async function zacitPauzu() {
   if (!sm.vPraci) { toast('Pauzu jde zapnout jen během směny'); return; }
   /* Prepinac je hned nad tlacitkem ODCHOD, takze se da tuknout omylem.
      Proto potvrzeni — spatne zapnuta pauza ubira hodiny z vyplaty. */
-  if (!confirm('Začít pauzu?\n\nČas pauzy se odečte od dnešních hodin.')) return;
+  if (!await potvrd('Začít pauzu?\n\nČas pauzy se odečte od dnešních hodin.')) return;
   try { await zapisPauzu('Pauza', sm.pid); S.pauzaPripomenuto = false; toast('Pauza běží ⏸'); }
   catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
 }
@@ -3252,17 +3271,94 @@ function kartaPodklady(p) {
    Veci, ktere u stavby ZUSTAVAJI (kody, kontakty, "voda se zavira v
    suterenu"). Nadpis + text, ktery jde upravovat, a komentare pod tim.
    Zadal Marco 28. 8. 2026. */
-// Poznamky zalozene driv nemaji pole viditelnost. Bez nej by je filtrovane
-// dotazy party ani subu nevratily, takze vedeni je pri prihlaseni dopise.
-async function dopisViditelnost() {
+/* Starsi data poznamek prevadi vedeni pri prihlaseni:
+   1) poznamky s jednim polem viditelnost dostanou seznam vidi,
+   2) uplne stare poznamky z dob Stavaria (pole notes primo u zakazky,
+      bez nadpisu a bez prav) se prestehuji do kolekce poznamky
+      jako "jen vedeni" a u zakazky se smazou. */
+async function prevedStarePoznamky() {
+  const FVD = firebase.firestore.FieldValue;
   const snap = await db.collection('poznamky').get().catch(() => null);
-  if (!snap) return;
-  const chybi = snap.docs.filter(d => !d.data().viditelnost);
-  for (const d of chybi) await d.ref.update({ viditelnost: 'vsichni' }).catch(() => {});
-  if (chybi.length) console.log('doplnena viditelnost u ' + chybi.length + ' poznamek');
+  if (snap) for (const d of snap.docs.filter(x => !Array.isArray(x.data().vidi))) {
+    await d.ref.update({ vidi: [d.data().viditelnost || 'vsichni'], viditelnost: FVD.delete() }).catch(() => {});
+  }
+  const ps = await db.collection('projects').get().catch(() => null);
+  if (ps) for (const d of ps.docs.filter(x => (x.data().notes || []).length)) {
+    for (const n of d.data().notes) {
+      await db.collection('poznamky').add({ pid: d.id,
+        nadpis: (n.text || '').split('\n')[0].slice(0, 48) || 'Poznámka',
+        text: (n.text || '') + '\n— ' + (n.author || '?') + ', ' + fmtISO(n.date),
+        komentare: [], vidi: ['vedeni'], vidiJmena: [],
+        autorId: '', autor: n.author || '', createdAt: FV() }).catch(() => {});
+    }
+    await d.ref.update({ notes: FVD.delete() }).catch(() => {});
+  }
 }
 
-const VIDI = { vsichni: '👥 Všichni na stavbě', parta: '👷 Jen naši lidé', vedeni: '🗂 Jen vedení' };
+/* Jeden posluchac na kazdy klic viditelnosti; vysledky se skladaji. */
+function listenPoznamky(klice) {
+  const casti = {};
+  const slozit = () => {
+    const mapa = new Map();
+    Object.values(casti).flat().forEach(z => mapa.set(z.id, z));
+    S.poznamky = [...mapa.values()].sort((a, b) => (a.nadpis || '').localeCompare(b.nadpis || '', 'cs'));
+    render();
+  };
+  klice.forEach(k => {
+    S.unsub.push(db.collection('poznamky').where('vidi', 'array-contains', k).onSnapshot(snap => {
+      casti[k] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      slozit();
+    }, err => console.warn('poznamky/' + k, err)));
+  });
+}
+
+/* Seznam lidi pro vyber "kdo poznamku uvidi" (bez vedeni — to vidi vse). */
+async function nactiPzLide() {
+  if (S.pzLide) return S.pzLide;
+  const snap = await db.collection('users').get().catch(() => null);
+  S.pzLide = !snap ? [] : snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    // jen parta a subdodavatele — vedeni vidi vse a investor sem nepatri
+    .filter(u => ['teren', 'sub'].includes(typeKeyOfUser(u)))
+    .map(u => ({ id: u.id, jmeno: fullName(u) }))
+    .sort((a, b) => a.jmeno.localeCompare(b.jmeno, 'cs'));
+  return S.pzLide;
+}
+
+/* Lidsky popis, komu se poznamka ukazuje. */
+function vidiPopis(z) {
+  const v = z.vidi || (z.viditelnost ? [z.viditelnost] : ['vsichni']);
+  if (!v.length || (v.length === 1 && v[0] === 'vedeni')) return '🗂 Jen vedení';
+  if (v.includes('vsichni')) return '👥 Všichni na stavbě';
+  const kusy = [];
+  if (v.includes('parta')) kusy.push('👷 Naši lidé');
+  const lide = v.filter(x => !['vsichni', 'parta', 'vedeni'].includes(x));
+  if (lide.length) kusy.push('👤 ' + ((z.vidiJmena || []).join(', ') || lide.length + ' lidí'));
+  return kusy.join(' + ') || '🗂 Jen vedení';
+}
+function vidiBarva(z) {
+  const v = z.vidi || [z.viditelnost || 'vsichni'];
+  if (!v.length || (v.length === 1 && v[0] === 'vedeni')) return 'b-red';
+  return v.includes('vsichni') ? 'b-int' : 'b-wait';
+}
+
+/* Zaskrtavaci vyber viditelnosti — skupiny i konkretni lide, klidne vic naraz. */
+function pzVidiHtml(z) {
+  const v = (z && (z.vidi || (z.viditelnost ? [z.viditelnost] : []))) || [];
+  const chk = (val, popis) => `<label style="display:flex;gap:9px;align-items:center;font-weight:400;margin:0;cursor:pointer">
+      <input type="checkbox" class="pz-vd" value="${val}" ${v.includes(val) ? 'checked' : ''} style="width:auto;margin:0"> ${popis}</label>`;
+  return `<label>Kdo ji uvidí <span class="muted" style="font-weight:400">— klidně víc možností naráz</span></label>
+    <div style="display:flex;flex-direction:column;gap:7px;border:1px solid var(--line);border-radius:10px;padding:10px 13px;max-height:220px;overflow-y:auto">
+      ${chk('vsichni', '👥 Všichni na stavbě')}
+      ${chk('parta', '👷 Naši lidé (celá parta)')}
+      ${(S.pzLide || []).map(u => chk(u.id, '👤 ' + esc(u.jmeno))).join('')}
+    </div>
+    <div class="note">Nic nezaškrtneš → poznámku vidí jen vedení. Vedení vidí všechny poznámky vždy.</div>`;
+}
+function pzVidiSebrat() {
+  const v = [...document.querySelectorAll('.pz-vd:checked')].map(x => x.value);
+  return { vidi: v.length ? v : ['vedeni'],
+           vidiJmena: (S.pzLide || []).filter(u => v.includes(u.id)).map(u => u.jmeno) };
+}
 function kartaPoznamky(p) {
   if (!p) return '';
   const mp = S.poznamky.filter(z => z.pid === p.id);
@@ -3271,8 +3367,7 @@ function kartaPoznamky(p) {
     ${mp.map(z => S.poznamkaEdit === z.id ? `
       <div class="ukform" style="margin-bottom:8px">
         <label>Nadpis</label><input type="text" id="pz-n-${z.id}" value="${esc(z.nadpis || '')}">
-        <label>Kdo ji uvidí</label>
-        <select id="pz-v-${z.id}">${Object.keys(VIDI).map(k => `<option value="${k}" ${(z.viditelnost || 'vsichni') === k ? 'selected' : ''}>${VIDI[k]}</option>`).join('')}</select>
+        ${pzVidiHtml(z)}
         <label>Text</label><textarea id="pz-t-${z.id}" style="min-height:70px">${esc(z.text || '')}</textarea>
         <div class="aprv"><button class="btn amber sm" onclick="ulozPoznamku('${z.id}')">Uložit</button>
           <button class="btn ghost sm" onclick="S.poznamkaEdit=null;render()">Zrušit</button>
@@ -3280,8 +3375,8 @@ function kartaPoznamky(p) {
       </div>` : `
       <div style="border:1px solid var(--line);border-radius:10px;padding:11px 13px;margin-bottom:8px">
         <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap"><b style="flex:1;min-width:120px">${esc(z.nadpis || '')}</b>
-          <span class="badge ${z.viditelnost === 'vedeni' ? 'b-red' : z.viditelnost === 'parta' ? 'b-wait' : 'b-int'}">${VIDI[z.viditelnost] || VIDI.vsichni}</span>
-          <span class="lnk" style="font-size:12px" onclick="S.poznamkaEdit='${z.id}';render()">upravit</span></div>
+          <span class="badge ${vidiBarva(z)}">${vidiPopis(z)}</span>
+          <span class="lnk" style="font-size:12px" onclick="otevriPoznamku('${z.id}')">upravit</span></div>
         <div class="muted" style="white-space:pre-line;font-size:14px;margin-top:3px">${esc(z.text || '')}</div>
         ${(z.komentare || []).length ? `<div style="margin-top:8px;display:flex;flex-direction:column;gap:5px">
           ${z.komentare.map(k => `<div style="background:#f4f6f9;border-radius:8px;padding:6px 10px;font-size:13px">
@@ -3296,38 +3391,43 @@ function kartaPoznamky(p) {
     <div class="aprv"><button class="btn dark sm" onclick="novaPoznamka('${p.id}')">➕ Nová poznámka</button></div>
   </div>`;
 }
+async function otevriPoznamku(id) {
+  await nactiPzLide();
+  S.poznamkaEdit = id; render();
+}
 async function novaPoznamka(pid) {
+  await nactiPzLide();
   const v = await new Promise(hotovo => {
     window._pzHotovo = x => { window._pzHotovo = null; closeModal(); hotovo(x); };
     modal(`<h3>📝 Nová poznámka ke stavbě</h3>
       <label>Nadpis *</label>
       <input type="text" id="pz-nadpis" placeholder="">
-      <label>Kdo ji uvidí</label>
-      <select id="pz-vid">${Object.keys(VIDI).map(k => `<option value="${k}">${VIDI[k]}</option>`).join('')}</select>
-      <div class="note">Vedení vidí všechny poznámky vždy. Text a komentáře doplníš potom.</div>
+      ${pzVidiHtml(null)}
       <div class="aprv">
-        <button class="btn amber" onclick="window._pzHotovo({n:document.querySelector('#pz-nadpis').value,v:document.querySelector('#pz-vid').value})">Vytvořit</button>
+        <button class="btn amber" onclick="window._pzHotovo({n:document.querySelector('#pz-nadpis').value,v:pzVidiSebrat()})">Vytvořit</button>
         <button class="btn ghost" onclick="window._pzHotovo(null)">Zrušit</button>
       </div>`);
     setTimeout(() => { const el = document.querySelector('#pz-nadpis'); if (el) el.focus(); }, 60);
   });
   if (!v || !v.n || !v.n.trim()) return;
   const r = await db.collection('poznamky').add({ pid, nadpis: v.n.trim(), text: '', komentare: [],
-    viditelnost: v.v || 'vsichni',
+    vidi: v.v.vidi, vidiJmena: v.v.vidiJmena,
     autorId: S.me ? S.me.id : '', autor: fullName(S.me || {}), createdAt: FV() })
     .catch(e => { toast('Nejde přidat: ' + (e.code || e.message)); return null; });
   if (r) { S.poznamkaEdit = r.id; render(); }
 }
 async function ulozPoznamku(id) {
-  const n = $('#pz-n-' + id).value.trim(), t = $('#pz-t-' + id).value;
+  const n = ($('#pz-n-' + id).value || '').trim();
+  const t = $('#pz-t-' + id).value.trim();
   if (!n) { toast('Nadpis nesmí být prázdný'); return; }
-  const v = $('#pz-v-' + id) ? $('#pz-v-' + id).value : 'vsichni';
-  await db.collection('poznamky').doc(id).update({ nadpis: n, text: t, viditelnost: v })
-    .then(() => { S.poznamkaEdit = null; toast('Uloženo ✓'); render(); })
-    .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
+  const v = pzVidiSebrat();
+  await db.collection('poznamky').doc(id).update({ nadpis: n, text: t,
+    vidi: v.vidi, vidiJmena: v.vidiJmena, viditelnost: firebase.firestore.FieldValue.delete() })
+    .catch(e => { toast('Nejde uložit: ' + (e.code || e.message)); return; });
+  S.poznamkaEdit = null; toast('Uloženo ✓'); render();
 }
 async function smazPoznamku(id) {
-  if (!confirm('Smazat poznámku i s komentáři?')) return;
+  if (!await potvrd('Smazat poznámku i s komentáři?')) return;
   await db.collection('poznamky').doc(id).delete()
     .then(() => { S.poznamkaEdit = null; toast('Smazáno ✓'); })
     .catch(e => toast('Nejde smazat: ' + (e.code || e.message)));
@@ -3401,7 +3501,7 @@ async function pridatKlic(pid) {
 }
 async function smazatKlic(id) {
   const k = S.klice.find(x => x.id === id); if (!k) return;
-  if (!confirm('Smazat „' + k.nazev + '" včetně historie předání?')) return;
+  if (!await potvrd('Smazat „' + k.nazev + '" včetně historie předání?')) return;
   await db.collection('klice').doc(id).delete().catch(e => toast('Nejde smazat: ' + (e.code || e.message)));
 }
 function predatKlicDialog(id) {
@@ -3618,7 +3718,7 @@ async function subOdchod() {
 }
 async function subSmazatHlaseni(id) {
   const h = S.hlaseni.find(x => x.id === id); if (!h) return;
-  if (!confirm('Smazat dnešní hlášení?')) return;
+  if (!await potvrd('Smazat dnešní hlášení?')) return;
   try { await db.collection('hlaseni').doc(id).delete(); toast('Smazáno ✓'); }
   catch (e) { toast('Nejde smazat: ' + (e.code || e.message)); }
 }
@@ -3865,7 +3965,7 @@ function posErrText(e) {
 async function smazatMujUkol(id) {
   const t = S.tasks.find(x => x.id === id);
   if (!t) return;
-  if (!confirm('Zrušit úkol „' + t.title + '"?\n\nZmizí i tomu, komu jsi ho zadal.')) return;
+  if (!await potvrd('Zrušit úkol „' + t.title + '"?\n\nZmizí i tomu, komu jsi ho zadal.')) return;
   for (const f of (t.photos || [])) db.collection('fotonahledy').doc(f.id).delete().catch(() => {});
   try { await db.collection('tasks').doc(id).delete(); toast('Úkol zrušen ✓'); }
   catch (e) { toast('Nepovedlo se zrušit: ' + (e.code || e.message)); }
@@ -3962,13 +4062,13 @@ async function workerCheck(akce) {
     /* Foto je povinne (rozhodnuti 25. 8.). Kdo nepusti foťák, nepichne si —
        proto je hlaska konkretni, at clovek vi, co ma udelat, nez zavola vedeni. */
     if (!selfie) {
-      alert('Bez ověřovacího fota nejde ' + akce.toLowerCase() + ' zapsat.\n\n'
+      await oznam('Bez ověřovacího fota nejde ' + akce.toLowerCase() + ' zapsat.\n\n'
         + 'Zkus to znovu. Když se foťák neotevře, povol aplikaci přístup k fotoaparátu '
         + 'v nastavení telefonu — a když to nepůjde ani pak, ozvi se vedení, doplní ti to ručně.');
       S.checking = null; render(); return;
     }
     if (!p.gps) {
-      if (!confirm('Stavba „' + p.name + '" nemá zadané GPS, takže polohu nelze ověřit.\n\nZapsat ' +
+      if (!await potvrd('Stavba „' + p.name + '" nemá zadané GPS, takže polohu nelze ověřit.\n\nZapsat ' +
                    akce.toLowerCase() + ' bez ověření?')) { S.checking = null; render(); return; }
       await save(null, selfie);
     } else {
@@ -3976,7 +4076,7 @@ async function workerCheck(akce) {
       if (r && r.pos) {
         await save(haversine(r.pos.coords.latitude, r.pos.coords.longitude, p.gps.lat, p.gps.lng), selfie);
       } else {
-        if (!confirm(posErrText(r && r.err) + '\n\nZapsat ' + akce.toLowerCase() + ' bez ověření polohy?')) {
+        if (!await potvrd(posErrText(r && r.err) + '\n\nZapsat ' + akce.toLowerCase() + ' bez ověření polohy?')) {
           S.checking = null; render(); return;
         }
         await save(null, selfie);
@@ -4185,7 +4285,7 @@ function viewPortal() {
   </main></div>`;
 }
 async function portalVpAction(vpid, action) {
-  if (action === 'approve' && !confirm('Schválit vícepráci? Kliknutí platí jako odsouhlasení ceny.')) return;
+  if (action === 'approve' && !await potvrd('Schválit vícepráci? Kliknutí platí jako odsouhlasení ceny.')) return;
   await db.collection('portals').doc(S.portalToken).collection('actions').add({ type: 'vp', vpid, action, ts: FV(), handled: false });
   // optimisticky schovej tlačítka
   const v = S.portalVp.find(x => x.id === vpid);
@@ -4213,7 +4313,7 @@ setInterval(() => {
 
 /* ============ VÝCHOZÍ DATA (pilot Pecka + Šaarová) ============ */
 async function seedData() {
-  if (!confirm('Nahrát výchozí data pilotních zakázek (Pecka CN20260055, Šaarová CN20260060)?')) return;
+  if (!await potvrd('Nahrát výchozí data pilotních zakázek (Pecka CN20260055, Šaarová CN20260060)?')) return;
   const batchAdd = async (col, data) => (await db.collection(col).add(data)).id;
   const pecka = await batchAdd('projects', {
     kod: '020', cn: 'CN20260055', client: 'Štěpán Pecka', name: 'Novodvorská - Pecka', address: 'Novodvorská 413/135, Praha 4',

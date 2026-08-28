@@ -7,12 +7,13 @@
 //  Živá verze: Firebase konzole → Firestore → Rules
 //  Když se změní tam, změň i tady, ať kopie nezastará.
 //
-//  Poslední změny 28. 8. 2026 (publikováno v konzoli 13:01):
-//   9) /poznamky: tri urovne viditelnosti (vsichni/parta/vedeni).
-//      Vedeni cte vse, parta bez "jen vedeni", sub jen "vsichni".
-//      Pole viditelnost je povinne pri zapisu. Overeno zvenku
-//      REST dotazem: nefiltrovany vypis i prime cteni skryte
-//      poznamky sub dostane PERMISSION_DENIED.
+//  Poslední změny 28. 8. 2026 (publikováno v konzoli 13:15):
+//   9) /poznamky: kdo poznamku uvidi urcuje seznam vidi — 'vsichni',
+//      'parta' a/nebo id konkretnich lidi, klidne vic naraz;
+//      ['vedeni'] = jen vedeni. Vedeni cte vse. Pole vidi je povinne
+//      pri zapisu. Overeno zvenku REST dotazem jako sub: nefiltrovany
+//      vypis, klic 'parta' i klic 'vedeni' vraci PERMISSION_DENIED,
+//      klic 'vsichni' a vlastni id vraci jen sve poznamky.
 //
 //  Poslední změny 27. 8. 2026:
 //   5) /tasks: cetlo je KAZDY prihlaseny s roli, tedy i radovy pracovnik
@@ -160,15 +161,19 @@ service cloud.firestore {
     // Poznamky ke stavbe: veci, ktere u zakazky zustavaji (kody, kontakty).
     // Cist a komentovat smi kdokoli s roli, mazat vedeni.
     match /poznamky/{id} {
-      // vedeni vsechny; parta krome "jen vedeni"; sub jen ty pro vsechny.
-      // POZOR: zadna vetev "kdyz pole chybi" — ta se u hromadnych dotazu
-      // vyhodnoti jako povoleni cele kolekce (overeno 28. 8.). Pole je
-      // proto povinne uz pri zapisu a stare poznamky ho maji dopsane.
+      // Kdo poznamku uvidi urcuje seznam vidi: 'vsichni', 'parta'
+      // a/nebo id konkretnich lidi; ['vedeni'] = jen vedeni.
+      // Vedeni cte vse. POZOR: zadna vetev "kdyz pole chybi" — ta se
+      // u hromadnych dotazu vyhodnoti jako povoleni cele kolekce
+      // (overeno 28. 8.). Pole vidi je proto povinne pri zapisu
+      // a stara data prevadi vedeni pri prihlaseni.
       allow read: if isAdmin()
-        || (hasRole() && (resource.data.viditelnost == 'vsichni'
-            || (resource.data.viditelnost == 'parta' && mojeRole() == 'worker')));
+        || (hasRole() && 'vsichni' in resource.data.vidi)
+        || (mojeRole() == 'worker' && 'parta' in resource.data.vidi)
+        || (hasRole() && mujDocId() in resource.data.vidi);
       allow create, update: if hasRole()
-        && request.resource.data.viditelnost in ['vsichni', 'parta', 'vedeni'];
+        && request.resource.data.vidi is list
+        && request.resource.data.vidi.size() > 0;
       allow delete: if isAdmin();
     }
 
