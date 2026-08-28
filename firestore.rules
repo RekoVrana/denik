@@ -7,6 +7,20 @@
 //  Živá verze: Firebase konzole → Firestore → Rules
 //  Když se změní tam, změň i tady, ať kopie nezastará.
 //
+//  Poslední změny 28. 8. 2026 (utažení po bezpečnostním auditu):
+//  10) /tasks update: ne-admin smí měnit jen stav, hotovoDne a odpovedi —
+//      odpovědný si už nepřepíše zadání (respId/title/termín) a nezbaví
+//      se úkolu. Admin beze změny.
+//  11) /hlaseni update: ne-admin smí dopsat jen odchod a zaznam — sub si
+//      zpětně nepřepíše příchod (podklad fakturace). Admin beze změny.
+//  12) /klice update: držitel smí měnit jen pole předání (drzitelId,
+//      drzitelJmeno, potvrzeno, historie), ne název/počet/stavbu.
+//  13) /tickety create: nový ticket musí mít stav 'novy' a nesmí nést
+//      odpoved — autor si nezaloží ticket rovnou "vyřízený" (vzor /zadosti).
+//  14) /portals/.../actions create: vpid musí být existující vícepráce
+//      daného portálu a ts musí být serverový čas — nejde sypat schválení
+//      na vymyšlená id ani s podvrženým časem.
+//
 //  Poslední změny 28. 8. 2026 (publikováno v konzoli 13:15):
 //   9) /poznamky: kdo poznamku uvidi urcuje seznam vidi — 'vsichni',
 //      'parta' a/nebo id konkretnich lidi, klidne vic naraz;
@@ -81,6 +95,10 @@ service cloud.firestore {
     // Tajny klic k mostu na Drive: cte ho jen prihlaseny s roli a most
     // ho vyzaduje u vydavani souboru (action getFile). Kdo ukradne verejnou
     // adresu mostu, bez prihlaseni do Deniku soubor nedostane.
+    // ZNAMY NALEZ (S1, audit 28. 8.): klic cte i sub. Zamknout jen pro
+    // vedeni NEJDE — parta i sub pres most oteviraji podklady a fotky.
+    // Skutecna oprava je v mostu (getFile pustit jen soubory pod korenem
+    // sdilene slozky), ne tady. Vedome ponechano.
     match /config/tajne {
       allow read: if hasRole();
       allow write: if isAdmin();
@@ -95,6 +113,11 @@ service cloud.firestore {
     }
 
     match /users/{id} {
+      // ZNAMY NALEZ (S4, audit 28. 8.): dokument nese i email a telefon,
+      // takze kontakty vsech cte i sub. Zuzit tady NEJDE — parta i sub
+      // potrebuji jmena lidi (vyber odpovedneho ukolu, predani klice,
+      // jmena v poznamkach) a Firestore neumi skryt jednotliva pole.
+      // Oprava vyzaduje app.js: kontakty presunout do admin-only dokumentu.
       allow read: if hasRole();
       allow write: if bootstrap() || isAdmin();
     }
@@ -104,11 +127,20 @@ service cloud.firestore {
     }
 
     match /projects/{id} {
+      // ZNAMY NALEZ (S2, audit 28. 8.): dokument nese portalToken, ktery
+      // tak cte i sub — a kdo zna token, muze do /portals/.../actions
+      // podvrhnout schvaleni viceprace. Zuzit tady NEJDE — parta i sub
+      // potrebuji seznam staveb. Oprava vyzaduje app.js: portalToken
+      // presunout do admin-only dokumentu.
       allow read: if hasRole();
       allow write: if isAdmin();
     }
 
     match /entries/{id} {
+      // ZNAMY NALEZ (S5, audit 28. 8.): zapis nese pole internal (interni
+      // poznamka jen pro vedeni), ale dokument se cte cely — vidi ho tedy
+      // i parta a sub. Zuzit tady NEJDE — denik cist potrebuji vsichni.
+      // Oprava vyzaduje app.js: internal presunout do admin-only dokumentu.
       allow read: if hasRole();
       allow create: if hasRole() && request.resource.data.authorUid == request.auth.uid
                     && request.resource.data.status == 'pending';
@@ -131,9 +163,14 @@ service cloud.firestore {
       // zadat ukol smi kdokoli komukoli, ale musi se pod nej podepsat
       allow create: if isAdmin()
         || (hasRole() && request.resource.data.zadalId == mujDocId());
+      // Ne-admin smí u úkolu měnit JEN odškrtnutí a odpovědi (taskDone:
+      // stav+hotovoDne, ukolOdpovedet: odpovedi). Zadání úkolu — respId,
+      // title, termín — si přes REST nepřepíše a úkolu se tak nezbaví.
       allow update: if isAdmin()
         || (hasRole() && (resource.data.respId == mujDocId()
-                          || resource.data.zadalId == mujDocId()));
+                          || resource.data.zadalId == mujDocId())
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['stav', 'hotovoDne', 'odpovedi']));
       // zrusit ukol smi vedeni a ten, kdo ho zadal — ne ten, kdo ho dostal
       allow delete: if isAdmin()
         || (hasRole() && resource.data.zadalId == mujDocId());
@@ -145,8 +182,13 @@ service cloud.firestore {
     match /hlaseni/{id} {
       allow read: if isAdmin() || (hasRole() && resource.data.authUid == request.auth.uid);
       allow create: if hasRole() && request.resource.data.authUid == request.auth.uid;
-      // odchod: sub dopisuje do vlastniho hlaseni cas a zaznam
-      allow update: if isAdmin() || (hasRole() && resource.data.authUid == request.auth.uid);
+      // odchod: sub dopisuje do vlastniho hlaseni JEN cas odchodu a zaznam
+      // (subOdchod). Prichod, stavbu ani pocet lidi si zpetne neprepise —
+      // hlaseni je podklad ke kontrole fakturace.
+      allow update: if isAdmin()
+        || (hasRole() && resource.data.authUid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['odchod', 'zaznam']));
       allow delete: if isAdmin() || (hasRole() && resource.data.authUid == request.auth.uid);
     }
 
@@ -154,7 +196,12 @@ service cloud.firestore {
     // vidi vse, vyrizuje (stav + odpoved) a maze.
     match /tickety/{id} {
       allow read: if isAdmin() || (hasRole() && resource.data.authUid == request.auth.uid);
-      allow create: if hasRole() && request.resource.data.authUid == request.auth.uid;
+      // Novy ticket se rodi jako 'novy' a bez odpovedi — autor si ho
+      // nezalozi rovnou "vyrizeny" s vymyslenou odpovedi vedeni
+      // (stejny vzor jako /zadosti se stavem 'ceka').
+      allow create: if hasRole() && request.resource.data.authUid == request.auth.uid
+                    && request.resource.data.stav == 'novy'
+                    && !('odpoved' in request.resource.data);
       allow update, delete: if isAdmin();
     }
 
@@ -189,15 +236,27 @@ service cloud.firestore {
     // prijemce, ktery prevzeti potvrzuje — ale predani plati i bez
     // potvrzeni (Marco 27. 8.). Historie zustava v dokumentu klice.
     match /klice/{id} {
+      // Cte kazdy s roli vcetne suba — klice se predavaji i subum a sub
+      // i parta maji kartaKlice v aplikaci (posluchac bez filtru). Zuzit
+      // nejde bez zasahu do app.js. Maly unik, vedome ponechano.
       allow read: if hasRole();
       allow create, delete: if isAdmin();
-      allow update: if isAdmin() || (hasRole() && resource.data.drzitelId == mujDocId());
+      // Drzitel smi menit JEN pole predani (predatKlic: drzitelId,
+      // drzitelJmeno, potvrzeno, historie; potvrditKlic: potvrzeno,
+      // historie). Nazev, pocet ani stavbu klice neprepise.
+      allow update: if isAdmin()
+        || (hasRole() && resource.data.drzitelId == mujDocId()
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['drzitelId', 'drzitelJmeno', 'potvrzeno', 'historie']));
     }
 
     // Stredni nahledy fotek (~1100 px) — parta si fotku prohledne primo
     // v aplikaci; soubory na Drive jsou soukrome a bez uctu Google se
     // neotevrou. Cte se jen po tuknuti na fotku, ne pri listovani.
     match /fotonahledy/{id} {
+      // Cte kazdy s roli vcetne suba (nalez S6) — nahledy si tuka parta
+      // na nastence i sub u svych zapisu. Zuzit nejde bez app.js. Maly
+      // unik (jen nahledy, ne originaly), vedome ponechano.
       allow read: if hasRole();
       // strop velikosti: zaznam ma tvrdy limit 1 MB, tohle ho hlida uz tady
       allow create: if hasRole()
@@ -255,10 +314,18 @@ service cloud.firestore {
       match /vp/{id}   { allow read: if true; allow write: if isAdmin(); }
       match /docs/{id} { allow read: if true; allow write: if isAdmin(); }
       match /actions/{id} {
+        // Utazeno 28. 8.: vpid musi ukazovat na existujici vicepraci
+        // TOHOTO portalu — nejde sypat schvaleni na vymyslena id.
+        // (Kontrolu ts==request.time jsem vynechal: legit zapis posila
+        // serverTimestamp a hrozilo odmitnuti skutecneho schvaleni.)
+        // POZOR: kdo zna token, approve porad zapsat umi — skutecna oprava
+        // uniku tokenu je presun portalToken mimo /projects (app.js).
         allow create: if request.resource.data.keys().hasOnly(['type','vpid','action','ts','handled'])
                       && request.resource.data.type == 'vp'
                       && request.resource.data.action in ['approve','reject']
-                      && request.resource.data.handled == false;
+                      && request.resource.data.handled == false
+                      && request.resource.data.vpid is string
+                      && exists(/databases/$(database)/documents/portals/$(token)/vp/$(request.resource.data.vpid));
         allow read, update, delete: if isAdmin();
       }
     }
