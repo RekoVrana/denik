@@ -342,6 +342,25 @@ async function dotahniDochazku(from, to) {
   S.dotahuji = false; render();
 }
 
+/* Fotky u ukolu jsou docasne — po vyrizeni nemaji hodnotu a jen by
+   plnily databazi. Den po odskrtnuti (dokud jde vraceni, mazat nesmime)
+   je vedeni pri startu potichu uklidi. */
+async function uklidFotekUkolu() {
+  try {
+    const snap = await db.collection('tasks').where('stav', '==', 'hotovo').get();
+    const dnes = isoToday();
+    let uklizeno = 0;
+    for (const d of snap.docs) {
+      const t = d.data();
+      if (!(t.photos || []).length) continue;
+      if (t.hotovoDne && t.hotovoDne >= dnes) continue;     // jeste jde vratit
+      for (const f of t.photos) await db.collection('fotonahledy').doc(f.id).delete().catch(() => {});
+      await db.collection('tasks').doc(d.id).update({ photos: [] }).catch(() => {});
+      if (++uklizeno >= 20) break;                           // po davkach, at start nezdrzi
+    }
+  } catch (e) { console.warn('uklid fotek ukolu', e); }
+}
+
 function startData() {
   const role = S.meAuth.role; // 'admin' | 'worker' | 'sub'
   listen('projects', 'projects', { sort: (a, b) => (b.active - a.active) || String(a.cn || a.name).localeCompare(String(b.cn || b.name), 'cs') });
@@ -360,6 +379,7 @@ function startData() {
   listen('users', 'users', { sort: (a, b) => (a.prijmeni || '').localeCompare(b.prijmeni || '', 'cs') });
   if (role === 'admin') {
     listen('attendance', 'attendance', { where: [['date', '>=', oknoOd()]], sort: (a, b) => attKey(b) - attKey(a) });
+    setTimeout(uklidFotekUkolu, 8000);
     listen('viceprace', 'viceprace', {});
     listen('zadosti', 'zadosti', { sort: (a, b) => (b.date || '').localeCompare(a.date || '') });
     S.unsub.push(db.collection('sazby').onSnapshot(s => { S.sazby = {}; s.docs.forEach(d => S.sazby[d.id] = d.data()); render(); }, () => {}));
@@ -644,7 +664,7 @@ async function zaraditFotky(p, entryId) {
        takze bezne listovani nic nestoji. Offline: Firestore si zapis
        podrzi a odesle sam. */
     if (ph.mid) db.collection('fotonahledy').doc(id).set({
-      data: ph.mid, pid: (p && p.id) || '', entryId, date: isoToday(), createdAt: FV()
+      data: ph.mid, pid: (p && p.id) || '', entryId, date: isoToday(), autorUid: S.authUser.uid, createdAt: FV()
     }).catch(e => console.warn('fotonahled', e));
     try {
       await frontaPridat({
@@ -3124,7 +3144,7 @@ function kartaUkoly(p) {
         </div>
         <label>Stavba</label>
         <select id="wtk-p">${S.projects.filter(x => x.active !== false).map(x => `<option value="${x.id}" ${p && x.id === p.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
-        <label>Fotka k úkolu <span class="muted" style="text-transform:none;font-weight:400">— vyfoť nebo přilož</span></label>
+        <label>Fotka k úkolu <span class="muted" style="text-transform:none;font-weight:400">— vyfoť nebo přilož · po vyřízení úkolu se fotky smažou</span></label>
         <input type="file" accept="image/*" capture="environment" multiple onchange="ukolFotoPridat(this.files)">
         ${(S.taskFoto || []).length ? `<div class="photos">${S.taskFoto.map((f, i) => `<div class="ph"><img src="${f.thumb}"><span class="del" onclick="S.taskFoto.splice(${i},1);render()">✕</span></div>`).join('')}</div>` : ''}
         <div class="aprv"><button class="btn amber" onclick="workerAddTask()">➕ Zadat úkol</button></div>
@@ -3551,7 +3571,7 @@ async function workerAddTask() {
   try {
     const fotky = (S.taskFoto || []).map(f => ({ id: f.id, thumb: f.thumb }));
     for (const f of (S.taskFoto || [])) {
-      db.collection('fotonahledy').doc(f.id).set({ data: f.mid, pid: $('#wtk-p').value, entryId: '', date: isoToday(), createdAt: FV() })
+      db.collection('fotonahledy').doc(f.id).set({ data: f.mid, pid: $('#wtk-p').value, entryId: '', date: isoToday(), autorUid: S.authUser.uid, createdAt: FV() })
         .catch(e => console.warn('fotonahled ukolu', e));
     }
     await db.collection('tasks').add({

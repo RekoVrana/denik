@@ -151,7 +151,8 @@ service cloud.firestore {
         && request.resource.data.data is string
         && request.resource.data.data.size() < 950000;
       allow update: if false;
-      allow delete: if isAdmin();
+      // autor smaze svuj nahled (uklid pri zruseni ukolu/zapisu), vedeni vse
+      allow delete: if isAdmin() || (hasRole() && resource.data.autorUid == request.auth.uid);
     }
 
     match /attendance/{id} {
