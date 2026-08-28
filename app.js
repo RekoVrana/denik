@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '28. 8. 2026 m';
+const VERZE = '28. 8. 2026 n';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -2759,9 +2759,13 @@ function pgUzivatele() {
       <div class="urow"><span class="uav">🏠</span><b>Investor</b><span class="muted" style="margin-left:auto">jen portál přes odkaz: schválené zápisy a fotky</span></div>
     </div>
     <div class="tablecard">
+      <div class="uktabs" style="padding:10px 12px 0;flex-wrap:wrap">
+        ${[['', '👥 Všichni'], ['kanc', '🗂 Vedení'], ['teren', '👷 Parta'], ['sub', '🔧 Subdodavatelé'], ['inv', '🏠 Investoři']].map(([k, t]) => `
+          <div class="t ${(S.uzivateleFiltr || '') === k ? 'active' : ''}" onclick="S.uzivateleFiltr='${k}';render()">${t} · ${k ? S.users.filter(u => (u.typ || {})[k]).length : S.users.length}</div>`).join('')}
+      </div>
       <div style="overflow-x:auto"><table>
         <tr><th></th><th>Jméno</th><th>Email</th><th>Kancelářský</th><th>Terénní</th><th>Investor</th><th>Sub</th><th>Sazba hrubá / čistá</th><th>Popis</th><th>Přihlášení</th><th></th></tr>
-        ${S.users.map(u => { const t = u.typ || {}; const s = S.sazby[u.id]; return `
+        ${S.users.filter(u => !S.uzivateleFiltr || (u.typ || {})[S.uzivateleFiltr]).map(u => { const t = u.typ || {}; const s = S.sazby[u.id]; return `
         <tr style="${u.active === false ? 'opacity:.5' : ''}">
           <td><span class="uav">${ini(u)}</span></td>
           <td><b>${esc(fullName(u))}</b></td>
@@ -2780,7 +2784,7 @@ function pgUzivatele() {
             <span class="lnk" style="margin-left:8px" title="Smazat uživatele" onclick="delUser('${u.id}')">🗑</span></td>
         </tr>`; }).join('')}
       </table></div>
-      <div class="pagefoot"><span>${S.users.length} uživatelů</span></div>
+      <div class="pagefoot"><span>${S.users.filter(u => !S.uzivateleFiltr || (u.typ || {})[S.uzivateleFiltr]).length} z ${S.users.length} uživatelů</span></div>
     </div>
     <div class="note">Čistá sazba (#34) je citlivý údaj — vidí ji jen Vedení. „Vytvořit přihlášení" založí pracovníkovi PIN pro mobilní přihlášení.</div>
   </main>`;
@@ -3363,7 +3367,7 @@ function kartaPoznamky(p) {
   if (!p) return '';
   const mp = S.poznamky.filter(z => z.pid === p.id);
   return `<div class="card">
-    <h3>📝 Poznámky ke stavbě <span class="muted" style="font-weight:400">— zůstávají u zakázky</span></h3>
+    <h3>📝 Poznámky ke stavbě <span class="muted" style="font-weight:400">— ${esc(p.name || '')}</span></h3>
     ${mp.map(z => S.poznamkaEdit === z.id ? `
       <div class="ukform" style="margin-bottom:8px">
         <label>Nadpis</label><input type="text" id="pz-n-${z.id}" value="${esc(z.nadpis || '')}">
@@ -3376,7 +3380,7 @@ function kartaPoznamky(p) {
       <div style="border:1px solid var(--line);border-radius:10px;padding:11px 13px;margin-bottom:8px">
         <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap"><b style="flex:1;min-width:120px">${esc(z.nadpis || '')}</b>
           <span class="badge ${vidiBarva(z)}">${vidiPopis(z)}</span>
-          <span class="lnk" style="font-size:12px" onclick="otevriPoznamku('${z.id}')">upravit</span></div>
+          ${(S.meAuth && (S.meAuth.role === 'admin' || z.autorId === S.meAuth.userDocId)) ? `<span class="lnk" style="font-size:12px" onclick="otevriPoznamku('${z.id}')">upravit</span>` : ''}</div>
         <div class="muted" style="white-space:pre-line;font-size:14px;margin-top:3px">${esc(z.text || '')}</div>
         ${(z.komentare || []).length ? `<div style="margin-top:8px;display:flex;flex-direction:column;gap:5px">
           ${z.komentare.map(k => `<div style="background:#f4f6f9;border-radius:8px;padding:6px 10px;font-size:13px">
@@ -3399,7 +3403,7 @@ async function novaPoznamka(pid) {
   await nactiPzLide();
   const v = await new Promise(hotovo => {
     window._pzHotovo = x => { window._pzHotovo = null; closeModal(); hotovo(x); };
-    modal(`<h3>📝 Nová poznámka ke stavbě</h3>
+    modal(`<h3>📝 Nová poznámka — ${esc((proj(pid) || {}).name || '')}</h3>
       <label>Nadpis *</label>
       <input type="text" id="pz-nadpis" placeholder="">
       ${pzVidiHtml(null)}
@@ -3412,7 +3416,8 @@ async function novaPoznamka(pid) {
   if (!v || !v.n || !v.n.trim()) return;
   const r = await db.collection('poznamky').add({ pid, nadpis: v.n.trim(), text: '', komentare: [],
     vidi: v.v.vidi, vidiJmena: v.v.vidiJmena,
-    autorId: S.me ? S.me.id : '', autor: fullName(S.me || {}), createdAt: FV() })
+    autorId: (S.meAuth && S.meAuth.userDocId) || (S.me && S.me.id) || '',
+    autor: fullName(S.me || {}), createdAt: FV() })
     .catch(e => { toast('Nejde přidat: ' + (e.code || e.message)); return null; });
   if (r) { S.poznamkaEdit = r.id; render(); }
 }

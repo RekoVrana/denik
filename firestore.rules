@@ -171,10 +171,17 @@ service cloud.firestore {
         || (hasRole() && 'vsichni' in resource.data.vidi)
         || (mojeRole() == 'worker' && 'parta' in resource.data.vidi)
         || (hasRole() && mujDocId() in resource.data.vidi);
-      allow create, update: if hasRole()
+      // Upravit a smazat smi jen vedeni a autor poznamky.
+      // Ostatni smeji pres update menit JEN pole komentare.
+      allow create: if hasRole()
         && request.resource.data.vidi is list
-        && request.resource.data.vidi.size() > 0;
-      allow delete: if isAdmin();
+        && request.resource.data.vidi.size() > 0
+        && (isAdmin() || request.resource.data.autorId == mujDocId());
+      allow update: if (isAdmin() || resource.data.autorId == mujDocId())
+        ? (request.resource.data.vidi is list && request.resource.data.vidi.size() > 0)
+        : (hasRole()
+           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['komentare']));
+      allow delete: if isAdmin() || resource.data.autorId == mujDocId();
     }
 
     // Klice zakazky: pocet volitelny, zaklada a maze vedeni. Predat smi
