@@ -396,7 +396,7 @@ async function odeslatTicket() {
   } catch (e) { toast('Nepovedlo se odeslat: ' + (e.code || e.message)); }
 }
 async function ticketVyridit(id) {
-  const odpoved = prompt('Odpověď pro autora (nepovinná — uvidí ji u svého hlášení):', '');
+  const odpoved = await zeptejSe('Vyřídit ticket', 'Odpověď pro autora je nepovinná — uvidí ji u svého hlášení.', '', true);
   if (odpoved === null) return;
   await db.collection('tickety').doc(id).update({ stav: 'vyrizeno', odpoved: odpoved.trim() })
     .then(() => toast('Vyřízeno ✓')).catch(e => toast('Nejde: ' + (e.code || e.message)));
@@ -1385,7 +1385,7 @@ async function najdiDriveSlozku(tiche) {
     if (nalezene.length === 0) {
       if (tiche) { driveStav('⚠ Složka pro ' + esc(cn) + ' na Drive není — soubory půjdou do náhradní složky.', 'var(--wait)'); return false; }
       const navrh = cn + '_' + (($('#pf-client').value || '').trim().split(/\s+/).pop() || 'zakazka');
-      const jmeno = prompt('Složka pro ' + cn + ' na Drive neexistuje.\n\nZaložit ji? Uprav název, nebo zruš:', navrh);
+      const jmeno = await zeptejSe('Založit složku na Drive', 'Složka pro ' + cn + ' na Drive neexistuje. Uprav název, nebo zruš.', navrh);
       if (!jmeno) { driveStav('Složka nenalezena — pole zůstalo prázdné.', 'var(--wait)'); return false; }
       const k = await driveCall({ action: 'createFolder', name: jmeno, rootId: CFG.driveRootFolderId });
       if (k.id) { $('#pf-drive').value = k.id; driveStav('✅ Založeno: <b>' + esc(k.name) + '</b>', 'var(--ok)'); return true; }
@@ -1830,6 +1830,26 @@ async function openDriveDoc(driveId, title) {
       <button class="btn dark sm" onclick="closeDoc()">✕ Zavřít</button></div>
     <div class="vbody"><iframe src="https://drive.google.com/file/d/${driveId}/preview" allow="autoplay"></iframe></div></div></div>`;
 }
+/* Nahrada za systemovy prompt(): ten v aplikaci na plose (PWA) nefunguje
+   — na iPhonu ho system proste nezobrazi a tlacitko vypada, jako by bylo
+   mrtve. Vlastni okenko funguje vsude stejne. Vraci Promise s textem,
+   nebo null pri zruseni. */
+function zeptejSe(nadpis, popis, vychozi, viceradkove) {
+  return new Promise(hotovo => {
+    window._zeptejSeHotovo = v => { window._zeptejSeHotovo = null; closeModal(); hotovo(v); };
+    modal(`<h3>${esc(nadpis)}</h3>
+      ${popis ? `<div class="note" style="margin-top:0">${esc(popis)}</div>` : ''}
+      ${viceradkove
+        ? `<textarea id="zs-v" style="min-height:80px">${esc(vychozi || '')}</textarea>`
+        : `<input type="text" id="zs-v" value="${esc(vychozi || '')}" onkeydown="if(event.key==='Enter')window._zeptejSeHotovo(document.querySelector('#zs-v').value)">`}
+      <div class="aprv">
+        <button class="btn amber" onclick="window._zeptejSeHotovo(document.querySelector('#zs-v').value)">Potvrdit</button>
+        <button class="btn ghost" onclick="window._zeptejSeHotovo(null)">Zrušit</button>
+      </div>`);
+    setTimeout(() => { const el = document.querySelector('#zs-v'); if (el) { el.focus(); el.select && el.select(); } }, 60);
+  });
+}
+
 function modal(html) {
   $('#modal').innerHTML = `<div class="modal" onclick="if(event.target===this)closeModal()"><div class="mbox">${html}</div></div>`;
   setTimeout(mountMaps, 0);
@@ -3257,7 +3277,7 @@ function kartaPoznamky(p) {
   </div>`;
 }
 async function novaPoznamka(pid) {
-  const nadpis = prompt('Nadpis poznámky:', '');
+  const nadpis = await zeptejSe('Nová poznámka ke stavbě', 'Nadpis poznámky — text a komentáře doplníš potom.', '');
   if (!nadpis || !nadpis.trim()) return;
   const r = await db.collection('poznamky').add({ pid, nadpis: nadpis.trim(), text: '', komentare: [],
     autorId: S.me ? S.me.id : '', autor: fullName(S.me || {}), createdAt: FV() })
@@ -3328,7 +3348,7 @@ function sekceKliceProjektu(p) {
    se vyplnilo ID zakazky), da se napojit odkazem z Drive — jednou a dost. */
 async function napojPodklady(pid) {
   const p = proj(pid); if (!p) return;
-  const vstup = prompt('Otevři na Drive složku 09_Denik_staveb/Podklady té zakázky a zkopíruj sem odkaz z adresního řádku:', '');
+  const vstup = await zeptejSe('Napojit složku Podklady', 'Otevři na Drive složku 09_Denik_staveb/Podklady té zakázky a zkopíruj sem odkaz z adresního řádku prohlížeče.', '');
   if (!vstup) return;
   const m = String(vstup).match(/[-\w]{25,}/);
   if (!m) { toast('V odkazu nevidím ID složky'); return; }
@@ -3339,7 +3359,7 @@ async function napojPodklady(pid) {
 
 async function pridatKlic(pid) {
   const n = S.klice.filter(k => k.pid === pid).length + 1;
-  const nazev = prompt('Název klíče:', 'Klíč č. ' + n);
+  const nazev = await zeptejSe('Přidat klíč', 'Jak se klíč jmenuje.', 'Klíč č. ' + n);
   if (!nazev) return;
   await db.collection('klice').add({ pid, nazev: nazev.trim(), drzitelId: '', drzitelJmeno: '', potvrzeno: true, historie: [], createdAt: FV() })
     .then(() => toast('Klíč přidán ✓')).catch(e => toast('Nejde přidat: ' + (e.code || e.message)));
@@ -3998,8 +4018,7 @@ async function zadostSchvalit(id) {
 }
 async function zadostZamitnout(id) {
   const z = S.zadosti.find(x => x.id === id); if (!z) return;
-  const duvod = prompt('Proč žádost zamítáš? (uvidí to pracovník)\n\n' +
-    z.userName + ' — odchod ' + fmtISO(z.date) + ' v ' + z.time, '');
+  const duvod = await zeptejSe('Zamítnout žádost', 'Proč žádost zamítáš? Uvidí to pracovník.', '');
   if (duvod === null) return;
   try {
     await db.collection('zadosti').doc(id).update({
