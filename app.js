@@ -770,7 +770,10 @@ async function zaraditFotky(p, entryId) {
     }).catch(e => console.warn('fotonahled', e));
     try {
       await frontaPridat({
-        druh: 'foto', entryId, photoId: id, name: (ph.label || 'foto') + '.jpg', mime: 'image/jpeg',
+        druh: 'foto', entryId, photoId: id,
+        /* nazev souboru = prijmeni nahravajiciho — iPhone posila "image",
+           coz na Drive nic nerika; datum a cas prida most na zacatek */
+        name: ((S.me && S.me.prijmeni) || fullName(S.me || {}) || 'foto') + '.jpg', mime: 'image/jpeg',
         data: ph.full, folderId: (p && p.driveFolderId) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', date: isoToday()
       });
     } catch (e) { console.warn('fronta foto', e); toast('⚠ Fotku se nepodařilo uložit do fronty — zůstal jen náhled'); }
