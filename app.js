@@ -3183,6 +3183,15 @@ async function nactiPodklady(p, folderId) {
       ? { action: 'listPodklady', folderId: primo, klic }
       : { action: 'listPodklady', projektId: (p && p.driveFolderId) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', rootId: CFG.driveRootFolderId, klic });
     S.podkladyStav = j.ok ? { id: j.id, folders: j.folders || [], files: j.files || [] } : { chyba: j.error || 'Nepovedlo se' };
+    /* Kdyz most slozku nasel, zapamatujeme si ji u zakazky — priste uz se
+       nehleda a nezalezi na verzi mostu. Automaticke napojeni.
+       POZOR: uklada se JEN kdyz slozka neco obsahuje — prazdny vysledek
+       muze znamenat, ze most trefil nahradni slozku _SYSTEM, a to bychom
+       si zapamatovali natrvalo. */
+    const nasloObsah = j.ok && ((j.folders || []).length || (j.files || []).length);
+    if (nasloObsah && j.id && p && p.id && !p.podkladyFolderId && !folderId) {
+      db.collection('projects').doc(p.id).update({ podkladyFolderId: j.id }).catch(() => {});
+    }
   } catch (e) { S.podkladyStav = { chyba: e.message || 'Nepovedlo se' }; }
   render();
 }
@@ -3204,11 +3213,11 @@ function kartaPodklady(p) {
     <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— z Drive</span></h3>
     ${!st ? `<div class="aprv"><button class="btn dark sm" onclick="S.podkladyCesta=[];nactiPodklady(proj('${p.id}'))">📂 Zobrazit podklady</button></div>`
       : st.nacita ? '<div class="loading"><span class="spin"></span>Načítám z Drive…</div>'
-      : st.chyba ? `<div class="note">${esc(st.chyba)}</div><div class="aprv"><button class="btn ghost sm" onclick="S.podkladyStav=null;render()">Zpět</button></div>`
+      : st.chyba ? `<div class="note">${esc(st.chyba)}</div><div class="aprv"><button class="btn ghost sm" onclick="S.podkladyStav=null;render()">Zpět</button>${S.meAuth && S.meAuth.role === 'admin' ? `<button class="btn dark sm" onclick="napojPodklady('${p.id}')">🔗 Napojit složku odkazem</button>` : ''}</div>`
       : `${cesta.length ? `<div class="urow" style="cursor:pointer" onclick="zpetVPodkladech()"><span>⬅</span><b>${esc(cesta.map(c => c.nazev).join(' / '))}</b></div>` : ''}
         ${st.folders.map(f => `<div class="urow" style="cursor:pointer" onclick="doPodslozky('${f.id}','${esc(f.name)}')"><span>📁</span><b>${esc(f.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('')}
         ${st.files.map(f => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${f.id}','${esc(f.name)}')"><span>${(f.mime || '').includes('pdf') ? '📄' : (f.mime || '').indexOf('image/') === 0 ? '🖼' : '📎'}</span><b>${esc(f.name)}</b><span class="muted" style="margin-left:auto">${f.size ? Math.round(f.size / 1024) + ' kB' : ''}</span></div>`).join('')}
-        ${(!st.folders.length && !st.files.length) ? '<div class="empty">Tady zatím nic není.</div>' : ''}`}
+        ${(!st.folders.length && !st.files.length) ? `<div class="empty">Tady zatím nic není.</div>${S.meAuth && S.meAuth.role === 'admin' && !p.podkladyFolderId ? `<div class="aprv"><button class="btn dark sm" onclick="napojPodklady('${p.id}')">🔗 Napojit složku odkazem</button></div><div class="note">Když vidíš prázdno, i když na Drive něco máš, most trefil jinou složku — napoj ji odkazem, je to jednou a napořád.</div>` : ''}` : ''}`}
   </div>`;
 }
 
@@ -3312,6 +3321,19 @@ function sekceKliceProjektu(p) {
       </span></div>`).join('') || '<div class="muted">Zatím žádné klíče.</div>'}
     <div class="aprv"><button class="btn dark sm" onclick="pridatKlic('${p.id}')">➕ Přidat klíč</button></div>
   </div>`;
+}
+
+/* Kdyz most slozku sam nenajde (starsi verze / slozka vznikla driv nez
+   se vyplnilo ID zakazky), da se napojit odkazem z Drive — jednou a dost. */
+async function napojPodklady(pid) {
+  const p = proj(pid); if (!p) return;
+  const vstup = prompt('Otevři na Drive složku 09_Denik_staveb/Podklady té zakázky a zkopíruj sem odkaz z adresního řádku:', '');
+  if (!vstup) return;
+  const m = String(vstup).match(/[-\w]{25,}/);
+  if (!m) { toast('V odkazu nevidím ID složky'); return; }
+  await db.collection('projects').doc(pid).update({ podkladyFolderId: m[0] })
+    .then(() => { toast('Složka napojena ✓'); S.podkladyStav = null; S.podkladyCesta = []; render(); })
+    .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
 }
 
 async function pridatKlic(pid) {
