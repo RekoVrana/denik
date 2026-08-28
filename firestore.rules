@@ -7,6 +7,13 @@
 //  Živá verze: Firebase konzole → Firestore → Rules
 //  Když se změní tam, změň i tady, ať kopie nezastará.
 //
+//  Poslední změny 28. 8. 2026 (publikováno v konzoli 13:01):
+//   9) /poznamky: tri urovne viditelnosti (vsichni/parta/vedeni).
+//      Vedeni cte vse, parta bez "jen vedeni", sub jen "vsichni".
+//      Pole viditelnost je povinne pri zapisu. Overeno zvenku
+//      REST dotazem: nefiltrovany vypis i prime cteni skryte
+//      poznamky sub dostane PERMISSION_DENIED.
+//
 //  Poslední změny 27. 8. 2026:
 //   5) /tasks: cetlo je KAZDY prihlaseny s roli, tedy i radovy pracovnik
 //      si mohl precist vsechny ukoly ve firme. Nove: vedeni vsechny,
@@ -153,12 +160,15 @@ service cloud.firestore {
     // Poznamky ke stavbe: veci, ktere u zakazky zustavaji (kody, kontakty).
     // Cist a komentovat smi kdokoli s roli, mazat vedeni.
     match /poznamky/{id} {
-      // vedeni vsechny; parta krome "jen vedeni"; sub jen ty pro vsechny
+      // vedeni vsechny; parta krome "jen vedeni"; sub jen ty pro vsechny.
+      // POZOR: zadna vetev "kdyz pole chybi" — ta se u hromadnych dotazu
+      // vyhodnoti jako povoleni cele kolekce (overeno 28. 8.). Pole je
+      // proto povinne uz pri zapisu a stare poznamky ho maji dopsane.
       allow read: if isAdmin()
-        || (hasRole() && (!('viditelnost' in resource.data)
-            || resource.data.viditelnost == 'vsichni'
+        || (hasRole() && (resource.data.viditelnost == 'vsichni'
             || (resource.data.viditelnost == 'parta' && mojeRole() == 'worker')));
-      allow create, update: if hasRole();
+      allow create, update: if hasRole()
+        && request.resource.data.viditelnost in ['vsichni', 'parta', 'vedeni'];
       allow delete: if isAdmin();
     }
 
