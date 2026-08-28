@@ -364,7 +364,10 @@ async function uklidFotekUkolu() {
     for (const d of snap.docs) {
       const t = d.data();
       if (!(t.photos || []).length) continue;
-      if (t.hotovoDne && t.hotovoDne >= dnes) continue;     // jeste jde vratit
+      /* Mazat jen s prokazatelne prosslou lhutou: hotovoDne existuje
+         a je starsi nez dnes. Ukol bez hotovoDne se NEuklizi — radsi
+         fotka navic v databazi nez nevratne smazana. */
+      if (!t.hotovoDne || t.hotovoDne >= dnes) continue;    // jeste jde vratit
       for (const f of t.photos) await db.collection('fotonahledy').doc(f.id).delete().catch(() => {});
       await db.collection('tasks').doc(d.id).update({ photos: [] }).catch(() => {});
       if (++uklizeno >= 20) break;                           // po davkach, at start nezdrzi
@@ -718,15 +721,37 @@ async function frontaOdeslat() {
     for (const it of cekaji) {
       if (!S.online) break;
       try {
-        const j = await driveCall({
-          action: 'upload', folderId: it.folderId || '', rootId: CFG.driveRootFolderId,
-          cn: it.cn, client: it.client, date: it.date, name: it.name,
-          druh: it.druh || 'foto',          // most podle toho vybere podsložku v 09_Denik_staveb
-          data: String(it.data).split(',')[1], mime: it.mime || 'application/octet-stream'
-        });
-        await frontaZapsatDoZaznamu(it, j.fileId);
+        let fileId = it.fileId;
+        if (!fileId) {
+          const j = await driveCall({
+            action: 'upload', folderId: it.folderId || '', rootId: CFG.driveRootFolderId,
+            cn: it.cn, client: it.client, date: it.date, name: it.name,
+            druh: it.druh || 'foto',          // most podle toho vybere podsložku v 09_Denik_staveb
+            data: String(it.data).split(',')[1], mime: it.mime || 'application/octet-stream'
+          });
+          fileId = j.fileId;
+          /* fileId si ulozime do polozky HNED: kdyz zapis do zaznamu nevyjde,
+             pristi pokus uz fotku NEnahrava na Drive znovu (zadne duplikaty),
+             jen dopise driveId. Data fotky uz nejsou potreba. */
+          if (fileId) {
+            it.fileId = fileId; delete it.data;
+            try { await frontaTx('readwrite', st => st.put(it)); } catch (e2) { console.warn('fronta put', e2); }
+          }
+        }
+        await frontaZapsatDoZaznamu(it, fileId);
         await frontaSmazat(it.id);
-      } catch (e) { console.warn('fronta', e); break; }   // nejspis vypadl signal — zkusime priste
+      } catch (e) {
+        /* permission-denied = TRVALA chyba: zaznam mezitim opustil stav
+           pending (vedeni ho schvalilo / dalo jen interni / smazalo) a autor
+           uz do nej zapsat nesmi. Polozku vyradime — jinak by navzdy
+           blokovala celou frontu (selfie z dochazky, dalsi fotky). */
+        if (e && e.code === 'permission-denied') {
+          console.warn('fronta: polozka vyrazena — do zaznamu uz nejde zapsat', it.entryId || it.attendanceId || '', e);
+          await frontaSmazat(it.id);
+          continue;
+        }
+        console.warn('fronta', e); break;   // prechodna chyba (nejspis vypadl signal) — zkusime priste
+      }
     }
   } finally { _frontaBezi = false; S.uploading--; await frontaSpocitat(); }
 }
@@ -744,7 +769,12 @@ async function frontaZapsatDoZaznamu(it, fileId) {
   if (it.druh === 'foto') {
     const photos = (e.photos || []).map(ph => ph.id === it.photoId ? { ...ph, driveId: fileId } : ph);
     await ref.update({ photos });
-    if (e.status === 'approved') await mirrorEntry({ ...e, id: it.entryId, photos });
+    /* Zrcadleni na portal smi jen admin — u pracovnika by spadlo i po
+       uspesnem zapisu fotek a polozka by se vracela do fronty. Portal se
+       stejne prekresli, kdyz vedeni zaznam schvali nebo prepne fotku. */
+    if (e.status === 'approved' && S.meAuth && S.meAuth.role === 'admin') {
+      try { await mirrorEntry({ ...e, id: it.entryId, photos }); } catch (err) { console.warn('zrcadleni po fronte', err); }
+    }
   } else {
     const attachments = [...(e.attachments || []), { name: it.name, driveId: fileId, mime: it.mime || '' }];
     await ref.update({ attachments });
@@ -763,8 +793,16 @@ function scaleJpeg(img, maxPx, q) {
   c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
   return c.toDataURL('image/jpeg', q);
 }
+/* Strop poctu fotek na jeden zaznam: dokument ma limit 1 MB a kazdy nahled
+   nese ~25-60 kB — bez stropu by se zaznam s 20+ fotkami tise neulozil,
+   ale uzivatel by videl "ulozeno". Osm sedi na kalkulaci u fotonahledu. */
+const MAX_FOTEK_ZAZNAMU = 8;
 async function processPhotos(files, label) {
   for (const f of files) {
+    if (S.draftPhotos.length >= MAX_FOTEK_ZAZNAMU) {
+      oznam('Do jednoho záznamu jde nejvíc ' + MAX_FOTEK_ZAZNAMU + ' fotek — víc by se nevešlo a záznam by se neuložil.\nDalší fotky prosím přidej do nového zápisu.');
+      break;
+    }
     try {
       const img = await fileToImage(f);
       const thumb = scaleJpeg(img, 360, 0.62);
@@ -887,7 +925,14 @@ async function addEntry(pid, author, txt, persons, date) {
        zapis pracovnika pak v deniku i PDF lhal "1 os." (zadani 25. 8.). */
     persons: persons || null, works: works.length ? works : ['(jen fotodokumentace)'],
     internal: '', client: txt || 'Fotodokumentace z průběhu prací.', status: 'pending', photos
-  }).catch(e => console.warn('zapis zaznamu', e));
+  }).catch(e => {
+    console.warn('zapis zaznamu', e);
+    /* Online chyba znamena, ze zaznam OPRAVDU nevznikl (napr. prekroceny
+       limit dokumentu) — bez hlasky by uzivatel videl "ulozeno ✓" a zapis
+       by tise zmizel. Offline se nehlasi nic: Firestore si zapis podrzi
+       a odesle sam, az bude signal. */
+    if (S.online) oznam('⚠ Záznam se NEPODAŘILO uložit (' + (e.code || e.message || e) + ').\nZkus to prosím znovu, případně s méně fotkami.');
+  });
   frontaOdeslat();
   fetchWeather(p, d).then(w => { if (w) ref.update({ weather: w }).catch(() => {}); });
 }
@@ -2580,8 +2625,11 @@ async function tplApply() {
   S.tplOpen = false;
   toast('Vytvořeno ' + (tpl.items || []).length + ' úkolů ze šablony ✓');
 }
-async function taskNext(id) { const t = S.tasks.find(x => x.id === id); await db.collection('tasks').doc(id).update({ stav: nextStav(t.stav) }); }
-async function taskMove(id, dir) { const order = ['nove', 'probiha', 'kontrola', 'hotovo']; const t = S.tasks.find(x => x.id === id); const i = order.indexOf(t.stav) + dir; if (i >= 0 && i < 4) await db.collection('tasks').doc(id).update({ stav: order[i] }); }
+/* Prechod na hotovo musi zapsat i hotovoDne (stejne jako taskDone) — je to
+   ochranna lhuta pro uklid fotek. Bez nej by uklid smazal fotky ukolu jeste
+   tyz den. Pri odchodu z hotovo se hotovoDne cisti, aby slo vraceni. */
+async function taskNext(id) { const t = S.tasks.find(x => x.id === id); const stav = nextStav(t.stav); await db.collection('tasks').doc(id).update({ stav, hotovoDne: stav === 'hotovo' ? isoToday() : '' }); }
+async function taskMove(id, dir) { const order = ['nove', 'probiha', 'kontrola', 'hotovo']; const t = S.tasks.find(x => x.id === id); const i = order.indexOf(t.stav) + dir; if (i >= 0 && i < 4) await db.collection('tasks').doc(id).update({ stav: order[i], hotovoDne: order[i] === 'hotovo' ? isoToday() : '' }); }
 /* Ukol si pamatuje, KDY byl odskrtnut — aby ho pracovnik jeste tentyz den
    videl a mohl vratit, kdyz ho ťuknul omylem. Druhy den uz zmizi. */
 async function taskDone(id) {

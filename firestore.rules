@@ -144,10 +144,18 @@ service cloud.firestore {
       allow read: if hasRole();
       allow create: if hasRole() && request.resource.data.authorUid == request.auth.uid
                     && request.resource.data.status == 'pending';
+      // Tri vetve: (1) vedeni vse; (2) autor smi menit svuj zaznam, dokud
+      // je pending; (3) autor smi i po schvaleni dopsat JEN fotky/prilohy
+      // (photos/attachments) — fronta doplnuje driveId, kdyz se fotka
+      // nahraje na Drive az po schvaleni. Bez teto vetve fronta driveId
+      // do schvaleneho zaznamu nikdy nezapise (S18/B2, audit 28. 8.).
       allow update: if isAdmin()
                     || (hasRole() && resource.data.authorUid == request.auth.uid
                         && resource.data.status == 'pending'
-                        && request.resource.data.status == 'pending');
+                        && request.resource.data.status == 'pending')
+                    || (hasRole() && resource.data.authorUid == request.auth.uid
+                        && request.resource.data.diff(resource.data).affectedKeys()
+                             .hasOnly(['photos', 'attachments']));
       allow delete: if isAdmin();
     }
 
