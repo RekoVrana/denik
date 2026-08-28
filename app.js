@@ -26,15 +26,25 @@ function fmtTs(ts) { if (!ts) return '—'; const d = ts.toDate ? ts.toDate() : 
    podle textu pak davalo "16:00" PRED "7:00" (jednicka je pred sedmickou),
    takze kdo prisel pred 10:00 a odesel po 10:00, zustal navzdy "v praci". */
 function nowTime() { const d = new Date(); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); }
-/* Klic pro razeni pichnuti. Prednost ma serverovy cas zapisu (presny na
-   sekundy, resi i dve pichnuti ve stejne minute); kdyz chybi, spocita se
-   z data a casu — a to i u starych zaznamu bez vedouci nuly. */
+/* Klic pro razeni pichnuti: LOGICKY cas udalosti (datum + cas), ne cas
+   zapisu do databaze. Rucne doplneny zaznam (zapomenuty prichod od vedeni)
+   ma cas zapisu klidne o den pozdeji nez udalost — razeni podle zapisu pak
+   potkalo Odchod pred Prichodem: den vysel na nulu a mobil tvrdil "jsi
+   porad v praci". Casy se scitaji jako CISLA, takze stara chyba "16:00"
+   pred "7:00" (textove razeni bez vedouci nuly) se vratit nemuze. */
 function attKey(a) {
-  if (a && a.createdAt && a.createdAt.seconds) return a.createdAt.seconds + (a.createdAt.nanoseconds || 0) / 1e9;
   const t = String((a && a.time) || '0:0').split(':').map(Number);
   const d = new Date((a && a.date) || '1970-01-01');
   return (d.getTime() / 1000) + (t[0] || 0) * 3600 + (t[1] || 0) * 60;
 }
+/* Cas zapisu — jen ROZHODCI pri shode na stejnou minutu (dve pichnuti ve
+   stejne minute). Bez serveroveho casu jde o cerstvy lokalni zapis, ktery
+   jeste neprosel serverem — tedy nejnovejsi. */
+function attZapsano(a) {
+  if (a && a.createdAt && a.createdAt.seconds) return a.createdAt.seconds + (a.createdAt.nanoseconds || 0) / 1e9;
+  return Number.MAX_SAFE_INTEGER;
+}
+function attCmp(a, b) { return (attKey(a) - attKey(b)) || (attZapsano(a) - attZapsano(b)); }
 function daysBetween(isoA, isoB) { return Math.round((new Date(isoB) - new Date(isoA)) / 86400000); }
 function shiftISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
 function kc(n) { return (Math.round(n) || 0).toLocaleString('cs-CZ'); }
@@ -335,7 +345,7 @@ async function dotahniDochazku(from, to) {
       .where('date', '>=', from).where('date', '<=', to).get();
     const mam = new Set(S.attendance.map(a => a.id));
     snap.docs.forEach(d => { if (!mam.has(d.id)) S.attendance.push({ id: d.id, ...d.data() }); });
-    S.attendance.sort((a, b) => attKey(b) - attKey(a));
+    S.attendance.sort((a, b) => attCmp(b, a));
     S.dotazeno.push(klic);
   } catch (e) {
     toast('Starší docházku se nepodařilo načíst: ' + (e.code || e.message));
@@ -456,7 +466,7 @@ function startData() {
   else listen('tickety', 'tickety', { where: [['authUid', '==', S.authUser.uid]], sort: tsort });
   listen('users', 'users', { sort: (a, b) => (a.prijmeni || '').localeCompare(b.prijmeni || '', 'cs') });
   if (role === 'admin') {
-    listen('attendance', 'attendance', { where: [['date', '>=', oknoOd()]], sort: (a, b) => attKey(b) - attKey(a) });
+    listen('attendance', 'attendance', { where: [['date', '>=', oknoOd()]], sort: (a, b) => attCmp(b, a) });
     setTimeout(uklidFotekUkolu, 8000);
     listen('viceprace', 'viceprace', {});
     listen('zadosti', 'zadosti', { sort: (a, b) => (b.date || '').localeCompare(a.date || '') });
@@ -466,7 +476,7 @@ function startData() {
       s.docs.forEach(d => handlePortalAction(d));
     }, err => console.warn('actions', err)));
   } else {
-    listen('attendance', 'attendance', { where: [['authUid', '==', S.authUser.uid]], sort: (a, b) => attKey(b) - attKey(a) });
+    listen('attendance', 'attendance', { where: [['authUid', '==', S.authUser.uid]], sort: (a, b) => attCmp(b, a) });
     listen('zadosti', 'zadosti', { where: [['authUid', '==', S.authUser.uid]], sort: (a, b) => (b.date || '').localeCompare(a.date || '') });
   }
 }
@@ -872,7 +882,10 @@ async function addEntry(pid, author, txt, persons, date) {
   await zaraditPrilohy(p, ref.id);
   ref.set({
     pid, date: d, createdAt: FV(), author, authorUid: S.authUser.uid,
-    persons: persons || 1, works: works.length ? works : ['(jen fotodokumentace)'],
+    /* Pocet osob se NEVYMYSLI: kdyz neni znamy (zapis od party), zustane
+       null a zobrazeni ho bere z dochazky. Drive tu bylo "|| 1" a kazdy
+       zapis pracovnika pak v deniku i PDF lhal "1 os." (zadani 25. 8.). */
+    persons: persons || null, works: works.length ? works : ['(jen fotodokumentace)'],
     internal: '', client: txt || 'Fotodokumentace z průběhu prací.', status: 'pending', photos
   }).catch(e => console.warn('zapis zaznamu', e));
   frontaOdeslat();
@@ -926,8 +939,18 @@ async function handlePortalAction(docSnap) {
   try {
     if (a.type === 'vp' && a.vpid) {
       const ref = db.collection('viceprace').doc(a.vpid);
-      const vp = S.viceprace.find(x => x.id === a.vpid);
-      if (vp && vp.stav === 'u_investora') {
+      /* Zavod snapshotu: akce z portalu muze dorazit driv nez seznam
+         vicepraci. Kdyby se akce oznacila za vyrizenou hned, schvaleni
+         investora by se tise ztratilo — proto se vp pripadne docte primo
+         z databaze a handled se zapisuje AZ po skutecnem zpracovani.
+         Nenalezena vp se necha nevyrizena na dalsi snapshot. */
+      let vp = S.viceprace.find(x => x.id === a.vpid);
+      if (!vp) {
+        const doc = await ref.get().catch(() => null);
+        if (doc && doc.exists) vp = { id: doc.id, ...doc.data() };
+      }
+      if (!vp) return;
+      if (vp.stav === 'u_investora') {
         const stav = a.action === 'approve' ? 'schvaleno' : 'zamitnuto';
         const podpis = (vp.clientName || '') + (a.action === 'approve' ? ' — schváleno jedním klikem na portálu, ' : ' — zamítnuto na portálu, ') + fmtISO(isoToday());
         await ref.update({ stav, podpis, resolvedAt: FV() });
@@ -1282,7 +1305,11 @@ function nastenkaPrehled() {
 function nastenkaDochazka() {
   const TOL = CFG.gpsTolerance || 100;
   const last = {};
-  S.attendance.slice().sort((a, b) => attKey(a) - attKey(b)).forEach(a => last[a.userDocId] = a);
+  /* Jen prichod a odchod — pauza ma vlastni zaznamy a bez tohohle filtru
+     by nastenka hlasila obedvajiciho jako "nepritomen" (stejny filtr
+     pouziva mojeSmena i attOn). */
+  S.attendance.filter(a => a.akce === 'Příchod' || a.akce === 'Odchod')
+    .sort(attCmp).forEach(a => last[a.userDocId] = a);
   const inWork = Object.values(last).filter(a => a.akce === 'Příchod' && a.date === isoToday());
   const susp = S.attendance.filter(a => a.gps > TOL);
   const teren = S.users.filter(u => u.typ && u.typ.teren && !u.typ.kanc && u.active !== false);
@@ -2207,10 +2234,7 @@ function pgNovy() {
       <select id="np">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)} (${esc(p.cn)})</option>`).join('')}</select>
       <label>Autor zápisu</label>
       <select id="na">${S.users.filter(u => u.active !== false && u.typ && (u.typ.teren || u.typ.kanc)).map(u => `<option ${S.me && u.id === S.me.id ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}</select>
-      <div class="frow">
-        <div><label>Datum zápisu</label><input type="date" id="nd" value="${isoToday()}" max="${isoToday()}"></div>
-        <div><label>Počet osob na staveništi</label><input type="number" id="npers" value="1" min="1"></div>
-      </div>
+      <label>Datum zápisu</label><input type="date" id="nd" value="${isoToday()}" max="${isoToday()}">
       <label>Provedené práce</label>
       <textarea id="nt" placeholder="Každá věta / řádek = jedna odrážka zápisu…"></textarea>
       <label>Fotky</label>
@@ -2224,14 +2248,15 @@ function pgNovy() {
   </main>`;
 }
 async function submitNew() {
-  const pid = $('#np').value, author = $('#na').value, txt = $('#nt').value.trim(), pers = parseInt($('#npers').value) || 1;
+  // pocet osob se nezadava — bere se z dochazky (zadani 25. 8.)
+  const pid = $('#np').value, author = $('#na').value, txt = $('#nt').value.trim();
   const date = $('#nd') ? ($('#nd').value || isoToday()) : isoToday();
   if (!pid) { toast('Není vybraný projekt'); return; }
   if (date > isoToday()) { toast('Datum zápisu nemůže být v budoucnosti'); return; }
   if (!txt && !S.draftPhotos.length) { toast('Napiš text nebo přidej fotku'); return; }
   $('#save-entry').disabled = true;
-  await addEntry(pid, author, txt, pers, date);
-  zapomen('nt', 'npers');
+  await addEntry(pid, author, txt, null, date);
+  zapomen('nt');
   goPage('denik'); toast(date === isoToday() ? 'Záznam uložen — čeká na schválení ✓' : 'Záznam za ' + fmtISO(date) + ' uložen — čeká na schválení ✓');
 }
 
@@ -2378,7 +2403,11 @@ function attUpravitForm(id) {
       původně <b>${esc(a.akce)}</b> ${fmtISO(a.date)} ${esc(a.time)}</div>
     <div class="frow">
       <div><label>Činnost</label><select id="ae-a">
-        ${['Příchod', 'Odchod'].map(x => `<option ${a.akce === x ? 'selected' : ''}>${x}</option>`).join('')}
+        ${/* Pauzovy zaznam se opravou nesmi tise zmenit na Prichod (drive tu
+            byly jen Prichod/Odchod a u Pauzy nebylo nic selected → ulozil se
+            Prichod a pauza se prestala odecitat). Nabizi se proto jen dvojice
+            akci stejneho druhu a skutecna akce je predvybrana. */''}
+        ${(a.akce === 'Pauza' || a.akce === 'Konec pauzy' ? ['Pauza', 'Konec pauzy'] : ['Příchod', 'Odchod']).map(x => `<option ${a.akce === x ? 'selected' : ''}>${x}</option>`).join('')}
       </select></div>
       <div><label>Stavba</label><select id="ae-p">
         ${S.projects.map(p => `<option value="${p.id}" ${p.id === a.pid ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
@@ -2687,8 +2716,8 @@ function pgReporty() {
         </div>
       </div>
       <div class="aprv" style="align-items:center">
-        <span class="muted">Od</span><input type="date" id="rep-from" value="${S.repFrom}" style="max-width:150px" onchange="S.repFrom=this.value">
-        <span class="muted">do</span><input type="date" id="rep-to" value="${S.repTo}" style="max-width:150px" onchange="S.repTo=this.value">
+        <span class="muted">Od</span><input type="date" id="rep-from" value="${S.repFrom}" style="max-width:150px" onchange="S.repFrom=this.value;S.repLoaded=false;render()">
+        <span class="muted">do</span><input type="date" id="rep-to" value="${S.repTo}" style="max-width:150px" onchange="S.repTo=this.value;S.repLoaded=false;render()">
         <button class="btn amber" onclick="nactiReport()">${S.dotahuji ? '<span class="spin"></span> NAČÍTÁM…' : 'NAČÍST REPORT'}</button>
       </div>
     </div>
@@ -2716,8 +2745,31 @@ async function dotahniZapisy() {
   S.dotahuji = false; render();
 }
 
+/* Krizova kontrola reportu ("chybi zapis") porovnava dochazku se zapisy
+   deniku — jenze naživo je jen okno poslednich 30 dni. Bez dotazeni zapisu
+   za zvolene obdobi by u kazdeho starsiho dne falesne svitilo "chybi zapis"
+   a vedeni by pred vyplatou proverovalo neexistujici diry. */
+S.dotazenoZapisy = S.dotazenoZapisy || [];
+async function dotahniZapisyProReport(from, to) {
+  if (!from || !to || from > to) return;
+  if (from >= oknoOd()) return;                       // uz to mame naživo
+  const klic = from + '..' + to;
+  if (S.dotazenoZapisy.includes(klic)) return;
+  try {
+    const snap = await db.collection('entries')
+      .where('date', '>=', from).where('date', '<=', to).get();
+    const mam = new Set(S.entries.map(e => e.id));
+    snap.docs.forEach(d => { if (!mam.has(d.id)) S.entries.push({ id: d.id, ...d.data() }); });
+    S.entries.sort((a, b) => (b.date || '').localeCompare(a.date || '') || (((b.createdAt && b.createdAt.seconds) || 0) - ((a.createdAt && a.createdAt.seconds) || 0)));
+    S.dotazenoZapisy.push(klic);
+  } catch (e) {
+    toast('Starší zápisy deníku se nepodařilo načíst: ' + (e.code || e.message));
+  }
+}
+
 async function nactiReport() {
   await dotahniDochazku(S.repFrom, S.repTo);
+  await dotahniZapisyProReport(S.repFrom, S.repTo);
   S.repLoaded = true; render();
 }
 
@@ -3757,8 +3809,10 @@ async function subOdchod() {
   const text = $('#so-z').value.trim();
   if (!text) { toast('Sepiš aspoň větu, co jste udělali'); return; }
   try {
-    /* zaznam + fotky jdou do deniku ke schvaleni stejne jako od party */
-    await addEntry(otevrena.pid, fullName(S.me || {}), text, null);
+    /* zaznam + fotky jdou do deniku ke schvaleni stejne jako od party;
+       pocet osob = kolik jich sub nahlasil pri prichodu (sub nema dochazku,
+       ze ktere by se dal pocet dopocitat) */
+    await addEntry(otevrena.pid, fullName(S.me || {}), text, otevrena.pocet);
     await db.collection('hlaseni').doc(otevrena.id).update({ odchod: nowTime(), zaznam: text });
     S.subOdchodOpen = false; S.subZaznam = '';
     toast('Odchod zapsán — záznam šel vedení ke schválení ✓'); render();
@@ -3776,7 +3830,14 @@ function viewWorker() {
   const sm = mojeSmena();
   const zadost = mojeZadostOdchod();
   const zamitnute = mojeZamitnuteZadosti();
-  if (sm.vPraci) S.workerProject = sm.pid;         // behem smeny se stavba neprepina
+  /* Odeslana zadost o doplneni odchodu = smena je pro obrazovku UZAVRENA.
+     Drive tu cekajici zadost zobrazila jen box "Čeká na vedení" bez tlacitek
+     a pracovnik rano nemohl pichnout prichod noveho dne. Do hodin se stejne
+     nic nezapocte, dokud zadost neprojde schvalenim.
+     Plati to jen pro prichod, KE KTEREMU zadost patri (prichodId) — jakmile
+     si clovek pichne novy den, bezi mu normalni smena i s cekajici zadosti. */
+  const vPraciUI = sm.vPraci && !(zadost && sm.posledni && zadost.prichodId === sm.posledni.id);
+  if (vPraciUI) S.workerProject = sm.pid;          // behem smeny se stavba neprepina
   if (!S.workerProject && S.projects.length) {
     const list = workerProjectList();
     S.workerProject = list.length ? list[0].p.id : S.projects[0].id;
@@ -3790,7 +3851,7 @@ function viewWorker() {
   <main class="mobilewrap">
     <div class="card">
       <label style="margin-top:0">Stavba</label>
-      ${sm.vPraci ? `
+      ${vPraciUI ? `
         <div class="zamcena"><span class="zam">🔒</span>${esc((proj(sm.pid) || {}).name || 'neznámá stavba')}</div>
         <div class="muted" style="margin-top:6px;font-size:12px">Stavbu jde změnit až po odchodu — nebo tlačítkem „Přejít na jinou stavbu".</div>
       ` : `
@@ -3807,13 +3868,14 @@ function viewWorker() {
         <b>✕ Vedení zamítlo doplněný odchod</b> (${fmtISO(z.date)} v ${esc(z.time)})${z.duvod ? '<br>Důvod: ' + esc(z.duvod) : ''}
         <div style="margin-top:6px"><button class="btn ghost sm" onclick="zadostVzitNaVedomi('${z.id}')">Rozumím</button></div>
       </div>`).join('')}
-      ${sm.vPraci && zadost ? `
+      ${zadost ? `
         <div class="smena" style="background:var(--wait-soft);border-color:#ecd9a0">
           <div class="muted" style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--wait)">Čeká na vedení</div>
           <div class="cas" style="color:var(--wait);font-size:17px">Odchod ${fmtISO(zadost.date)} v ${esc(zadost.time)}</div>
-          <div class="kde" style="color:#7c5806">Žádost je odeslaná. Do docházky se zapíše, až ji vedení schválí — hodiny se do té doby nepočítají.</div>
+          <div class="kde" style="color:#7c5806">Žádost je odeslaná. Do docházky se zapíše, až ji vedení schválí — hodiny se do té doby nepočítají.${vPraciUI ? '' : ' Dnešní příchod můžeš zapsat normálně.'}</div>
         </div>
-      ` : sm.vPraci && sm.zeVcerejska ? `
+      ` : ''}
+      ${vPraciUI && sm.zeVcerejska ? `
         <div class="smena" style="background:var(--wait-soft);border-color:#ecd9a0">
           <div class="muted" style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--wait)">Neuzavřený den</div>
           <div class="cas" style="color:var(--wait);font-size:17px">Příchod ${fmtISO(sm.posledni.date)} v ${esc(sm.posledni.time)} — bez odchodu</div>
@@ -3821,7 +3883,7 @@ function viewWorker() {
         </div>
         <button class="btn amber velke" onclick="doplnitOdchodForm()">🕗 POŽÁDAT O DOPLNĚNÍ ODCHODU</button>
         <button class="btn ghost velke" ${S.checking ? 'disabled' : ''} onclick="workerCheck('Odchod')" style="margin-top:8px">${S.checking === 'Odchod' ? '⏳ ZAPISUJI…' : '🏁 Jsem tu pořád — zapsat odchod teď'}</button>
-      ` : sm.vPraci ? `
+      ` : vPraciUI ? `
         <div class="smena">
           <div class="muted" style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#3c6b4c">V práci</div>
           <div class="cas" id="w-cas">${trvaniOd(sm.posledni)}</div>
@@ -4071,8 +4133,12 @@ async function workerCheck(akce) {
   if (!p) { toast('Vyber stavbu'); return; }
 
   // pojistka: dvakrat po sobe tatáž akce nedava smysl (tlacitko uz to hlida)
+  // — ledaze OTEVRENY prichod ceka na doplneny odchod u vedeni (zadost se
+  //   pozna podle prichodId): pak novy prichod projit MUSI, jinak by
+  //   cekajici zadost blokovala cely dnesek
   const sm = mojeSmena();
-  if (sm.vPraci && akce === 'Příchod') { toast('Už jsi v práci — nejdřív zapiš odchod'); return; }
+  const zadostNaOtevreny = (z => z && sm.posledni && z.prichodId === sm.posledni.id)(mojeZadostOdchod());
+  if (sm.vPraci && akce === 'Příchod' && !zadostNaOtevreny) { toast('Už jsi v práci — nejdřív zapiš odchod'); return; }
   if (!sm.vPraci && akce === 'Odchod') { toast('Nejsi v práci — nejdřív zapiš příchod'); return; }
 
   /* Foťák spustit HNED (jeste v ramci tuknuti), polohu zjistovat soubezne —

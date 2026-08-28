@@ -20,22 +20,33 @@
     return h + ' h ' + (m < 10 ? '0' : '') + m + ' min';
   }
 
-  /* Poradi zaznamu urcuje cas zapisu do databaze, ne text casu.
-     Driv se radilo podle textu a "16:00" vyslo pred "7:00" — kdo prisel
-     pred desatou a odesel po desate, zustal navzdy "v praci". */
+  /* Poradi zaznamu urcuje LOGICKY cas udalosti (datum + cas), ne cas
+     zapisu do databaze. Rucne doplneny zaznam (zapomenuty prichod) ma cas
+     zapisu klidne o den pozdeji nez udalost — razeni podle zapisu by pak
+     potkalo Odchod pred Prichodem a den spocitalo jako nulu.
+     Casy se scitaji jako CISLA, takze stara chyba "16:00" pred "7:00"
+     (textove razeni bez vedouci nuly) se vratit nemuze. */
   function poradi(z) {
+    var d = new Date((z && z.date) || '1970-01-01');
+    return d.getTime() / 1000 + naMinuty(z && z.time) * 60;
+  }
+  /* Cas zapisu do databaze — jen ROZHODCI pri shode na stejnou minutu
+     (dve pichnuti ve stejne minute). Zaznam bez serveroveho casu je
+     cerstvy lokalni zapis, tedy nejnovejsi. */
+  function casZapisu(z) {
     if (z && z.createdAt && z.createdAt.seconds) {
       return z.createdAt.seconds + (z.createdAt.nanoseconds || 0) / 1e9;
     }
-    var d = new Date((z && z.date) || '1970-01-01');
-    return d.getTime() / 1000 + naMinuty(z && z.time) * 60;
+    return Number.MAX_SAFE_INTEGER;
   }
 
   /* Poskladá dvojice zacatek->konec. Druhy zacatek po sobe se ignoruje,
      konec bez zacatku taky — kdyz clovek pichne dvakrat, nesmi to hodiny
      zdvojnasobit ani je poslat do zaporu. */
   function dvojice(zaznamy, akceOd, akceDo) {
-    var serazene = zaznamy.slice().sort(function (a, b) { return poradi(a) - poradi(b); });
+    var serazene = zaznamy.slice().sort(function (a, b) {
+      return (poradi(a) - poradi(b)) || (casZapisu(a) - casZapisu(b));
+    });
     var out = [], otevrena = null, nedokoncene = 0;
     serazene.forEach(function (z) {
       if (z.akce === akceOd) {
