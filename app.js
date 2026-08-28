@@ -282,8 +282,17 @@ function listen(col, target, opts) {
   let q = db.collection(col);
   if (opts && opts.where) opts.where.forEach(w => q = q.where(...w));
   S.unsub.push(q.onSnapshot(snap => {
-    S[target] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (opts && opts.sort) S[target].sort(opts.sort);
+    const zive = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (opts && opts.okno) {
+      /* Kolekce s 30dennim oknem (viz OKNO_DNU): snapshot je pravda jen
+         UVNITR okna. Kompletni nahrada pole by zahodila rucne dotazene
+         starsi zaznamy (report, tisk deniku) — proto se sleva, viz slozOkno(). */
+      S.zivyOkno[target] = zive;
+      slozOkno(target);
+    } else {
+      S[target] = zive;
+      if (opts && opts.sort) S[target].sort(opts.sort);
+    }
     render();
   }, err => console.warn('listener ' + col, err)));
 }
@@ -332,7 +341,54 @@ function listenMojeUkoly() {
 const OKNO_DNU = 30;
 function oknoOd() { return shiftISO(isoToday(), -OKNO_DNU); }
 
-/* Uz dotazene starsi useky, at se totez nestahuje dvakrat. */
+/* ---- slevani ziveho okna s dotazenym archivem ----
+   Starsi zaznamy dotazene na pozadani (report, tisk deniku) drive zily
+   primo v S.attendance / S.entries — jenze kazdy dalsi snapshot (kdokoli
+   pichl prichod, vedeni cokoli schvalilo) pole kompletne nahradil a dotazene
+   zaznamy beze stopy zahodil. A protoze si S.dotazeno pamatuje "uz stazeno",
+   podruhe se nedotahly → report za minuly mesic ukazal nuly (podklad vyplat).
+   Proto dotazene zaznamy ziji ve vlastnim archivu a po kazdem snapshotu se
+   k oknu prikladaji znovu. Snapshot zustava pravdou UVNITR okna (smazane
+   zmizi, upravene se obnovi), archiv doplnuje jen zaznamy PRED oknem. */
+const OKNO_SORT = {
+  entries: (a, b) => (b.date || '').localeCompare(a.date || '') || (((b.createdAt && b.createdAt.seconds) || 0) - (((a.createdAt && a.createdAt.seconds) || 0))),
+  attendance: (a, b) => attCmp(b, a)
+};
+S.archiv = S.archiv || { attendance: new Map(), entries: new Map() };
+S.zivyOkno = S.zivyOkno || {};        // posledni zivy snapshot kazde okenni kolekce
+S.pendingZive = S.pendingZive || [];  // zapisy cekajici na schvaleni, bez ohledu na okno (viz startData)
+function slozOkno(target) {
+  const okno = S.zivyOkno[target] || [];
+  const mam = new Set(okno.map(d => d.id));
+  const vysledek = okno.slice();
+  const od = oknoOd();
+  (S.archiv[target] || new Map()).forEach((d, id) => {
+    /* jen zaznamy pred oknem — uvnitr okna je pravdou snapshot,
+       smazane se nesmi z archivu krisit */
+    if (!mam.has(id) && (d.date || '') < od) { vysledek.push(d); mam.add(id); }
+  });
+  if (target === 'entries') S.pendingZive.forEach(d => {
+    if (!mam.has(d.id)) { vysledek.push(d); mam.add(d.id); }
+  });
+  S[target] = vysledek;
+  if (OKNO_SORT[target]) S[target].sort(OKNO_SORT[target]);
+}
+/* Dotazene starsi zaznamy jdou do archivu a hned se slejou do S[target].
+   Kdyz zivy posluchac jeste nevystrelil (start bez signalu), primichaji se
+   postaru primo — archiv je srovna pri prvnim snapshotu. */
+function archivujDotazene(target, docs) {
+  docs.forEach(d => S.archiv[target].set(d.id, d));
+  if (S.zivyOkno[target]) slozOkno(target);
+  else {
+    const mam = new Set(S[target].map(x => x.id));
+    docs.forEach(d => { if (!mam.has(d.id)) S[target].push(d); });
+    if (OKNO_SORT[target]) S[target].sort(OKNO_SORT[target]);
+  }
+}
+
+/* Uz dotazene starsi useky, at se totez nestahuje dvakrat.
+   (Dotazene zaznamy drzi archiv vyse, takze "uz stazeno" plati trvale —
+   snapshot je uz nezahazuje.) */
 S.dotazeno = S.dotazeno || [];
 async function dotahniDochazku(from, to) {
   if (!from || !to || from > to) return;
@@ -343,9 +399,7 @@ async function dotahniDochazku(from, to) {
   try {
     const snap = await db.collection('attendance')
       .where('date', '>=', from).where('date', '<=', to).get();
-    const mam = new Set(S.attendance.map(a => a.id));
-    snap.docs.forEach(d => { if (!mam.has(d.id)) S.attendance.push({ id: d.id, ...d.data() }); });
-    S.attendance.sort((a, b) => attCmp(b, a));
+    archivujDotazene('attendance', snap.docs.map(d => ({ id: d.id, ...d.data() })));
     S.dotazeno.push(klic);
   } catch (e) {
     toast('Starší docházku se nepodařilo načíst: ' + (e.code || e.message));
@@ -434,8 +488,14 @@ function nastenkaTickety() {
 
 function startData() {
   const role = S.meAuth.role; // 'admin' | 'worker' | 'sub'
+  /* Cerstve prihlaseni = cerstve slozky slevani; jinak by po odhlaseni
+     a prihlaseni jineho uctu zustaly slozene zaznamy z minule seance. */
+  S.archiv = { attendance: new Map(), entries: new Map() };
+  S.zivyOkno = {}; S.pendingZive = [];
+  S.dotazeno = []; S.dotazenoZapisy = []; S.dotazenoTisk = [];
   listen('projects', 'projects', { sort: (a, b) => (b.active - a.active) || String(a.cn || a.name).localeCompare(String(b.cn || b.name), 'cs') });
-  listen('entries', 'entries', { where: [['date', '>=', oknoOd()]], sort: (a, b) => (b.date || '').localeCompare(a.date || '') || ((b.createdAt && b.createdAt.seconds) || 0) - ((a.createdAt && a.createdAt.seconds) || 0) });
+  /* razeni okennich kolekci drzi OKNO_SORT, at je stejne pro snapshot i archiv */
+  listen('entries', 'entries', { where: [['date', '>=', oknoOd()]], okno: true });
   /* Ukoly: vedeni vidi vsechny, ostatni jen sve. Pravidla databaze dotaz
      bud cele povoli, nebo cely odmitnou — filtrovat za nas neumi. Proto se
      pracovnik pta dvema dotazy (co mam prideleno / co jsem zadal) a vysledky
@@ -469,7 +529,16 @@ function startData() {
   else listen('tickety', 'tickety', { where: [['authUid', '==', S.authUser.uid]], sort: tsort });
   listen('users', 'users', { sort: (a, b) => (a.prijmeni || '').localeCompare(b.prijmeni || '', 'cs') });
   if (role === 'admin') {
-    listen('attendance', 'attendance', { where: [['date', '>=', oknoOd()]], sort: (a, b) => attCmp(b, a) });
+    listen('attendance', 'attendance', { where: [['date', '>=', oknoOd()]], okno: true });
+    /* Pending zapisy CELE, bez okna: zapis cekajici na schvaleni dele nez
+       mesic by jinak vypadl ze schvalovani i z citace na nastence a nikdo
+       by nevedel, ze neco visi. Pendingu je vzdy hrstka, cteni skoro nic
+       nestoji. Duplicity s oknem resi slozOkno() podle id. */
+    S.unsub.push(db.collection('entries').where('status', '==', 'pending').onSnapshot(s => {
+      S.pendingZive = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      slozOkno('entries');
+      render();
+    }, err => console.warn('pending entries', err)));
     setTimeout(uklidFotekUkolu, 8000);
     listen('viceprace', 'viceprace', {});
     listen('zadosti', 'zadosti', { sort: (a, b) => (b.date || '').localeCompare(a.date || '') });
@@ -2207,15 +2276,45 @@ function pgSchvaleni() {
 }
 
 /* ---- Tisk / PDF export deníku ---- */
-function printDenik() {
+/* Naživo je jen posledni mesic (OKNO_DNU) — oficialni denik ale musi
+   obsahovat celou historii stavby. Pred tiskem se proto zapisy stavby
+   dotahnou z databaze (jednou za seanci; archiv je pak drzi, viz slozOkno).
+   U stavby zalozene az uvnitr okna neni co dotahovat. */
+S.dotazenoTisk = S.dotazenoTisk || [];
+async function dotahniProTisk(pid, from) {
+  if (from && from >= oknoOd()) return;             // tiskne se jen usek, ktery mame naživo
+  if (S.dotazenoTisk.includes(pid)) return;
+  const p = proj(pid);
+  const vznik = p && p.createdAt && p.createdAt.toDate ? p.createdAt.toDate().toISOString().slice(0, 10) : null;
+  if (vznik && vznik >= oknoOd()) return;           // mlada stavba — starsi zapisy mit nemuze
+  S.dotahuji = true; render();
+  try {
+    const snap = await db.collection('entries').where('pid', '==', pid).get();
+    archivujDotazene('entries', snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    S.dotazenoTisk.push(pid);
+  } catch (e) {
+    /* bez spojeni radsi tisknout s varovanim nez vubec */
+    await oznam('⚠ Starší zápisy se nepodařilo načíst (' + (e.code || e.message) + ').\n\nTisk obsáhne jen posledních ' + OKNO_DNU + ' dní!');
+  }
+  S.dotahuji = false; render();
+}
+async function printDenik() {
   const pid = $('#pr-p').value, verze = $('#pr-v').value, from = $('#pr-f').value, to = $('#pr-t').value;
   const p = proj(pid); if (!p) { toast('Vyber projekt'); return; }
+  /* Nove okno musi otevrit primo klik — po await by ho prohlizec zablokoval. */
+  const w = window.open('', '_blank');
+  if (!w) { toast('Prohlížeč zablokoval nové okno — povol vyskakovací okna'); return; }
+  w.document.write('<!DOCTYPE html><meta charset="utf-8"><p style="font-family:sans-serif;color:#555">Připravuji deník…</p>');
+  await dotahniProTisk(pid, from);
   let list = S.entries.filter(e => e.pid === pid);
   if (verze === 'klient') list = list.filter(e => e.status === 'approved');
   if (from) list = list.filter(e => e.date >= from);
   if (to) list = list.filter(e => e.date <= to);
   list.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  if (!list.length) { toast('Žádné záznamy pro zvolený výběr'); return; }
+  if (!list.length) { w.close(); toast('Žádné záznamy pro zvolený výběr'); return; }
+  /* dochazka pro radek "Na stavenisti" u dnu pred oknem (dotahne se jednou,
+     archiv ji drzi; pri selhani se jen u starych dnu radek nevypise) */
+  if ((list[0].date || '') < oknoOd()) await dotahniDochazku(list[0].date, to || isoToday());
   const perioda = (from || to) ? `${from ? fmtISO(from) : '…'} – ${to ? fmtISO(to) : '…'}` : `${fmtISO(list[0].date)} – ${fmtISO(list[list.length - 1].date)}`;
   const bloky = list.map(e => `
     <div class="zaznam">
@@ -2264,9 +2363,7 @@ function printDenik() {
   <div class="pata">Vygenerováno ze systému Deník staveb Rekonstrukce Vrána · ${fmtISOFull(isoToday())}</div>
   <script>window.addEventListener('load',()=>setTimeout(()=>window.print(),400))<\/script>
   </body></html>`;
-  const w = window.open('', '_blank');
-  if (!w) { toast('Prohlížeč zablokoval nové okno — povol vyskakovací okna'); return; }
-  w.document.write(html); w.document.close();
+  w.document.open(); w.document.write(html); w.document.close();
 }
 
 /* ---- Nový záznam (admin) ---- */
@@ -2784,9 +2881,8 @@ async function dotahniZapisy() {
   try {
     const snap = await db.collection('entries').where('date', '>=', od).where('date', '<=', do_).get();
     const mam = new Set(S.entries.map(e => e.id));
-    let pribylo = 0;
-    snap.docs.forEach(d => { if (!mam.has(d.id)) { S.entries.push({ id: d.id, ...d.data() }); pribylo++; } });
-    S.entries.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const pribylo = snap.docs.filter(d => !mam.has(d.id)).length;
+    archivujDotazene('entries', snap.docs.map(d => ({ id: d.id, ...d.data() })));
     S.starsiOd = od;
     toast(pribylo ? 'Načteno ' + pribylo + ' starších zápisů ✓' : 'Starší zápisy už nejsou');
   } catch (e) { toast('Nepovedlo se načíst: ' + (e.code || e.message)); }
@@ -2806,9 +2902,7 @@ async function dotahniZapisyProReport(from, to) {
   try {
     const snap = await db.collection('entries')
       .where('date', '>=', from).where('date', '<=', to).get();
-    const mam = new Set(S.entries.map(e => e.id));
-    snap.docs.forEach(d => { if (!mam.has(d.id)) S.entries.push({ id: d.id, ...d.data() }); });
-    S.entries.sort((a, b) => (b.date || '').localeCompare(a.date || '') || (((b.createdAt && b.createdAt.seconds) || 0) - ((a.createdAt && a.createdAt.seconds) || 0)));
+    archivujDotazene('entries', snap.docs.map(d => ({ id: d.id, ...d.data() })));
     S.dotazenoZapisy.push(klic);
   } catch (e) {
     toast('Starší zápisy deníku se nepodařilo načíst: ' + (e.code || e.message));
@@ -3041,22 +3135,51 @@ async function delEntry(id) {
 }
 async function delProject(pid) {
   const p = proj(pid); if (!p) return;
-  const zapisu = S.entries.filter(e => e.pid === pid).length;
-  const dochazky = S.attendance.filter(a => a.pid === pid).length;
-  const ukolu = S.tasks.filter(t => t.pid === pid && t.stav !== 'sablona').length;
-  const vp = S.viceprace.filter(v => v.pid === pid).length;
-  if (dochazky) {
-    await oznam('Stavbu „' + p.name + '" smazat nejde.\n\nVisí na ní ' + dochazky + ' záznamů docházky — to je podklad pro výplaty ' +
+  /* Pocty, pojistka i mazani MUSI jit z databaze, ne z pameti — naživo je
+     jen posledni mesic (OKNO_DNU). Z pameti by pojistka mlcela u starsi
+     stavby a mazani by nechalo v databazi sirotky bez projektu. */
+  let ent, att, tsk, vpr, hls, kli, fot;
+  try {
+    [ent, att, tsk, vpr, hls, kli, fot] = await Promise.all([
+      db.collection('entries').where('pid', '==', pid).get(),
+      db.collection('attendance').where('pid', '==', pid).get(),
+      db.collection('tasks').where('pid', '==', pid).get(),
+      db.collection('viceprace').where('pid', '==', pid).get(),
+      db.collection('hlaseni').where('pid', '==', pid).get(),
+      db.collection('klice').where('pid', '==', pid).get(),
+      db.collection('fotonahledy').where('pid', '==', pid).get()
+    ]);
+  } catch (e) {
+    await oznam('Nepodařilo se ověřit, co na stavbě visí (' + (e.code || e.message) + ').\n\nBez toho se stavba nemaže — zkus to znovu s připojením.');
+    return;
+  }
+  const zapisu = ent.size, dochazky = att.size, hlaseni = hls.size, klicu = kli.size;
+  const ukolu = tsk.docs.filter(d => (d.data().stav || '') !== 'sablona').length;
+  const vp = vpr.size;
+  if (dochazky || hlaseni) {
+    await oznam('Stavbu „' + p.name + '" smazat nejde.\n\nVisí na ní ' + dochazky + ' záznamů docházky' + (hlaseni ? ' a ' + hlaseni + ' hlášení subdodavatelů' : '') + ' — to je podklad pro výplaty a fakturaci ' +
       'a nesmí zmizet.\n\nPřepni ji na neaktivní: zmizí z výběru na stavbě i z nabídky nových zápisů, ale historie zůstane.');
     return;
   }
+  const drzene = kli.docs.filter(d => d.data().drzitelId).length;
+  if (drzene) {
+    await oznam('Stavbu „' + p.name + '" smazat nejde.\n\nNěkdo pořád drží ' + drzene + ' jejích klíčů. Nejdřív je v evidenci klíčů nech vrátit, pak jdi mazat.');
+    return;
+  }
   if (!await potvrd('Opravdu smazat stavbu „' + p.name + '"?\n\nSmaže se i: ' + zapisu + ' zápisů deníku, ' + ukolu + ' úkolů, ' + vp +
-    ' víceprací a portál investora.\n\nSmazání nejde vrátit zpět.')) return;
+    ' víceprací' + (klicu ? ', ' + klicu + ' klíčů' : '') + ' a portál investora.\n\nSmazání nejde vrátit zpět.')) return;
   if (zapisu + ukolu + vp > 0 && !await potvrd('Ještě jednou pro jistotu — smazat ' + (zapisu + ukolu + vp) + ' navázaných záznamů?')) return;
   try {
-    for (const e of S.entries.filter(x => x.pid === pid)) await db.collection('entries').doc(e.id).delete().catch(() => {});
-    for (const t of S.tasks.filter(x => x.pid === pid)) await db.collection('tasks').doc(t.id).delete().catch(() => {});
-    for (const v of S.viceprace.filter(x => x.pid === pid)) await db.collection('viceprace').doc(v.id).delete().catch(() => {});
+    /* maze se PRESNE to, co nasly dotazy vyse — vsechno vazane na pid */
+    for (const d of ent.docs) await d.ref.delete().catch(() => {});
+    for (const d of tsk.docs) await d.ref.delete().catch(() => {});
+    for (const d of vpr.docs) await d.ref.delete().catch(() => {});
+    for (const d of kli.docs) await d.ref.delete().catch(() => {});
+    /* fotonahledy zapisu i ukolu stavby — delEntry je uklizi, tady se doted neuklizely vubec */
+    for (const d of fot.docs) await d.ref.delete().catch(() => {});
+    /* zapisy stavby pryc i z archivu slevani, at v Deniku nestrasi duchove */
+    S.archiv.entries.forEach((d, id) => { if (d.pid === pid) S.archiv.entries.delete(id); });
+    slozOkno('entries');
     if (p.portalToken) {
       for (const kol of ['feed', 'vp', 'docs']) {
         const sn = await db.collection('portals').doc(p.portalToken).collection(kol).get().catch(() => null);
@@ -3070,15 +3193,38 @@ async function delProject(pid) {
 }
 async function delUser(udi) {
   const u = userById(udi); if (!u) return;
-  const dochazky = S.attendance.filter(a => a.userDocId === udi).length;
-  const zapisu = S.entries.filter(e => e.author === fullName(u) || (u.uid && e.authorUid === u.uid)).length;
-  if (dochazky || zapisu) {
-    await oznam(fullName(u) + ' smazat nejde.\n\nMá ' + dochazky + ' záznamů docházky a ' + zapisu + ' zápisů v deníku — ' +
-      'to je podklad pro výplaty a stavební deník.\n\nMísto smazání: zruš mu přihlášení (🚫) a přepni ho na neaktivního. ' +
+  /* Pojistka z databaze, ne z pameti (30denni okno) — clovek neaktivni pres
+     mesic by jinak sel smazat i s celou mzdovou historii. Sub navic dochazku
+     nema (pise hlaseni) a kdokoli muze zrovna drzet klic od stavby. */
+  const nic = { docs: [], size: 0 };
+  let att, attU, entA, entU, hls, kli;
+  try {
+    [att, attU, entA, entU, hls, kli] = await Promise.all([
+      db.collection('attendance').where('userDocId', '==', udi).get(),
+      u.uid ? db.collection('attendance').where('authUid', '==', u.uid).get() : Promise.resolve(nic),
+      db.collection('entries').where('author', '==', fullName(u)).get(),
+      u.uid ? db.collection('entries').where('authorUid', '==', u.uid).get() : Promise.resolve(nic),
+      db.collection('hlaseni').where('userDocId', '==', udi).get(),
+      db.collection('klice').where('drzitelId', '==', udi).get()
+    ]);
+  } catch (e) {
+    await oznam('Nepodařilo se ověřit historii uživatele (' + (e.code || e.message) + ').\n\nBez toho se nemaže — zkus to znovu s připojením.');
+    return;
+  }
+  const dochazky = new Set([...att.docs, ...attU.docs].map(d => d.id)).size;
+  const zapisu = new Set([...entA.docs, ...entU.docs].map(d => d.id)).size;
+  const hlaseni = hls.size;
+  if (dochazky || zapisu || hlaseni) {
+    await oznam(fullName(u) + ' smazat nejde.\n\nMá ' + dochazky + ' záznamů docházky, ' + zapisu + ' zápisů v deníku a ' + hlaseni + ' hlášení — ' +
+      'to je podklad pro výplaty, fakturaci a stavební deník.\n\nMísto smazání: zruš mu přihlášení (🚫) a přepni ho na neaktivního. ' +
       'Zmizí ze všech výběrů, ale historie zůstane dohledatelná.');
     return;
   }
-  if (!await potvrd('Opravdu smazat ' + fullName(u) + '?\n\nNemá žádnou docházku ani zápisy. Smazání nejde vrátit zpět.')) return;
+  if (kli.size) {
+    await oznam(fullName(u) + ' smazat nejde.\n\nDrží ' + kli.size + ' klíčů. Nejdřív je v evidenci klíčů předej někomu jinému nebo vrať do kanceláře.');
+    return;
+  }
+  if (!await potvrd('Opravdu smazat ' + fullName(u) + '?\n\nNemá žádnou docházku, zápisy ani hlášení. Smazání nejde vrátit zpět.')) return;
   try {
     if (u.uid) await db.collection('users_auth').doc(u.uid).delete().catch(() => {});
     await db.collection('roster').doc(udi).delete().catch(() => {});
