@@ -14,7 +14,7 @@ const CONFIGURED = CFG.firebase.apiKey !== 'VYPLNIT';
 
 /* ---------- helpers ---------- */
 const $ = s => document.querySelector(s);
-const esc = t => String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+const esc = t => String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/>/g, '&gt;');
 const DAYS = ['neděle', 'pondělí', 'úterý', 'středa', 'čtvrtek', 'pátek', 'sobota'];
 const DAYS2 = ['NE', 'PO', 'ÚT', 'ST', 'ČT', 'PÁ', 'SO'];
 function isoToday() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
@@ -1791,7 +1791,7 @@ function openPhoto(driveId, label, el) {
   const img = el ? el.querySelector('img') : null;
   const src = img ? img.src : '';
   $('#viewer').innerHTML = `<div class="viewer" onclick="if(event.target===this)closeDoc()"><div class="vwrap">
-    <div class="vhead"><b style="flex:1;min-width:120px">${label}</b>
+    <div class="vhead"><b style="flex:1;min-width:120px">${esc(label)}</b>
       ${driveId ? `<a class="btn ghost sm" href="${driveViewUrl(driveId)}" target="_blank">📁 Plné rozlišení (Drive)</a>` : '<span class="badge b-int">jen náhled</span>'}
       <button class="btn dark sm" onclick="closeDoc()">✕ Zavřít</button></div>
     <div class="vbody" style="padding:0;align-items:center"><img src="${src}" style="width:100%;max-height:80vh"></div></div></div>`;
@@ -3379,7 +3379,7 @@ function vidiPopis(z) {
   const kusy = [];
   if (v.includes('parta')) kusy.push('👷 Naši lidé');
   const lide = v.filter(x => !['vsichni', 'parta', 'vedeni'].includes(x));
-  if (lide.length) kusy.push('👤 ' + ((z.vidiJmena || []).join(', ') || lide.length + ' lidí'));
+  if (lide.length) kusy.push('👤 ' + (esc((z.vidiJmena || []).join(', ')) || lide.length + ' lidí'));
   return kusy.join(' + ') || '🗂 Jen vedení';
 }
 function vidiBarva(z) {
