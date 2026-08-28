@@ -146,6 +146,14 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
+    // Poznamky ke stavbe: veci, ktere u zakazky zustavaji (kody, kontakty).
+    // Cist a komentovat smi kdokoli s roli, mazat vedeni.
+    match /poznamky/{id} {
+      allow read: if hasRole();
+      allow create, update: if hasRole();
+      allow delete: if isAdmin();
+    }
+
     // Klice zakazky: pocet volitelny, zaklada a maze vedeni. Predat smi
     // vedeni nebo ten, kdo klic prave drzi; po predani je novym drzitelem
     // prijemce, ktery prevzeti potvrzuje — ale predani plati i bez

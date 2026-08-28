@@ -200,6 +200,7 @@ const S = {
   projDetailId: null, projDetailTab: 'info', newUserType: null, editUserId: null,
   ukolyView: 'seznam', orgFilter: 'vse', taskFormOpen: false, attFormOpen: false, vpFormOpen: false,
   hlaseni: [], subProject: null, subPocet: 1, subOdchodOpen: false, subZaznam: '',
+  podkladyStav: null, podkladyCesta: [], poznamky: [], poznamkaEdit: null,
   taskFoto: [],
   klice: [],
   repWorkers: [], repProjects: [], repLoaded: false, repFrom: isoToday().slice(0, 8) + '01', repTo: isoToday(),
@@ -436,6 +437,7 @@ function startData() {
   if (role === 'admin') listen('hlaseni', 'hlaseni', { where: [['date', '>=', oknoOd()]], sort: hlasSort });
   else if (role === 'sub') listen('hlaseni', 'hlaseni', { where: [['authUid', '==', S.authUser.uid]], sort: hlasSort });
   listen('klice', 'klice', {});
+  listen('poznamky', 'poznamky', { sort: (a, b) => (a.nadpis || '').localeCompare(b.nadpis || '', 'cs') });
   /* tajny klic k mostu — bez nej se soubory z Drive oteviraji postaru
      (pres Google), s nim je vydava most primo aplikaci */
   db.collection('config').doc('tajne').get().then(d => { S.tajne = d.exists ? d.data() : null; }).catch(() => {});
@@ -1515,6 +1517,7 @@ function pgProjDetail() {
           <button class="btn ghost" onclick="delProject('${p.id}')">🗑 Smazat stavbu</button></div>
       </div>
       ${sekceKliceProjektu(p)}
+      ${kartaPoznamky(p)}
       <div class="card">
         <h3>📍 Pozice projektu (GPS check-in)</h3>
         ${p.gps ? `
@@ -3160,6 +3163,115 @@ function workerProjectList() {
   });
 }
 
+/* ============ PODKLADY STAVBY (zive z Drive) ============
+   Slozka 09_Denik_staveb/Podklady vcetne podslozek (SIKO, dvere...).
+   Vedeni je sklada primo na Drive, aplikace je jen ukazuje a soubory
+   vydava most — funguje i bez uctu Google. Zadal Marco 28. 8. 2026. */
+async function nactiPodklady(p, folderId) {
+  const klic = S.tajne && S.tajne.mostKlic;
+  if (!klic || !CFG.scriptUrl) { S.podkladyStav = { chyba: 'Most není nastavený' }; render(); return; }
+  S.podkladyStav = { nacita: true }; render();
+  try {
+    /* Kdyz zakazka zna svou slozku na Drive, jdeme primo pres ni —
+       hledani podle CN by trefilo nahradni slozku "..._SYSTEM", kterou si
+       most zalozil driv, nez se ID doplnilo. */
+    const j = await driveCall(folderId
+      ? { action: 'listPodklady', folderId, klic }
+      : { action: 'listPodklady', projektFolderId: (p && p.driveFolderId) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', rootId: CFG.driveRootFolderId, klic });
+    S.podkladyStav = j.ok ? { id: j.id, folders: j.folders || [], files: j.files || [] } : { chyba: j.error || 'Nepovedlo se' };
+  } catch (e) { S.podkladyStav = { chyba: e.message || 'Nepovedlo se' }; }
+  render();
+}
+function doPodslozky(id, nazev) {
+  S.podkladyCesta.push({ id, nazev });
+  nactiPodklady(null, id);
+}
+function zpetVPodkladech() {
+  S.podkladyCesta.pop();
+  const posl = S.podkladyCesta[S.podkladyCesta.length - 1];
+  if (posl) nactiPodklady(null, posl.id);
+  else { S.podkladyStav = null; render(); }
+}
+function kartaPodklady(p) {
+  if (!p) return '';
+  const st = S.podkladyStav;
+  const cesta = S.podkladyCesta;
+  return `<div class="card">
+    <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— z Drive</span></h3>
+    ${!st ? `<div class="aprv"><button class="btn dark sm" onclick="S.podkladyCesta=[];nactiPodklady(proj('${p.id}'))">📂 Zobrazit podklady</button></div>`
+      : st.nacita ? '<div class="loading"><span class="spin"></span>Načítám z Drive…</div>'
+      : st.chyba ? `<div class="note">${esc(st.chyba)}</div><div class="aprv"><button class="btn ghost sm" onclick="S.podkladyStav=null;render()">Zpět</button></div>`
+      : `${cesta.length ? `<div class="urow" style="cursor:pointer" onclick="zpetVPodkladech()"><span>⬅</span><b>${esc(cesta.map(c => c.nazev).join(' / '))}</b></div>` : ''}
+        ${st.folders.map(f => `<div class="urow" style="cursor:pointer" onclick="doPodslozky('${f.id}','${esc(f.name)}')"><span>📁</span><b>${esc(f.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('')}
+        ${st.files.map(f => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${f.id}','${esc(f.name)}')"><span>${(f.mime || '').includes('pdf') ? '📄' : (f.mime || '').indexOf('image/') === 0 ? '🖼' : '📎'}</span><b>${esc(f.name)}</b><span class="muted" style="margin-left:auto">${f.size ? Math.round(f.size / 1024) + ' kB' : ''}</span></div>`).join('')}
+        ${(!st.folders.length && !st.files.length) ? '<div class="empty">Tady zatím nic není.</div>' : ''}`}
+  </div>`;
+}
+
+/* ============ POZNAMKY KE STAVBE ============
+   Veci, ktere u stavby ZUSTAVAJI (kody, kontakty, "voda se zavira v
+   suterenu"). Nadpis + text, ktery jde upravovat, a komentare pod tim.
+   Zadal Marco 28. 8. 2026. */
+function kartaPoznamky(p) {
+  if (!p) return '';
+  const mp = S.poznamky.filter(z => z.pid === p.id);
+  return `<div class="card">
+    <h3>📝 Poznámky ke stavbě <span class="muted" style="font-weight:400">— zůstávají u zakázky</span></h3>
+    ${mp.map(z => S.poznamkaEdit === z.id ? `
+      <div class="ukform" style="margin-bottom:8px">
+        <label>Nadpis</label><input type="text" id="pz-n-${z.id}" value="${esc(z.nadpis || '')}">
+        <label>Text</label><textarea id="pz-t-${z.id}" style="min-height:70px">${esc(z.text || '')}</textarea>
+        <div class="aprv"><button class="btn amber sm" onclick="ulozPoznamku('${z.id}')">Uložit</button>
+          <button class="btn ghost sm" onclick="S.poznamkaEdit=null;render()">Zrušit</button>
+          <span class="lnk" style="margin-left:auto" onclick="smazPoznamku('${z.id}')">✕ smazat</span></div>
+      </div>` : `
+      <div style="border:1px solid var(--line);border-radius:10px;padding:11px 13px;margin-bottom:8px">
+        <div style="display:flex;gap:8px;align-items:baseline"><b style="flex:1">${esc(z.nadpis || '')}</b>
+          <span class="lnk" style="font-size:12px" onclick="S.poznamkaEdit='${z.id}';render()">upravit</span></div>
+        <div class="muted" style="white-space:pre-line;font-size:14px;margin-top:3px">${esc(z.text || '')}</div>
+        ${(z.komentare || []).length ? `<div style="margin-top:8px;display:flex;flex-direction:column;gap:5px">
+          ${z.komentare.map(k => `<div style="background:#f4f6f9;border-radius:8px;padding:6px 10px;font-size:13px">
+            <b>${esc(k.autor || '')}</b> <span class="muted">${fmtISO(k.date)} ${k.time || ''}</span><br>
+            <span style="white-space:pre-line">${esc(k.text || '')}</span></div>`).join('')}</div>` : ''}
+        <div style="display:flex;gap:7px;margin-top:8px">
+          <input type="text" id="pk-${z.id}" placeholder="Komentář…" style="flex:1;min-width:0"
+                 onkeydown="if(event.key==='Enter')komentujPoznamku('${z.id}')">
+          <button class="btn dark sm" style="flex:none" onclick="komentujPoznamku('${z.id}')">Přidat</button>
+        </div>
+      </div>`).join('')}
+    <div class="aprv"><button class="btn dark sm" onclick="novaPoznamka('${p.id}')">➕ Nová poznámka</button></div>
+  </div>`;
+}
+async function novaPoznamka(pid) {
+  const nadpis = prompt('Nadpis poznámky:', '');
+  if (!nadpis || !nadpis.trim()) return;
+  const r = await db.collection('poznamky').add({ pid, nadpis: nadpis.trim(), text: '', komentare: [],
+    autorId: S.me ? S.me.id : '', autor: fullName(S.me || {}), createdAt: FV() })
+    .catch(e => { toast('Nejde přidat: ' + (e.code || e.message)); return null; });
+  if (r) { S.poznamkaEdit = r.id; render(); }
+}
+async function ulozPoznamku(id) {
+  const n = $('#pz-n-' + id).value.trim(), t = $('#pz-t-' + id).value;
+  if (!n) { toast('Nadpis nesmí být prázdný'); return; }
+  await db.collection('poznamky').doc(id).update({ nadpis: n, text: t })
+    .then(() => { S.poznamkaEdit = null; toast('Uloženo ✓'); render(); })
+    .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
+}
+async function smazPoznamku(id) {
+  if (!confirm('Smazat poznámku i s komentáři?')) return;
+  await db.collection('poznamky').doc(id).delete()
+    .then(() => { S.poznamkaEdit = null; toast('Smazáno ✓'); })
+    .catch(e => toast('Nejde smazat: ' + (e.code || e.message)));
+}
+async function komentujPoznamku(id) {
+  const inp = $('#pk-' + id); const text = inp.value.trim();
+  if (!text) return;
+  await db.collection('poznamky').doc(id).update({
+    komentare: firebase.firestore.FieldValue.arrayUnion({
+      autor: fullName(S.me || {}), text, date: isoToday(), time: nowTime() })
+  }).then(() => { inp.value = ''; }).catch(e => toast('Nejde: ' + (e.code || e.message)));
+}
+
 /* ============ EVIDENCE KLICU ============
    Ke kazde zakazce par klicu (pocet volitelny). Predava je vedeni nebo
    ten, kdo klic prave drzi. Prijemce prevzeti potvrzuje, ale predani
@@ -3378,22 +3490,8 @@ function viewSub() {
     </div>
     ${kartaUkoly(p)}
     ${kartaKlice()}
-    ${p && (p.stavbaDocs || []).length ? `<div class="card">
-      <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— půdorysy, vizualizace</span></h3>
-      ${(p.stavbaDocs || []).map(d => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${esc(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('')}
-    </div>` : ''}
-    ${(() => {
-      /* prilohy ze zapisu vybrane stavby — sub je potrebuje (revize,
-         protokoly, objednavky), rekl Marco 27. 8. */
-      if (!p) return '';
-      const pril = S.entries.filter(e => e.pid === p.id)
-        .flatMap(e => (e.attachments || []).map((a, i) => ({ ...a, eid: e.id, i, date: e.date })));
-      if (!pril.length) return '';
-      return `<div class="card">
-      <h3>📎 Přílohy ze zápisů <span class="muted" style="font-weight:400">— ${esc(p.name)}</span></h3>
-      ${pril.map(a => `<div class="urow" style="cursor:pointer" onclick="otevritPrilohu('${a.eid}',${a.i})"><span>${(a.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(a.name)}</b><span class="muted" style="margin-left:auto">${fmtISO(a.date)}</span></div>`).join('')}
-      </div>`;
-    })()}
+    ${kartaPodklady(p)}
+    ${kartaPoznamky(p)}
   </main></div></div>`;
 }
 
@@ -3526,6 +3624,8 @@ function viewWorker() {
     </div>` : ''}
     ${kartaUkoly(p)}
     ${kartaKlice()}
+    ${kartaPodklady(p)}
+    ${kartaPoznamky(p)}
     <div class="card">
       <h3>✍️ Nový zápis do deníku</h3>
       <textarea id="wt" placeholder="Co se dnes dělalo… každá věta = jedna odrážka"></textarea>
