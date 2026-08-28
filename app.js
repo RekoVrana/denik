@@ -1517,6 +1517,7 @@ function pgProjDetail() {
           <button class="btn ghost" onclick="delProject('${p.id}')">🗑 Smazat stavbu</button></div>
       </div>
       ${sekceKliceProjektu(p)}
+      ${kartaPodklady(p)}
       ${kartaPoznamky(p)}
       <div class="card">
         <h3>📍 Pozice projektu (GPS check-in)</h3>
@@ -3214,7 +3215,7 @@ function kartaPodklady(p) {
     ${!st ? `<div class="aprv"><button class="btn dark sm" onclick="S.podkladyCesta=[];nactiPodklady(proj('${p.id}'))">📂 Zobrazit podklady</button></div>`
       : st.nacita ? '<div class="loading"><span class="spin"></span>Načítám z Drive…</div>'
       : st.chyba ? `<div class="note">${esc(st.chyba)}</div><div class="aprv"><button class="btn ghost sm" onclick="S.podkladyStav=null;render()">Zpět</button>${S.meAuth && S.meAuth.role === 'admin' ? `<button class="btn dark sm" onclick="napojPodklady('${p.id}')">🔗 Napojit složku odkazem</button>` : ''}</div>`
-      : `${cesta.length ? `<div class="urow" style="cursor:pointer" onclick="zpetVPodkladech()"><span>⬅</span><b>${esc(cesta.map(c => c.nazev).join(' / '))}</b></div>` : ''}
+      : `${cesta.length ? `<div class="urow" style="cursor:pointer" onclick="zpetVPodkladech()"><span>⬅</span><b>${esc(cesta.map(c => c.nazev).join(' / '))}</b></div>` : (S.meAuth && S.meAuth.role === 'admin' ? `<div class="aprv" style="justify-content:flex-end"><span class="lnk" style="font-size:12px" onclick="napojPodklady('${p.id}')">🔗 napojit jinou složku</span></div>` : '')}
         ${st.folders.map(f => `<div class="urow" style="cursor:pointer" onclick="doPodslozky('${f.id}','${esc(f.name)}')"><span>📁</span><b>${esc(f.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('')}
         ${st.files.map(f => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${f.id}','${esc(f.name)}')"><span>${(f.mime || '').includes('pdf') ? '📄' : (f.mime || '').indexOf('image/') === 0 ? '🖼' : '📎'}</span><b>${esc(f.name)}</b><span class="muted" style="margin-left:auto">${f.size ? Math.round(f.size / 1024) + ' kB' : ''}</span></div>`).join('')}
         ${(!st.folders.length && !st.files.length) ? `<div class="empty">Tady zatím nic není.</div>${S.meAuth && S.meAuth.role === 'admin' && !p.podkladyFolderId ? `<div class="aprv"><button class="btn dark sm" onclick="napojPodklady('${p.id}')">🔗 Napojit složku odkazem</button></div><div class="note">Když vidíš prázdno, i když na Drive něco máš, most trefil jinou složku — napoj ji odkazem, je to jednou a napořád.</div>` : ''}` : ''}`}
