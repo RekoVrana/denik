@@ -515,7 +515,7 @@ function startData() {
      Kazdy klic (vsichni / parta / ja) ma vlastni posluchac a vysledky
      se skladaji dohromady, stejne jako u ukolu. */
   const pzSort = (a, b) => (a.nadpis || '').localeCompare(b.nadpis || '', 'cs');
-  if (role === 'admin') { listen('poznamky', 'poznamky', { sort: pzSort }); prevedStarePoznamky(); }
+  if (role === 'admin') { listen('poznamky', 'poznamky', { sort: pzSort }); prevedStarePoznamky(); uklidRosterAdminy(); }
   else {
     const pzMid = (S.meAuth && S.meAuth.userDocId) || '__nikdo__';
     listenPoznamky(role === 'sub' ? ['vsichni', pzMid] : ['vsichni', 'parta', pzMid]);
@@ -978,11 +978,26 @@ function attOn(pid, date) {
 }
 
 /* ---------- záznamy: workflow ---------- */
+/* Rozdeleni textu na jednotlive prace: kazdy radek je polozka a dlouhy
+   odstavec se rozpadne na vety (tecka/vykricnik/otaznik + mezera + velke
+   pismeno). Odrazky na zacatku radku se orezou.
+   POZOR (S19): drive se to delalo regularnim vyrazem s lookbehind
+   "(?<=[.!?])". Ten iPhony starsi nez iOS 16.4 neumi a spadly uz pri
+   nacitani celeho app.js — pracovnik videl bilou obrazovku a vubec se
+   neprihlasil. Proto stejny vysledek jinak: pred zacatek nove vety
+   vlozime radkovy zlom a delime uz jen podle radku. */
+function rozdelNaVety(txt) {
+  return String(txt == null ? '' : txt)
+    .replace(/([.!?])\s+([A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ])/g, '$1\n$2')
+    .split(/\n+/)
+    .map(s => s.trim().replace(/^[-•]\s*/, ''))
+    .filter(Boolean);
+}
 /* Zaznam se zaklada s ID vyrobenym v telefonu, ne az po odpovedi serveru —
    diky tomu funguje zapis i bez signalu a fotky uz vedi, kam patri. */
 async function addEntry(pid, author, txt, persons, date) {
   const p = proj(pid);
-  const works = txt ? txt.split(/[\n]+|(?<=[.!?])\s+(?=[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ])/).map(s => s.trim().replace(/^[-•]\s*/, '')).filter(Boolean) : [];
+  const works = txt ? rozdelNaVety(txt) : [];
   const d = date || isoToday();
   const ref = db.collection('entries').doc();
   const photos = await zaraditFotky(p, ref.id);
@@ -1290,7 +1305,11 @@ async function doSetup() {
       udocId = udoc.id;
     }
     await db.collection('users_auth').doc(cred.user.uid).set({ role: 'admin', userDocId: udocId, name });
-    await db.collection('roster').doc(udocId).set({ jmeno, prijmeni: rest.join(' '), authEmail: email, role: 'admin', popis: 'vedení' });
+    /* Vedeni se do /roster NEZAPISUJE (B6). Roster je verejne citelny —
+       potrebuje ho prihlasovaci obrazovka party — a nesl by tak
+       prihlasovaci e-mail vedeni i priznak, ktery ucet je admin.
+       Vedeni se prihlasuje e-mailem a heslem, ktere zada rucne,
+       a prihlasovaci obrazovka adminy z rosteru stejne filtruje pryc. */
     await db.collection('config').doc('app').set({ setupDone: true, createdAt: FV(), version: 1 });
     toast('Systém založen ✓ Vítej!');
     S.bootstrapping = false;
@@ -3045,7 +3064,15 @@ async function createLogin(udi) {
     const role = roleOfTypeKey(typeKeyOfUser(u));
     await db.collection('users_auth').doc(cred.user.uid).set({ role, userDocId: udi, name: fullName(u) });
     await db.collection('users').doc(udi).update({ uid: cred.user.uid, authEmail });
-    await db.collection('roster').doc(udi).set({ jmeno: u.jmeno, prijmeni: u.prijmeni, authEmail, role, popis: $('#lf-pop').value.trim() });
+    /* Do verejneho rosteru jde jen parta a subdodavatele — ti se pres nej
+       hledaji na prihlasovaci obrazovce. Vedeni (admin) tam nepatri (B6):
+       roster cte kdokoli z internetu a vydal by prihlasovaci e-mail
+       vedeni i to, ktery ucet je admin. */
+    if (role !== 'admin') {
+      await db.collection('roster').doc(udi).set({ jmeno: u.jmeno, prijmeni: u.prijmeni, authEmail, role, popis: $('#lf-pop').value.trim() });
+    } else {
+      await db.collection('roster').doc(udi).delete().catch(() => {});
+    }
     await secondary.auth().signOut();
     closeModal(); toast('Účet vytvořen ✓ PIN předej pracovníkovi.');
   } catch (e) { toast('Chyba: ' + (e.code === 'auth/email-already-in-use' ? 'účet už existuje' : e.message)); }
@@ -3066,6 +3093,30 @@ function pinForm(udi) {
     <div class="aprv"><button class="btn amber" onclick="resetPin('${udi}')">💾 Nastavit nový PIN</button>
     <button class="btn ghost" onclick="closeModal()">Zrušit</button></div>`);
 }
+/* Prevod historie na novy prihlasovaci ucet (S20).
+   Vse, co si mobil vybira podle authUid, musi po vymene PINu ukazovat
+   na novy ucet — jinak to clovek vubec neuvidi a pravidla mu to ani
+   neprectou. Pta se primo databaze, ne pameti: vedeni ma nactene jen
+   posledni mesic, takze starsi zaznamy by v pameti chybely.
+   POZNAMKA: fotonahledy nesou autorUid, ale pravidla u nich zakazuji
+   jakoukoli zmenu (allow update: if false) — prevest je nejde. Dopad je
+   maly: nahledy se zobrazuji vsem, jen si je autor po vymene PINu nesmaze
+   sam (smaze je vedeni). */
+async function prenesNaNovyUcet(staryUid, novyUid) {
+  const KDE = [['tickety', 'authUid'], ['hlaseni', 'authUid'], ['attendance', 'authUid'], ['zadosti', 'authUid'], ['entries', 'authorUid']];
+  let n = 0;
+  for (const dvojice of KDE) {
+    const kolekce = dvojice[0], pole = dvojice[1];
+    try {
+      const s = await db.collection(kolekce).where(pole, '==', staryUid).get();
+      for (const d of s.docs) {
+        const zmena = {}; zmena[pole] = novyUid;
+        await d.ref.update(zmena).then(() => { n++; }).catch(() => {});
+      }
+    } catch (e) { console.warn('prevod ' + kolekce + ' na novy ucet', e); }
+  }
+  return n;
+}
 async function resetPin(udi) {
   const pin = ($('#pin-novy').value || '').trim();
   if (pin.length < 6) { toast('PIN musí mít aspoň 6 znaků'); return; }
@@ -3079,9 +3130,16 @@ async function resetPin(udi) {
     const role = roleOfTypeKey(typeKeyOfUser(u));
     await db.collection('users_auth').doc(cred.user.uid).set({ role, userDocId: udi, name: fullName(u) });
     await db.collection('users').doc(udi).update({ uid: cred.user.uid, authEmail, pinVerze: verze });
-    await db.collection('roster').doc(udi).set({ jmeno: u.jmeno, prijmeni: u.prijmeni, authEmail, role, popis: ($('#pin-pop').value || '').trim() }, { merge: true });
+    /* Vedeni (admin) do verejneho rosteru nepatri — viz B6 u createLogin. */
+    if (role !== 'admin') {
+      await db.collection('roster').doc(udi).set({ jmeno: u.jmeno, prijmeni: u.prijmeni, authEmail, role, popis: ($('#pin-pop').value || '').trim() }, { merge: true });
+    } else {
+      await db.collection('roster').doc(udi).delete().catch(() => {});
+    }
     if (staryUid) await db.collection('users_auth').doc(staryUid).delete().catch(() => {});
     // historie je navazana na ucet — prepnout, jinak by pracovnik videl prazdno
+    // (u clovka, ktery je ve firme dele, to par vterin trva — proto hlaska)
+    toast('Nový PIN platí ✓ Přenáším historii na nový účet…');
     let presunuto = 0;
     for (const a of S.attendance.filter(x => x.userDocId === udi && x.authUid !== cred.user.uid)) {
       await db.collection('attendance').doc(a.id).update({ authUid: cred.user.uid }).catch(() => {}); presunuto++;
@@ -3089,6 +3147,18 @@ async function resetPin(udi) {
     for (const z of S.zadosti.filter(x => x.userDocId === udi && x.authUid !== cred.user.uid)) {
       await db.collection('zadosti').doc(z.id).update({ authUid: cred.user.uid }).catch(() => {});
     }
+    /* Na starem uctu visi i dalsi veci, ktere se v mobilu vybiraji podle
+       authUid (S20). Pamet vedeni je omezena 30dennim oknem, proto se
+       ptame primo databaze podle stareho uid — jinak by starsi zaznamy
+       zustaly viset na uctu, ktery uz nikdo nepouziva:
+         tickety   — hlaseni chyb a odpovedi vedeni (bez prevodu je
+                     pracovnik po vymene PINu vubec neuvidi, pravidla
+                     mu je neprectou),
+         hlaseni   — prichody/odchody subdodavatelu,
+         entries   — zapisy v deniku (authorUid rozhoduje o tom, jestli
+                     smi autor jeste opravit svuj zapis a jestli fronta
+                     doplni fotky nahrane na Drive az po odeslani). */
+    if (staryUid) presunuto += await prenesNaNovyUcet(staryUid, cred.user.uid);
     await secondary.auth().signOut();
     closeModal();
     toast('Nový PIN nastaven ✓ Starý už neplatí' + (presunuto ? ' · historie přenesena (' + presunuto + ' záznamů)' : '') + '.');
@@ -3317,7 +3387,17 @@ async function saveUser() {
     const oldRole = roleOfTypeKey(typeKeyOfUser(edit));
     roleChanged = newRole !== oldRole;
     try {
-      await db.collection('roster').doc(docId).set({ jmeno: j, prijmeni: p, role: newRole }, { merge: true });
+      /* Vedeni (admin) ve verejnem rosteru byt nesmi (B6). Kdyz nekdo
+         na vedeni prejde, jeho zaznam z rosteru zmizi; kdyz z vedeni
+         naopak sestoupi do party, zaznam se zalozi vcetne prihlasovaci
+         adresy, aby se na mobilu mel pres co prihlasit. */
+      if (newRole === 'admin') {
+        await db.collection('roster').doc(docId).delete().catch(() => {});
+      } else {
+        const zapis = { jmeno: j, prijmeni: p, role: newRole };
+        if (edit.authEmail) zapis.authEmail = edit.authEmail;
+        await db.collection('roster').doc(docId).set(zapis, { merge: true });
+      }
       await db.collection('users_auth').doc(edit.uid).set({ role: newRole, name: j + ' ' + p }, { merge: true });
     } catch (e) { toast('⚠ Kartu jsem uložil, ale práva se nepodařilo srovnat: ' + e.message); }
   }
@@ -3341,7 +3421,9 @@ async function saveUser() {
         await db.collection('attendance').doc(a.id).update({ userName: noveJmeno }); opraveno++;
       }
     } catch (e) { toast('⚠ Jméno jsem změnil, ale ne všude se to propsalo: ' + (e.code || e.message)); }
-    if (!edit.uid) await db.collection('roster').doc(docId).set({ jmeno: j, prijmeni: p }, { merge: true }).catch(() => {});
+    // jmeno srovnat i v rosteru — ale jen u party a subu, vedeni v rosteru byt nema (B6)
+    if (!edit.uid && roleOfTypeKey(typKey) !== 'admin')
+      await db.collection('roster').doc(docId).set({ jmeno: j, prijmeni: p }, { merge: true }).catch(() => {});
   }
   goPage('uzivatele');
   toast(edit
@@ -3586,6 +3668,26 @@ async function prevedStarePoznamky() {
     }
     await d.ref.update({ notes: FVD.delete() }).catch(() => {});
   }
+}
+/* Jednorazovy uklid rosteru (B6) — bezi pri prihlaseni vedeni, stejne
+   jako prevod starych poznamek. Kolekce /roster je verejne citelna (bez
+   ni by se parta na prihlasovaci obrazovce nenasla) a driv se do ni
+   zapisovalo i vedeni — vcetne prihlasovaciho e-mailu a priznaku role
+   'admin'. Kdokoli z internetu si tak stahl e-mail admina i s tim, na
+   ktery ucet utocit. Nove uz se admin do rosteru nezapisuje; tohle
+   dorovnava uz zalozene ucty.
+   MAZE VYHRADNE zaznamy s role == 'admin'. Parta (worker) ani
+   subdodavatele (sub) se nedotknou — ti se pres roster prihlasuji. */
+async function uklidRosterAdminy() {
+  const snap = await db.collection('roster').get().catch(() => null);
+  if (!snap) return;
+  const adminy = snap.docs.filter(d => (d.data() || {}).role === 'admin');
+  if (!adminy.length) return;
+  let smazano = 0;
+  for (const d of adminy) await d.ref.delete().then(() => { smazano++; }).catch(() => {});
+  // S.roster se pouziva jen na prihlasovaci obrazovce a ta si ho po
+  // odhlaseni nacita znovu (loadRoster) — prekreslovat tady netreba.
+  if (smazano) console.log('roster: odstraněno ' + smazano + ' záznamů vedení (veřejný seznam už nenese e-mail admina)');
 }
 
 /* Jeden posluchac na kazdy klic viditelnosti; vysledky se skladaji. */
@@ -4621,6 +4723,31 @@ setInterval(() => {
 
 /* ============ VÝCHOZÍ DATA (pilot Pecka + Šaarová) ============ */
 async function seedData() {
+  /* Pojistka (S21): seed patri VYHRADNE do cerstve zalozeneho, prazdneho
+     systemu. V ostrem provozu by zalozil druhou sadu uzivatelu s realnymi
+     e-maily a sazbami — proto se pta primo databaze, ne pameti (ta ma jen
+     30denni okno). Ucty vedeni se nepocitaji: to je prave ten clovek, ktery
+     system zaklada. */
+  try {
+    const [us, att, ent] = await Promise.all([
+      db.collection('users').get(),
+      db.collection('attendance').limit(1).get(),
+      db.collection('entries').limit(1).get()
+    ]);
+    const lide = us.docs.filter(d => !((d.data().typ || {}).kanc)).length;
+    if (lide || att.size || ent.size) {
+      const co = [];
+      if (lide) co.push(lide + ' lidí mimo vedení');
+      if (att.size) co.push('docházku');
+      if (ent.size) co.push('zápisy v deníku');
+      await oznam('Pilotní data nahrát nejde — systém se už používá.\n\nUž obsahuje ' + co.join(', ') + '.\n\n' +
+        'Seed by založil druhou sadu uživatelů se stejnými e-maily a sazbami. Novou zakázku založ ručně v sekci Projekty.');
+      return;
+    }
+  } catch (e) {
+    await oznam('Nepodařilo se ověřit, jestli je systém prázdný (' + (e.code || e.message) + ').\n\nBez toho se pilotní data nenahrávají — zkus to znovu s připojením.');
+    return;
+  }
   if (!await potvrd('Nahrát výchozí data pilotních zakázek (Pecka CN20260055, Šaarová CN20260060)?')) return;
   const batchAdd = async (col, data) => (await db.collection(col).add(data)).id;
   const pecka = await batchAdd('projects', {
@@ -4657,10 +4784,15 @@ async function seedData() {
   await batchAdd('viceprace', { pid: saarova, title: 'Výměna hliníkového vedení v ložnici', popis: 'Nález z deníku — původní Al vedení pod omítkou, nutná výměna: drážky, kabeláž CYKY, zapravení.', cena: 0, stav: 'navrh', zdroj: 'stavba', createdAt: FV() });
   toast('Výchozí data nahrána ✓ (2 projekty, ' + U.length + ' uživatelů)');
 }
-// tlačítko seed na nástěnce, když je systém prázdný
+/* tlačítko seed na nástěnce, když je systém opravdu prázdný.
+   POZOR (S21): nestačí „nemá projekty" — v ostrém systému může vedení
+   smazat poslední zakázku, a přitom tam jsou lidi a docházka. Proto se
+   ukáže, jen když kromě vedení nikdo neexistuje. Vlastní seedData si to
+   ještě jednou ověří přímo v databázi. */
 const _origNastenkaPrehled = nastenkaPrehled;
 nastenkaPrehled = function () {
-  if (!S.projects.length) return `<main><div class="card"><div class="empty">👋 Systém je prázdný.<br><br>
+  const lideMimoVedeni = S.users.filter(u => !(u.typ || {}).kanc).length;
+  if (!S.projects.length && !lideMimoVedeni) return `<main><div class="card"><div class="empty">👋 Systém je prázdný.<br><br>
     <button class="btn amber" onclick="seedData()">📦 Nahrát pilotní zakázky (Pecka + Šaarová)</button>
     <span class="muted" style="display:block;margin-top:8px">nebo založ projekt ručně v sekci Projekty</span></div></div></main>`;
   return _origNastenkaPrehled();
