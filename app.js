@@ -436,6 +436,9 @@ function startData() {
   if (role === 'admin') listen('hlaseni', 'hlaseni', { where: [['date', '>=', oknoOd()]], sort: hlasSort });
   else if (role === 'sub') listen('hlaseni', 'hlaseni', { where: [['authUid', '==', S.authUser.uid]], sort: hlasSort });
   listen('klice', 'klice', {});
+  /* tajny klic k mostu — bez nej se soubory z Drive oteviraji postaru
+     (pres Google), s nim je vydava most primo aplikaci */
+  db.collection('config').doc('tajne').get().then(d => { S.tajne = d.exists ? d.data() : null; }).catch(() => {});
   /* Tickety: kazdy vidi sve, vedeni vsechny. */
   const tsort = (a, b) => ((b.date || '') + (b.time || '')).localeCompare((a.date || '') + (a.time || ''));
   if (role === 'admin') listen('tickety', 'tickety', { sort: tsort });
@@ -1779,16 +1782,44 @@ function otevritPrilohu(eid, i) {
   }
   openDriveDoc('', a.name);
 }
-function openDriveDoc(driveId, title) {
+async function openDriveDoc(driveId, title) {
   /* Bez platneho ID by se do adresy Drive dostalo prazdno nebo "undefined"
-     a Google vrati vlastni stranku "400 — pozadavek nema spravny format".
-     Clovek z ni nepozna nic; radeji rekneme rovnou, co se stalo. */
+     a Google vrati vlastni stranku "400 — pozadavek nema spravny format". */
   if (!driveId || driveId === 'undefined' || driveId === 'null') {
     modal(`<h3>📎 ${esc(title || 'Příloha')}</h3>
       <div class="note">Tenhle soubor na Drive není. Buď ještě čeká ve frontě na odeslání, nebo se ho nepodařilo nahrát.</div>
       <div class="aprv"><button class="btn dark" onclick="closeModal()">Rozumím</button></div>`);
     return;
   }
+  /* Soubor vydava MOST (action getFile) — telefon se s Googlem nebavi,
+     takze funguje i pro partu bez uctu Google. Google iframe zustava jen
+     jako zaloha, kdyz most nebo klic nejsou po ruce. */
+  const klic = S.tajne && S.tajne.mostKlic;
+  if (klic && CFG.scriptUrl && S.online) {
+    $('#viewer').innerHTML = `<div class="viewer"><div class="vwrap">
+      <div class="vhead"><b style="flex:1;min-width:120px">${esc(title)}</b>
+        <button class="btn dark sm" onclick="closeDoc()">✕ Zavřít</button></div>
+      <div class="vbody" style="align-items:center;justify-content:center;min-height:30vh">
+        <div class="loading"><span class="spin"></span>Stahuji soubor…</div></div></div></div>`;
+    try {
+      const j = await driveCall({ action: 'getFile', fileId: driveId, klic });
+      if (j.ok) {
+        const bajty = Uint8Array.from(atob(j.data), c => c.charCodeAt(0));
+        const url = URL.createObjectURL(new Blob([bajty], { type: j.mime || 'application/octet-stream' }));
+        const jeObrazek = (j.mime || '').indexOf('image/') === 0;
+        $('#viewer').innerHTML = `<div class="viewer" onclick="if(event.target===this)closeDoc()"><div class="vwrap">
+          <div class="vhead"><b style="flex:1;min-width:120px">${esc(title)}</b>
+            <a class="btn ghost sm" href="${url}" target="_blank">⤢ Otevřít / uložit</a>
+            <button class="btn dark sm" onclick="closeDoc()">✕ Zavřít</button></div>
+          <div class="vbody" style="padding:0;align-items:center">${jeObrazek
+            ? `<img src="${url}" style="width:100%;max-height:80vh">`
+            : `<iframe src="${url}" style="width:100%;height:80vh;border:0"></iframe>`}</div></div></div>`;
+        return;
+      }
+      console.warn('most getFile', j.error);
+    } catch (e) { console.warn('most getFile', e); }
+  }
+  // zaloha: Google iframe — funguje jen prihlasenym ke Googlu (vedeni)
   $('#viewer').innerHTML = `<div class="viewer" onclick="if(event.target===this)closeDoc()"><div class="vwrap">
     <div class="vhead"><b style="flex:1;min-width:120px">${esc(title)}</b>
       <a class="btn ghost sm" href="${driveViewUrl(driveId)}" target="_blank">📁 Otevřít na Drive</a>

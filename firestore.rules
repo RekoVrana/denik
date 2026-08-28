@@ -66,6 +66,13 @@ service cloud.firestore {
       allow read: if true;
       allow write: if bootstrap() || isAdmin();
     }
+    // Tajny klic k mostu na Drive: cte ho jen prihlaseny s roli a most
+    // ho vyzaduje u vydavani souboru (action getFile). Kdo ukradne verejnou
+    // adresu mostu, bez prihlaseni do Deniku soubor nedostane.
+    match /config/tajne {
+      allow read: if hasRole();
+      allow write: if isAdmin();
+    }
     match /roster/{id} {
       allow read: if true;
       allow write: if bootstrap() || isAdmin();
