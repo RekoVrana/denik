@@ -3175,8 +3175,12 @@ async function nactiPodklady(p, folderId) {
     /* Kdyz zakazka zna svou slozku na Drive, jdeme primo pres ni —
        hledani podle CN by trefilo nahradni slozku "..._SYSTEM", kterou si
        most zalozil driv, nez se ID doplnilo. */
-    const j = await driveCall(folderId
-      ? { action: 'listPodklady', folderId, klic }
+    /* Nejjistejsi je primy odkaz na slozku Podklady (podkladyFolderId
+       u zakazky) — hledani podle CN by trefilo nahradni slozku _SYSTEM.
+       projektId umi az novejsi verze mostu, proto az jako druha volba. */
+    const primo = folderId || (p && p.podkladyFolderId) || '';
+    const j = await driveCall(primo
+      ? { action: 'listPodklady', folderId: primo, klic }
       : { action: 'listPodklady', projektId: (p && p.driveFolderId) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', rootId: CFG.driveRootFolderId, klic });
     S.podkladyStav = j.ok ? { id: j.id, folders: j.folders || [], files: j.files || [] } : { chyba: j.error || 'Nepovedlo se' };
   } catch (e) { S.podkladyStav = { chyba: e.message || 'Nepovedlo se' }; }
