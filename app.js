@@ -3177,7 +3177,7 @@ async function nactiPodklady(p, folderId) {
        most zalozil driv, nez se ID doplnilo. */
     const j = await driveCall(folderId
       ? { action: 'listPodklady', folderId, klic }
-      : { action: 'listPodklady', projektFolderId: (p && p.driveFolderId) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', rootId: CFG.driveRootFolderId, klic });
+      : { action: 'listPodklady', projektId: (p && p.driveFolderId) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', rootId: CFG.driveRootFolderId, klic });
     S.podkladyStav = j.ok ? { id: j.id, folders: j.folders || [], files: j.files || [] } : { chyba: j.error || 'Nepovedlo se' };
   } catch (e) { S.podkladyStav = { chyba: e.message || 'Nepovedlo se' }; }
   render();
