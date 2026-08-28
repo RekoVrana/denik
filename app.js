@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '28. 8. 2026 n';
+const VERZE = '28. 8. 2026 o';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -205,7 +205,7 @@ const S = {
   klice: [],
   repWorkers: [], repProjects: [], repLoaded: false, repFrom: isoToday().slice(0, 8) + '01', repTo: isoToday(),
   workerProject: null, draftPhotos: [], draftAtts: [], uploading: 0, signFor: null, tplOpen: false,
-  loginMode: 'teren', loginWorker: null,
+  loginMode: 'teren', loginWorker: null, loginHledani: null,
   online: navigator.onLine, unsub: [],
   denikTab: 'zaznamy', searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false, checking: null, installPrompt: null, swReg: null, updateReady: false, updating: false,
   frontaPocet: 0
@@ -1010,6 +1010,29 @@ async function loadRoster() {
   } catch (e) { console.warn(e); }
   render();
 }
+/* Zarizeni si pamatuje sve lidi — na prihlasovaci obrazovce se neukazuje
+   cela parta (soukromi + prehlednost). Prvni pouziti: najdes se hledanim
+   podle prijmeni a zarizeni si te zapamatuje. */
+function mojiLide() {
+  try { return JSON.parse(localStorage.getItem('denik_lide') || '[]'); } catch (e) { return []; }
+}
+function zapamatujCloveka(id) {
+  try {
+    const l = mojiLide();
+    if (!l.includes(id)) { l.push(id); localStorage.setItem('denik_lide', JSON.stringify(l)); }
+  } catch (e) {}
+}
+function zapomenCloveka(id) {
+  try { localStorage.setItem('denik_lide', JSON.stringify(mojiLide().filter(x => x !== id))); } catch (e) {}
+  render();
+}
+function vyberCloveka(id) {
+  const r = S.roster.find(x => x.id === id); if (!r) return;
+  zapamatujCloveka(id);
+  S.loginHledani = null;
+  S.loginWorker = { id: r.id, jmeno: r.jmeno, prijmeni: r.prijmeni, authEmail: r.authEmail };
+  render();
+}
 function viewLogin() {
   const m = S.loginMode;
   const teren = S.roster.filter(r => r.role !== 'admin');
@@ -1038,11 +1061,31 @@ function viewLogin() {
         <label>PIN</label><input type="password" id="li-pin" inputmode="numeric" placeholder="6 číslic" onkeydown="if(event.key==='Enter')doWorkerLogin()">
         <div class="aprv"><button class="btn amber" style="width:100%;justify-content:center" onclick="doWorkerLogin()">Přihlásit</button></div>
       ` : `
-        <label>Kdo jsi?</label>
-        <div class="rosterlist">${teren.length ? teren.map(r => `
-          <div class="urow" onclick='S.loginWorker=${JSON.stringify({ id: r.id, jmeno: r.jmeno, prijmeni: r.prijmeni, authEmail: r.authEmail }).replace(/'/g, "&#39;")};render()'>
-            <span class="uav">${ini(r)}</span><b>${esc(fullName(r))}</b><span class="muted" style="margin-left:auto">${esc(r.popis || '')}</span></div>`).join('')
-        : '<div class="empty">Zatím žádní pracovníci.<br><span class="muted">Vedení je založí v sekci Uživatelé.</span></div>'}</div>
+        ${(() => {
+          const ulozeni = mojiLide().map(id => teren.find(r => r.id === id)).filter(Boolean);
+          if (S.loginHledani === null || S.loginHledani === undefined) {
+            if (!ulozeni.length && teren.length) { /* prvni pouziti zarizeni -> rovnou hledani */ }
+            else if (ulozeni.length) return `
+              <label>Kdo jsi?</label>
+              <div class="rosterlist">${ulozeni.map(r => `
+                <div class="urow" onclick="vyberCloveka('${r.id}')">
+                  <span class="uav">${ini(r)}</span><b>${esc(fullName(r))}</b>
+                  <span class="lnk" style="margin-left:auto;font-size:12px" onclick="event.stopPropagation();zapomenCloveka('${r.id}')" title="Odebrat z tohoto zařízení">✕</span></div>`).join('')}</div>
+              <div class="aprv"><button class="btn ghost sm" onclick="S.loginHledani='';render()">➕ Přidat další osobu</button></div>`;
+          }
+          const q = (S.loginHledani || '').trim().toLowerCase();
+          const shoda = q.length >= 2 ? teren.filter(r => ((r.prijmeni || '') + ' ' + (r.jmeno || '')).toLowerCase().includes(q)).slice(0, 6) : [];
+          return `
+            <label>Najdi se podle příjmení</label>
+            <input type="text" id="li-hledat" placeholder="např. Novák" value="${esc(S.loginHledani || '')}"
+                   oninput="S.loginHledani=this.value;render();setTimeout(()=>{const e=document.querySelector('#li-hledat');if(e){e.focus();e.setSelectionRange(e.value.length,e.value.length)}},0)">
+            <div class="rosterlist">${shoda.map(r => `
+              <div class="urow" onclick="vyberCloveka('${r.id}')">
+                <span class="uav">${ini(r)}</span><b>${esc(fullName(r))}</b><span class="muted" style="margin-left:auto">${esc(r.popis || '')}</span></div>`).join('')
+              || (q.length >= 2 ? '<div class="empty">Nikdo takový tu není.<br><span class="muted">Zkontroluj překlep, nebo ať tě vedení založí v sekci Uživatelé.</span></div>'
+                                : '<div class="empty muted">Napiš aspoň 2 písmena.</div>')}</div>
+            ${mojiLide().length ? `<div class="aprv"><button class="btn ghost sm" onclick="S.loginHledani=null;render()">← Zpět</button></div>` : ''}`;
+        })()}
       `}
     `}
     ${S.loginMsg ? `<div class="lerr" style="display:block">${esc(S.loginMsg)}</div>` : ''}
