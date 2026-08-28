@@ -96,6 +96,9 @@
   .inote{background:#fffbeb;border:1px dashed #ecd9a0;border-radius:8px;padding:8px 11px;font-size:12.5px;margin-top:10px;color:#7c5806}
   label{font-size:11px;font-weight:700;color:var(--ink2);text-transform:uppercase;letter-spacing:.5px;display:block;margin:12px 0 5px}
   textarea,select,input[type=text],input[type=password],input[type=email],input[type=number],input[type=date],input[type=time],input[type=tel]{font:inherit;border:1px solid var(--line);border-radius:8px;padding:9px 12px;width:100%;background:#fff;color:var(--ink)}
+  /* iOS Safari kresli datum vlastnim vzhledem a ignoruje sirku rodice —
+     "cihla terminu" pak pretekala pres kartu. Vynutime vzhled i sirku. */
+  input[type=date],input[type=time]{-webkit-appearance:none;appearance:none;width:100%;min-width:0;max-width:100%;background:#fff;box-sizing:border-box}
   textarea{min-height:90px;resize:vertical}
   .photos{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
   .ph{width:104px;height:82px;border-radius:9px;position:relative;overflow:hidden;background:#33475c;cursor:pointer;flex:none}
