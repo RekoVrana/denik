@@ -2664,6 +2664,8 @@ async function zrusitPrihlaseni(udi) {
 async function delTask(id) {
   const t = S.tasks.find(x => x.id === id); if (!t) return;
   if (!confirm('Smazat úkol?\n\n„' + (t.title || '') + '"\n\nSmazání nejde vrátit zpět.')) return;
+  const _t = S.tasks.find(x => x.id === id) || {};
+  for (const f of (_t.photos || [])) db.collection('fotonahledy').doc(f.id).delete().catch(() => {});
   try { await db.collection('tasks').doc(id).delete(); toast('Úkol smazán ✓'); }
   catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
 }
@@ -3518,6 +3520,7 @@ async function smazatMujUkol(id) {
   const t = S.tasks.find(x => x.id === id);
   if (!t) return;
   if (!confirm('Zrušit úkol „' + t.title + '"?\n\nZmizí i tomu, komu jsi ho zadal.')) return;
+  for (const f of (t.photos || [])) db.collection('fotonahledy').doc(f.id).delete().catch(() => {});
   try { await db.collection('tasks').doc(id).delete(); toast('Úkol zrušen ✓'); }
   catch (e) { toast('Nepovedlo se zrušit: ' + (e.code || e.message)); }
 }
