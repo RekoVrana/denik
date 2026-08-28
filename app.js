@@ -3253,7 +3253,7 @@ function kartaUkoly(p) {
         <label>Stavba</label>
         <select id="wtk-p">${S.projects.filter(x => x.active !== false).map(x => `<option value="${x.id}" ${p && x.id === p.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
         <label>Fotka k úkolu <span class="muted" style="text-transform:none;font-weight:400">— vyfoť nebo přilož · po vyřízení úkolu se fotky smažou</span></label>
-        <input type="file" accept="image/*" capture="environment" multiple onchange="ukolFotoPridat(this.files)">
+        <label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">📷 Vyfotit / vybrat z galerie<input type="file" accept="image/*" multiple hidden onchange="ukolFotoPridat(this.files)"></label>
         ${(S.taskFoto || []).length ? `<div class="photos">${S.taskFoto.map((f, i) => `<div class="ph"><img src="${f.thumb}"><span class="del" onclick="S.taskFoto.splice(${i},1);render()">✕</span></div>`).join('')}</div>` : ''}
         <div class="aprv"><button class="btn amber" onclick="workerAddTask()">➕ Zadat úkol</button></div>
       </div>` : ''}
@@ -3313,7 +3313,7 @@ function viewSub() {
           <label>Co jste dnes udělali? *</label>
           <textarea id="so-z" placeholder="Rozvody vody v koupelně hotové, zbývá napojit pračku…">${esc(S.subZaznam || '')}</textarea>
           <label>Fotky toho, co jste udělali</label>
-          <input type="file" accept="image/*" capture="environment" multiple onchange="S.subZaznam=document.querySelector('#so-z').value;processPhotos(this.files)">
+          <label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">📷 Vyfotit / vybrat z galerie<input type="file" accept="image/*" multiple hidden onchange="S.subZaznam=document.querySelector('#so-z').value;processPhotos(this.files)"></label>
           <div class="photos">${S.draftPhotos.map((ph, i) => `<div class="ph"><img src="${ph.thumb}"><span class="del" onclick="S.draftPhotos.splice(${i},1);render()">✕</span></div>`).join('')}</div>
           <div class="aprv">
             <button class="btn amber velke" onclick="subOdchod()">🏁 ODESLAT A ZAPSAT ODCHOD</button>
@@ -3496,7 +3496,7 @@ function viewWorker() {
       <h3>✍️ Nový zápis do deníku</h3>
       <textarea id="wt" placeholder="Co se dnes dělalo… každá věta = jedna odrážka"></textarea>
       <label>Fotky z dneška</label>
-      <input type="file" id="wph" accept="image/*" capture="environment" multiple onchange="processPhotos(this.files)">
+      <label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">📷 Vyfotit / vybrat z galerie<input type="file" id="wph" accept="image/*" multiple hidden onchange="processPhotos(this.files)"></label>
       <div class="photos">${S.draftPhotos.map((ph, i) => `<div class="ph"><img src="${ph.thumb}"><span class="del" onclick="S.draftPhotos.splice(${i},1);render()">✕</span><small>${esc(ph.label)}</small></div>`).join('')}</div>
       <div class="aprv"><button class="btn amber" id="w-save" onclick="workerSubmit()">📤 ODESLAT ZÁPIS</button></div>
       <div class="note">Zápis jde vedení ke schválení — investor ho zatím nevidí. ${S.online ? '' : '<b>Jsi offline — text se odešle po připojení, fotky přidej pak.</b>'}</div>
