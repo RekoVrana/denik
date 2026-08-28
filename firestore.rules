@@ -131,6 +131,14 @@ service cloud.firestore {
       allow delete: if isAdmin() || (hasRole() && resource.data.authUid == request.auth.uid);
     }
 
+    // Tickety: kdokoli nahlasi chybu nebo napad; vidi jen sve. Vedeni
+    // vidi vse, vyrizuje (stav + odpoved) a maze.
+    match /tickety/{id} {
+      allow read: if isAdmin() || (hasRole() && resource.data.authUid == request.auth.uid);
+      allow create: if hasRole() && request.resource.data.authUid == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
     // Klice zakazky: pocet volitelny, zaklada a maze vedeni. Predat smi
     // vedeni nebo ten, kdo klic prave drzi; po predani je novym drzitelem
     // prijemce, ktery prevzeti potvrzuje — ale predani plati i bez
