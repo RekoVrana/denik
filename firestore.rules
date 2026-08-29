@@ -168,8 +168,17 @@ service cloud.firestore {
       // zadny "novy dokument" neexistuje a cteni jeho poli by pravidlo
       // shodilo — smazani stavby by prestalo fungovat.
       allow read: if hasRole();
-      allow create, update: if isAdmin()
+      allow create: if isAdmin()
         && !request.resource.data.keys().hasAny(['investorEmail', 'investorPhone']);
+      // U update dve moznosti: bud po zapisu ta pole na stavbe NEJSOU (to
+      // pokryva i prevod, ktery je prave maze), nebo se jich zapis vubec
+      // nedotyka. Bez te druhe vetve by pravidlo zablokovalo uplne nevinnou
+      // upravu stavby, ktera ta pole jeste nese — a s ni i prepinac
+      // „Vidi parta", milniky nebo dokumenty, a to potichu.
+      allow update: if isAdmin()
+        && (!request.resource.data.keys().hasAny(['investorEmail', 'investorPhone'])
+            || !request.resource.data.diff(resource.data).affectedKeys()
+                  .hasAny(['investorEmail', 'investorPhone']));
       allow delete: if isAdmin();
     }
 
@@ -365,6 +374,11 @@ service cloud.firestore {
       match /feed/{id} { allow read: if true; allow write: if isAdmin(); }
       match /vp/{id}   { allow read: if true; allow write: if isAdmin(); }
       match /docs/{id} { allow read: if true; allow write: if isAdmin(); }
+      // Obsah dokumentu pro investora (base64, az ~890 kB). Bydli VEDLE
+      // seznamu, ne v nem — seznam portal poslouchá naživo, takze by
+      // investor stahoval megabajty pokazde, kdyz portal jen otevre.
+      // Proto jen 'get': cte se az po tuknuti na konkretni dokument.
+      match /soubory/{id} { allow get: if true; allow list, write: if isAdmin(); }
       // Velke kopie fotek pro investora (~200 kB/dokument). Jen 'get':
       // portal cte fotku po jedne az po tuknuti — vypis cele kolekce
       // zvenku by zbytecne stahoval vsechna data. 'list' potrebuje

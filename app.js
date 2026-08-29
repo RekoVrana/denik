@@ -1104,7 +1104,7 @@ async function zaraditFotky(p, entryId, den) {
     const jmeno = (S.me && S.me.prijmeni) || fullName(S.me || {}) || 'foto';
     /* Datum patri ZAPISU, ne dnesku — u zpetne psaneho zapisu se jinak
        fotky na Disku pojmenovaly podle dne odeslani a pri dohledavani
-       "co bylo v patek" nesedely. Prilohy to uz delaly spravne. */
+       "co bylo v patek" nesedely. Totez plati pro prilohy. */
     const spol = { entryId, photoId: id, folderId: (p && p.driveFolderId) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', folderName: nazevSlozkyZakazky(p), date: den || isoToday() };
     /* Kazda polozka ma svuj try. Kdyby byly spolecne a selhala prvni
        (typicky plna pamet telefonu), druha by se uz ani nezkusila. */
@@ -1170,7 +1170,7 @@ async function addAttsToEntry(eid, files) {
     const data = await new Promise(ok => { const r = new FileReader(); r.onload = () => ok(r.result); r.readAsDataURL(f); });
     try {
       await frontaPridat({ druh: 'priloha', entryId: eid, name: f.name, mime: f.type || 'application/octet-stream',
-        data, folderId: p.driveFolderId || '', cn: p.cn || '', client: p.client || '', date: e.date });
+        data, folderId: p.driveFolderId || '', cn: p.cn || '', client: p.client || '', folderName: nazevSlozkyZakazky(p), date: e.date });
     } catch (err) { console.warn(err); toast('⚠ ' + f.name + ' se nepodařilo uložit do fronty'); }
   }
   toast(S.online ? 'Nahrávám na Drive…' : 'Uloženo — odešle se, až bude signál ✓');
@@ -1339,7 +1339,6 @@ async function ulozZapis(id) {
     await db.collection('entries').doc(id).update({ works, client,
       upravenoKym: fullName(S.me || {}), upravenoAt: FV() });
   } catch (err) { toast('Nejde uložit: ' + (err.code || err.message)); return; }
-  zapomen('ze-w-' + id, 'ze-c-' + id);
   S.entryEdit = null;
   /* Schvaleny zapis uz na portale je — po oprave se tam musi poslat znovu,
      jinak by investor cetl porad tu starou verzi. */
@@ -1350,6 +1349,9 @@ async function ulozZapis(id) {
   }
   toast(zrcadleno ? 'Zápis opraven ✓' : 'Opraveno ✓ — portál se srovná, až bude signál');
   render();
+  /* Az po prekresleni — stejny duvod jako u poznamky: zapomen() vrati
+     policka na zneni PRED opravou a render() by si je stihl nacist zpatky. */
+  zapomen('ze-w-' + id, 'ze-c-' + id);
 }
 async function vratKeSchvaleni(id) {
   try {
@@ -1442,7 +1444,7 @@ async function dorovnejPortaly() {
        Doplni se pri prihlaseni vedeni, ktere jako jedine ma klic k mostu. */
     const dk = await db.collection('portals').doc(tok).collection('docs').get().catch(() => null);
     if (dk) for (const d of dk.docs) {
-      if (d.data().data || !d.data().driveId) continue;
+      if (d.data().pripraveno || !d.data().driveId) continue;
       await kopieDokNaPortal(tok, d.id, d.data().driveId).catch(() => {});
     }
     const schvalene = S.entries.filter(e => e.pid === pid && e.status === 'approved');
@@ -2353,7 +2355,7 @@ function pgProjDetail() {
         ${(p.milestones || []).map((m, i) => { const pct = milePct(m); const cls = pct === 100 ? 'done' : pct > 0 ? 'now' : 'next'; return `
           <div class="mile ${cls}"><div class="dot" style="cursor:pointer" title="Odškrtnout hotovo / vrátit" onclick="setMilePct('${p.id}',${i},${pct === 100 ? 0 : 100})">${pct === 100 ? '✓' : pct > 0 ? '●' : ''}</div>
           <div style="flex:1">
-            <div>${cls === 'now' ? '<b>' + esc(m.t) + ' — probíhá</b>' : esc(m.t)}${m.dur ? ' <span class="muted" style="font-size:11px">(' + esc(m.dur) + ')</span>' : ''}</div>
+            <div style="cursor:pointer" title="Ťukni pro přejmenování" onclick="prejmenujMile('${p.id}',${i})">${cls === 'now' ? '<b>' + esc(m.t) + ' — probíhá</b>' : esc(m.t)}${m.dur ? ' <span class="muted" style="font-size:11px">(' + esc(m.dur) + ')</span>' : ''}</div>
             <div style="display:flex;gap:5px;align-items:center;margin-top:5px;flex-wrap:wrap">
               ${[0, 25, 50, 75, 100].map(v => `<button onclick="setMilePct('${p.id}',${i},${v})" style="width:40px;padding:4px 0;border:1px solid var(--line);border-radius:7px;cursor:pointer;font-size:12px;${v === pct ? 'background:var(--amber);font-weight:700' : 'background:var(--int-soft)'}">${v}</button>`).join('')}
               <span class="muted" style="font-size:11px">${pct} %</span>
@@ -2465,12 +2467,21 @@ const MAX_PORTAL_DOK_KB = 650;
    uplne stejne jako velke fotky. */
 /* Investor si dokument otevre z kopie ulozene u portalu — na Disk se
    nesaha vubec, takze ho Google o nic nezada. */
-function portalDok(id, titulek) {
+async function portalDok(id) {
   const d = (S.portalDocs || []).find(x => x.id === id);
-  if (!d || !d.data) { oznam('Dokument se ještě připravuje. Zkuste to prosím za chvíli.'); return; }
+  /* Titulek si dohledame sami — driv se predaval v onclick a apostrof
+     v nazvu souboru cely klik rozbil (esc() dela z ' entitu, kterou
+     prohlizec dekoduje driv, nez to dostane JS). */
+  const titulek = (d && d.title) || 'Dokument';
+  if (!d || !d.pripraveno) { oznam('Dokument se ještě připravuje. Zkuste to prosím za chvíli.'); return; }
   let url;
   try {
-    const bajty = Uint8Array.from(atob(d.data), c => c.charCodeAt(0));
+    /* Obsah az ted, jednim dotazem — v seznamu, ktery se poslouchá naživo,
+       by se stahoval porad dokola. */
+    const sn = await db.collection('portals').doc(S.portalToken).collection('soubory').doc(id).get();
+    const data = sn.exists ? sn.data().data : null;
+    if (!data) { oznam('Dokument se nepodařilo načíst. Zkuste to prosím znovu.'); return; }
+    const bajty = Uint8Array.from(atob(data), c => c.charCodeAt(0));
     url = URL.createObjectURL(new Blob([bajty], { type: d.mime || 'application/octet-stream' }));
   } catch (e) { oznam('Dokument se nepodařilo otevřít.'); return; }
   const jePdf = (d.mime || '').indexOf('pdf') >= 0;
@@ -2492,7 +2503,11 @@ async function kopieDokNaPortal(tok, docId, driveId) {
     if (!j.ok || !j.data) return { ok: false, duvod: j.error || 'Disk soubor nevydal' };
     const kb = Math.round(j.data.length * 3 / 4 / 1024);
     if (kb > MAX_PORTAL_DOK_KB) return { ok: false, duvod: 'velky', kb };
-    await db.collection('portals').doc(tok).collection('docs').doc(docId).set({ data: j.data, mime: j.mime || '' }, { merge: true });
+    /* Obsah souboru bydli VEDLE seznamu, ne v nem. Seznam dokumentu portal
+       poslouchá naživo, takze by investor stahoval megabajty pokazde, kdyz
+       portal jen otevre — a to typicky na mobilnich datech. */
+    await db.collection('portals').doc(tok).collection('soubory').doc(docId).set({ data: j.data, mime: j.mime || '' });
+    await db.collection('portals').doc(tok).collection('docs').doc(docId).set({ mime: j.mime || '', pripraveno: true }, { merge: true });
     return { ok: true, kb };
   } catch (e) { return { ok: false, duvod: e.message || 'nepovedlo se' }; }
 }
@@ -2523,7 +2538,11 @@ async function delPortalDoc(pid, i) {
   const tok = await tokenPortaluAsync(pid); // token je v admin-only /portaly (S2)
   if (tok && rm) {
     const s = await db.collection('portals').doc(tok).collection('docs').where('driveId', '==', rm.driveId).get();
-    s.docs.forEach(d => d.ref.delete());
+    for (const d of s.docs) {
+      /* obsah lezi vedle v /soubory — bez uklidu by tam zustal jako sirotek */
+      await db.collection('portals').doc(tok).collection('soubory').doc(d.id).delete().catch(() => {});
+      await d.ref.delete().catch(() => {});
+    }
   }
 }
 /* Smaze cely portal investora — dokument i vsechny podkolekce. Odkaz tim
@@ -2533,7 +2552,7 @@ async function smazPortalData(pid) {
   if (tok) {
     /* 'fotky' = velke kopie fotek pro investora, 'actions' = jeho schvaleni
        viceprace. Bez uklidu by v databazi zustali sirotci bez portalu. */
-    for (const kol of ['feed', 'vp', 'docs', 'fotky', 'actions']) {
+    for (const kol of ['feed', 'vp', 'docs', 'soubory', 'fotky', 'actions']) {
       const sn = await db.collection('portals').doc(tok).collection(kol).get().catch(() => null);
       if (sn) for (const d of sn.docs) await d.ref.delete().catch(() => {});
     }
@@ -4370,7 +4389,7 @@ function pgUzivatele() {
         <tr style="${u.active === false ? 'opacity:.5' : ''}">
           <td><span class="uav">${ini(u)}</span></td>
           <td><b>${esc(fullName(u))}</b>${(JMENOVCI[jmenoKlic(u)] || 1) > 1
-            ? `<br><span class="badge b-red" style="margin-top:3px">⚠ ${JMENOVCI[jmenoKlic(u)] === 2 ? 'Dva účty' : JMENOVCI[jmenoKlic(u)] + ' účty'} se stejným jménem</span>` : ''}</td>
+            ? `<br><span class="badge b-red" style="margin-top:3px">⚠ ${JMENOVCI[jmenoKlic(u)] === 2 ? 'Dva účty' : JMENOVCI[jmenoKlic(u)] + (JMENOVCI[jmenoKlic(u)] < 5 ? ' účty' : ' účtů')} se stejným jménem</span>` : ''}</td>
           <td class="muted">${esc(kontaktOsoby(u.id).email || '—')}</td>
           <td style="text-align:center">${t.kanc ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
           <td style="text-align:center">${t.teren ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
@@ -4645,7 +4664,7 @@ async function delProject(pid) {
       /* 'fotky' = velke kopie fotek pro investora — mazou se s portalem */
       /* 'actions' = souhlasy investora s vicepracemi. Doted zustavaly
          v databazi i po smazani stavby. */
-      for (const kol of ['feed', 'vp', 'docs', 'fotky', 'actions']) {
+      for (const kol of ['feed', 'vp', 'docs', 'soubory', 'fotky', 'actions']) {
         const sn = await db.collection('portals').doc(tok).collection(kol).get().catch(() => null);
         if (sn) for (const d of sn.docs) await d.ref.delete().catch(() => {});
       }
@@ -4804,10 +4823,12 @@ async function saveUser() {
   /* kontakty do admin-only /kontakty (S4); prazdny formular = uklidit zaznam */
   if (kEmail || kTel) await db.collection('kontakty').doc(docId).set({ email: kEmail, tel: kTel });
   else await db.collection('kontakty').doc(docId).delete().catch(() => {});
-  /* Sazbu maji jen lide, kteri vykazuji hodiny (parta a vedeni). Kdyz vedeni
-     prepne cloveka na subdodavatele nebo investora, formular pole se sazbou
-     vubec nevykresli — proto se stara hodnota musi smazat natvrdo, jinak by
-     subovi v seznamu uzivatelu dal svitilo treba „300 Kc/h". */
+  /* Sazbu ma jen parta. Report vybira z repTerenni(), a ta bere
+     `teren && !kanc` — vedeni, sub ani investor se do vyplat nedostanou.
+     U vsech trech se pole se sazbou ve formulari vubec nevykresli, takze
+     starou hodnotu je nutne smazat natvrdo: jinak by v seznamu uzivatelu
+     dal svitilo treba „300 Kc/h", ktere uz nikdo neumi odstranit
+     a v reportu se nikdy neobjevi. */
   if (typKey === 'sub' || typKey === 'inv' || typKey === 'kanc') {
     await db.collection('sazby').doc(docId).delete().catch(() => {});
   } else if (shEl) {
@@ -5314,7 +5335,14 @@ function vidiBarva(z) {
    tri pripadu: nic nezaskrtnuto (jen vedeni), zaskrtnut jen nekdo jiny, a suba,
    ktery zaskrtne "Nasi lide" (na klic parta jeho posluchac neposloucha). */
 function pzSAutorem(v, autorId) {
-  const ja = autorId || (S.meAuth && S.meAuth.userDocId) || (S.me && S.me.id) || '';
+  /* autorId === undefined = nova poznamka, autor jsem ja.
+     autorId '' = poznamka BEZ autora (prevedena ze stareho projects.notes) —
+     tam se id vedouciho, ktery ji zrovna upravuje, dosadit NESMI: stitek by
+     se z „Jen vedeni" prehodil na „1 lidi" a seznam vidi by bobtnal
+     o id kazdeho, kdo na ni sahne. */
+  const ja = autorId === undefined
+    ? ((S.meAuth && S.meAuth.userDocId) || (S.me && S.me.id) || '')
+    : autorId;
   return (ja && !v.includes(ja)) ? [...v, ja] : v;
 }
 /* Zaskrtavaci vyber viditelnosti — skupiny i konkretni lide, klidne vic naraz. */
@@ -5403,17 +5431,18 @@ async function novaPoznamka(pid) {
 }
 /* Po ulozeni i po zruseni musi pamet formulare (FORMMEM) pustit — jinak by
    se pri dalsim otevreni vratil stary text i stara zaskrtnuti. */
-function zapomenPz(id) {
-  zapomen('pz-n-' + id, 'pz-t-' + id,
-    ...[...document.querySelectorAll('.pz-vd[data-kl="' + id + '"]')].map(x => x.id));
+function pzPolicka(id) {
+  return ['pz-n-' + id, 'pz-t-' + id,
+    ...[...document.querySelectorAll('.pz-vd[data-kl="' + id + '"]')].map(x => x.id)];
 }
+function zapomenPz(id) { zapomen(...pzPolicka(id)); }
 async function ulozPoznamku(id) {
   const n = ($('#pz-n-' + id).value || '').trim();
   const t = $('#pz-t-' + id).value.trim();
   if (!n) { toast('Nadpis nesmí být prázdný'); return; }
   /* autora bere z ulozeneho zaznamu — vedeni upravuje i cizi poznamky
      a nesmi z nich autora vystrnadit */
-  const v = pzVidiSebrat(id, (S.poznamky.find(z => z.id === id) || {}).autorId);
+  const v = pzVidiSebrat(id, ((S.poznamky.find(z => z.id === id) || {}).autorId) || '');
   /* POZOR: driv tu byl "return" uvnitr .catch — ten ukoncil jen tu vnitrni
      funkci, ne ulozPoznamku. Chybovou hlasku proto hned prekrylo "Uloženo ✓"
      a formular se zavrel, i kdyz se nic neulozilo. */
@@ -5421,8 +5450,15 @@ async function ulozPoznamku(id) {
     await db.collection('poznamky').doc(id).update({ nadpis: n, text: t,
       vidi: v.vidi, vidiJmena: v.vidiJmena, viditelnost: firebase.firestore.FieldValue.delete() });
   } catch (e) { toast('Nejde uložit: ' + (e.code || e.message)); return; }
-  zapomenPz(id);
+  /* Zapomenout se musi az PO prekresleni. zapomen() vrati policka na
+     defaultValue — tedy na stav PRED upravou — a schovatFormulare() na
+     zacatku render() si je v tu chvili jeste stihne nacist zpatky do pameti
+     formulare, protoze formular je porad na obrazovce. Pri pristim otevreni
+     poznamky by se pak nadpis, text i zaskrtnuti tise vratily na stare
+     hodnoty a clovek by si vlastni zmenu prepsal zpatky. */
+  const policka = pzPolicka(id);
   S.poznamkaEdit = null; toast('Uloženo ✓'); render();
+  zapomen(...policka);
 }
 async function smazPoznamku(id) {
   if (!await potvrd('Smazat poznámku i s komentáři?')) return;
@@ -5989,7 +6025,12 @@ async function acquirePos() {
   try { rychla = await getPos({ enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 }); }
   catch (e) { /* nevadi, zkusime presnou */ }
   if (rychla && rychla.coords && rychla.coords.accuracy != null && rychla.coords.accuracy <= TOL) return rychla;
-  try { return await getPos({ enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }); }
+  /* Presne mereni ma smysl zkusit, ale ne za cenu pulminuty cekani u KAZDEHO
+     pichnuti. Kdyz uz nejakou polohu mame, dame GPS jen 8 vterin — venku to
+     staci a uvnitr baraku se stejne nedocka, jen bychom cloveka drzeli
+     u telefonu. Kdyz nemame nic, plnych 20 vterin plati dal. */
+  const limit = rychla ? 8000 : 20000;
+  try { return await getPos({ enableHighAccuracy: true, timeout: limit, maximumAge: 0 }); }
   catch (e) { if (rychla) return rychla; throw e; }
 }
 function posErrText(e) {
@@ -6337,8 +6378,8 @@ function viewPortal() {
     </div>` : ''}
     ${S.portalDocs.length ? `<div class="card">
       <h3>📁 Dokumenty</h3>
-      ${S.portalDocs.map(d => d.data
-        ? `<div class="urow" style="cursor:pointer" onclick="portalDok('${d.id}','${esc(d.title)}')"><span>📄</span><b>${esc(d.title)}</b><span class="muted" style="margin-left:auto">zobrazit</span></div>`
+      ${S.portalDocs.map(d => d.pripraveno
+        ? `<div class="urow" style="cursor:pointer" onclick="portalDok('${d.id}')"><span>📄</span><b>${esc(d.title)}</b><span class="muted" style="margin-left:auto">zobrazit</span></div>`
         : `<div class="urow"><span>📄</span><b>${esc(d.title)}</b><span class="muted" style="margin-left:auto">připravuje se</span></div>`).join('')}
     </div>` : ''}
     <div class="card">
