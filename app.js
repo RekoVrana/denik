@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '29. 8. 2026 e';
+const VERZE = '29. 8. 2026 f';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -766,6 +766,15 @@ async function uploadPhotoToDrive(p, dataUrl, name) {
   return j.fileId;
 }
 function driveViewUrl(id) { return 'https://drive.google.com/file/d/' + id + '/view'; }
+/* Nazev pro ulozeni souboru z mostu. Odkaz na blob: nejde otevrit do noveho
+   okna (prohlizece to blokuji a v aplikaci na plose telefonu to nefunguje
+   vubec) — musi mit priznak download, a k nemu rozumne jmeno s priponou. */
+function nazevKeStazeni(titulek, mime) {
+  const pripony = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/heic': 'heic', 'image/webp': 'webp', 'application/pdf': 'pdf' };
+  const zaklad = String(titulek || 'soubor').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 60) || 'soubor';
+  const pripona = pripony[mime] || (String(mime || '').split('/')[1] || '').replace(/[^a-z0-9]/gi, '').slice(0, 5);
+  return /\.[a-z0-9]{2,5}$/i.test(zaklad) || !pripona ? zaklad : zaklad + '.' + pripona;
+}
 
 /* ---------- fronta na Drive ----------
    Drive se puvodne fotka v plne kvalite zahodila, kdyz byl telefon offline —
@@ -2157,7 +2166,7 @@ async function openDriveDoc(driveId, title) {
         const jeObrazek = (j.mime || '').indexOf('image/') === 0;
         $('#viewer').innerHTML = `<div class="viewer" onclick="if(event.target===this)closeDoc()"><div class="vwrap">
           <div class="vhead"><b style="flex:1;min-width:120px">${esc(title)}</b>
-            <a class="btn ghost sm" href="${url}" target="_blank">⤢ Otevřít / uložit</a>
+            <a class="btn ghost sm" href="${url}" download="${esc(nazevKeStazeni(title, j.mime))}">⬇ Uložit do telefonu</a>
             <button class="btn dark sm" onclick="closeDoc()">✕ Zavřít</button></div>
           <div class="vbody" style="padding:0;align-items:center">${jeObrazek
             ? `<img src="${url}" style="width:100%;max-height:80vh">`
