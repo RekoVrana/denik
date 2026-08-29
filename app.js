@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '29. 8. 2026 a';
+const VERZE = '29. 8. 2026 b';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -521,7 +521,7 @@ function startData() {
      Kazdy klic (vsichni / parta / ja) ma vlastni posluchac a vysledky
      se skladaji dohromady, stejne jako u ukolu. */
   const pzSort = (a, b) => (a.nadpis || '').localeCompare(b.nadpis || '', 'cs');
-  if (role === 'admin') { listen('poznamky', 'poznamky', { sort: pzSort }); prevedStarePoznamky(); uklidRosterAdminy(); prevedTajnosti(); }
+  if (role === 'admin') { listen('poznamky', 'poznamky', { sort: pzSort }); prevedStarePoznamky(); uklidRosterAdminy(); prevedTajnosti(); uklidTypySubu(); }
   else {
     const pzMid = (S.meAuth && S.meAuth.userDocId) || '__nikdo__';
     listenPoznamky(role === 'sub' ? ['vsichni', pzMid] : ['vsichni', 'parta', pzMid]);
@@ -664,7 +664,7 @@ const userById = id => S.users.find(u => u.id === id);
    vchod do aplikace), takze by ukol spadl do prazdna; az vchod vznikne,
    pridat sem 'sub'. */
 function lideProUkoly() {
-  return S.users.filter(u => u.active !== false && u.typ && (u.typ.kanc || u.typ.teren) && !u.typ.inv)
+  return S.users.filter(u => u.active !== false && u.typ && (u.typ.kanc || u.typ.teren || u.typ.sub) && !u.typ.inv)
     .sort((a, b) => (a.prijmeni || '').localeCompare(b.prijmeni || '', 'cs'));
 }
 function entriesOf(pid) { return S.entries.filter(e => e.pid === pid); }
@@ -2443,7 +2443,7 @@ function pgNovy() {
       <label>Projekt</label>
       <select id="np">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)} (${esc(p.cn)})</option>`).join('')}</select>
       <label>Autor zápisu</label>
-      <select id="na">${S.users.filter(u => u.active !== false && u.typ && (u.typ.teren || u.typ.kanc)).map(u => `<option ${S.me && u.id === S.me.id ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}</select>
+      <select id="na">${S.users.filter(u => u.active !== false && u.typ && (u.typ.teren || u.typ.kanc || u.typ.sub)).map(u => `<option ${S.me && u.id === S.me.id ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}</select>
       <label>Datum zápisu</label><input type="date" id="nd" value="${isoToday()}" max="${isoToday()}">
       <label>Provedené práce</label>
       <textarea id="nt" placeholder="Každá věta / řádek = jedna odrážka zápisu…"></textarea>
@@ -2912,7 +2912,7 @@ function hoursFromAttendance(from, to) {
   return out;
 }
 function pgReporty() {
-  const teren = S.users.filter(u => u.typ && u.typ.teren && !u.typ.kanc && !u.typ.sub && u.active !== false);
+  const teren = S.users.filter(u => u.typ && u.typ.teren && !u.typ.kanc && u.active !== false);
   const sel = S.repWorkers, selP = S.repProjects;
   return `
   <div class="strip"><h1>Reporty — Odpracované hodiny na projektu</h1><span class="sp"></span></div>
@@ -3080,7 +3080,7 @@ function pgUzivatele() {
           <td style="text-align:center">${t.teren ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
           <td style="text-align:center">${t.inv ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
           <td style="text-align:center">${t.sub ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
-          <td>${s ? `<b>${s.h} Kč/h</b>${s.c ? ` / <span style="color:var(--ok);font-weight:700">${s.c} Kč/h</span>` : ''}` : (t.teren && !t.kanc && !t.sub ? '<b style="color:var(--red)">⚠ chybí</b>' : '<span class="muted">—</span>')}</td>
+          <td>${s ? `<b>${s.h} Kč/h</b>${s.c ? ` / <span style="color:var(--ok);font-weight:700">${s.c} Kč/h</span>` : ''}` : (t.teren && !t.kanc ? '<b style="color:var(--red)">⚠ chybí</b>' : '<span class="muted">—</span>')}</td>
           <td>${esc(u.role || '—')}</td>
           <td style="white-space:nowrap">${u.uid
             ? `<span class="badge b-ok">✓ má účet</span><br><button class="btn ghost sm" style="margin-top:4px" onclick="pinForm('${u.id}')">🔑 nový PIN</button>
@@ -3398,11 +3398,12 @@ function pgNewUser() {
           <div><label>Email</label><input type="text" id="nu-e" value="${esc(edit ? kontaktOsoby(edit.id).email || '' : '')}"></div>
         </div>
       </div>
-      ${(t === 'teren' || t === 'sub') ? `
+      ${t === 'teren' ? `
       <div class="formsec">
         <h4>⏱ Sazby (#34) — vidí jen Vedení</h4>
+        <div class="note" style="margin-top:0">Subdodavatel sazbu nemá — hodiny nevykazuje, fakturuje práci.</div>
         <div class="frow">
-          <div><label>Hrubá sazba Kč/h ${t === 'teren' ? '*' : ''}</label><input type="number" id="nu-sh" value="${s ? s.h : ''}" placeholder="co stojí hodina firmu"></div>
+          <div><label>Hrubá sazba Kč/h *</label><input type="number" id="nu-sh" value="${s ? s.h : ''}" placeholder="co stojí hodina firmu"></div>
           <div><label>Čistá sazba Kč/h (volitelná)</label><input type="number" id="nu-sc" value="${s && s.c ? s.c : ''}" placeholder="co pracovník reálně dostane"></div>
         </div>
         <div class="note">Čistou vyplň u pracovníků, kterým vedoucí party sráží z hodinovky — report pak rozdíl ukáže automaticky.</div>
@@ -3430,7 +3431,11 @@ async function saveUser() {
   const kEmail = $('#nu-e').value.trim(), kTel = $('#nu-tel') ? $('#nu-tel').value.trim() : '';
   const data = {
     jmeno: j, prijmeni: p,
-    typ: { kanc: typKey === 'kanc' ? 1 : 0, teren: (typKey === 'kanc' || typKey === 'teren' || typKey === 'sub') ? 1 : 0, inv: typKey === 'inv' ? 1 : 0, sub: typKey === 'sub' ? 1 : 0 },
+    /* Typ je presne to, co vedeni zaskrtlo. Driv se subovi tise pridavalo
+       i 'teren', aby prosel filtrem "komu jde zadat ukol" — obezlicka, ktera
+       delala ze suba pracovnika i tam, kam nepatri (rucni doplneni dochazky,
+       seznam dochazky). Seznamy se ted ptaji na suba rovnou. */
+    typ: { kanc: typKey === 'kanc' ? 1 : 0, teren: typKey === 'teren' ? 1 : 0, inv: typKey === 'inv' ? 1 : 0, sub: typKey === 'sub' ? 1 : 0 },
     role: $('#nu-r').value.trim(), active: edit ? edit.active !== false : true
   };
   // FIX: sazby přečíst z formuláře PŘED zápisem do users — await níže spustí onSnapshot render(),
@@ -3770,6 +3775,27 @@ async function uklidRosterAdminy() {
      adminu ani opakovany beh nic neprepise (idempotence),
    - po ciste dokoncenem prubehu se do config/app zapise priznak,
      aby se pri kazdem prihlaseni necetly cele kolekce znovu. */
+/* Jednorazovy uklid typu subdodavatelu (29. 8.).
+   Driv appka subovi tise pridavala priznak 'teren', aby prosel filtrem
+   "komu jde zadat ukol nebo predat klic". Dusledek: sub se tvaril jako
+   pracovnik i tam, kam nepatri — v nabidce rucniho doplneni dochazky
+   a v seznamu dochazky, kde pritom zadnou dochazku nema (ma hlaseni).
+   Filtry se ted ptaji na suba primo, takze ten priznak muze pryc.
+   Zaroven se subovi maze hodinova sazba: hodiny nevykazuje, fakturuje praci. */
+async function uklidTypySubu() {
+  const snap = await db.collection('users').get().catch(() => null);
+  if (!snap) return;
+  let typu = 0, sazeb = 0;
+  for (const d of snap.docs) {
+    const t = d.data().typ || {};
+    if (!t.sub || !t.teren) continue;                 // resi jen suby s prebytecnym 'teren'
+    await d.ref.update({ typ: { ...t, teren: 0 } }).then(() => { typu++; }).catch(() => {});
+    const sz = await db.collection('sazby').doc(d.id).get().catch(() => null);
+    if (sz && sz.exists) await sz.ref.delete().then(() => { sazeb++; }).catch(() => {});
+  }
+  if (typu) console.log('typy subu srovnany: ' + typu + ' (zrusenych sazeb: ' + sazeb + ')');
+}
+
 async function prevedTajnosti() {
   const FVD = firebase.firestore.FieldValue;
   try {
