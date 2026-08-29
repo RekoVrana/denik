@@ -3918,16 +3918,27 @@ async function taskShift(id) {
    a bez hlasky, kdyz se mazani nepovedlo. Tuknuti vedle na mobilu tak
    nenavratne smazalo dvanact ukolu. */
 /* Ukol slo drive jen smazat a zalozit znovu — spolu s nim se ale ztratily
-   odpovedi i fotky. Upravit ho smi VEDENI; pravidla uz mu to dovoluji
-   (/tasks update: isAdmin()), takze to nepotrebuje zadnou zmenu prav.
-   Pro zadavatele z party by se pravidla musela rozsirit — to je rozhodnuti
-   pro Marca, ne vec, kterou udelam potichu. */
+   odpovedi i fotky. Upravit ho smi VEDENI a ten, KDO UKOL ZADAL
+   (rozhodnuti Marca 29. 8. 2026). Kdo ukol jen dostal, upravovat nesmi —
+   ten ho odskrtne jako hotovy, pripadne odpovi. Pravidla databaze to drzi
+   stejne (bod 16), takze i pres REST plati totez. */
 function ukolUpravit(id) {
   const t = S.tasks.find(x => x.id === id); if (!t) return;
-  if (!(S.meAuth && S.meAuth.role === 'admin')) { toast('Upravit úkol zatím může jen vedení'); return; }
+  /* moje id v /users — users_auth je nacteny driv nez profil, tak se bere
+     prednostne odtud (stejne jako listenMojeUkoly) */
+  const mid = (S.meAuth && S.meAuth.userDocId) || (S.me && S.me.id) || '';
+  const jsemVedeni = !!(S.meAuth && S.meAuth.role === 'admin');
+  if (!jsemVedeni && !(mid && t.zadalId === mid)) { toast('Upravit úkol může vedení a ten, kdo ho zadal'); return; }
   /* i stavba, ktera uz neni aktivni, musi ve vyberu zustat — jinak by se
      ukol pri ulozeni tise prehodil na uplne jinou zakazku */
   const stavby = S.projects.filter(x => x.active !== false || x.id === t.pid);
+  /* stejna past u lidi: kdo uz ve firme neni, v nabidce chybi, nic by nebylo
+     vybrane a ulozeni by spadlo na „Vyber, komu ukol patri" i pri pouhe
+     oprave preklepu v nadpisu. lideProUkoly() vraci novy seznam, unshift
+     tedy nesaha na S.users. */
+  const lide = lideProUkoly();
+  const puvodni = t.respId ? userById(t.respId) : null;
+  if (puvodni && !lide.some(u => u.id === puvodni.id)) lide.unshift(puvodni);
   modal(`<h3>✏️ Upravit úkol</h3>
     <label>Nadpis *</label>
     <input type="text" id="ue-t" value="${esc(t.title || '')}">
@@ -3936,7 +3947,7 @@ function ukolUpravit(id) {
     <label>Komu</label>
     <select id="ue-r">
       <option value="">— vyber, komu —</option>
-      ${lideProUkoly().map(u => `<option value="${u.id}" ${u.id === t.respId ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}
+      ${lide.map(u => `<option value="${u.id}" ${u.id === t.respId ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}
     </select>
     <label>Stavba</label>
     <select id="ue-p">${stavby.map(x => `<option value="${x.id}" ${x.id === t.pid ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
@@ -3958,7 +3969,9 @@ async function ulozUkol(id) {
        a sipky na kanbanu. zadalId zustava, kdo ukol zadal se neprepisuje. */
     await db.collection('tasks').doc(id).update({
       title, popis: ($('#ue-popis') ? ($('#ue-popis').value || '').trim() : ''),
-      pid: $('#ue-p').value, respId, resp: fullName(ru), res: [fullName(ru)],
+      /* Kdyby stavba v nabidce nebyla (uz neexistuje), zapsalo by se prazdno
+         a ukol by se odpojil od zakazky. Radeji nechame puvodni. */
+      pid: $('#ue-p').value || t.pid || '', respId, resp: fullName(ru), res: [fullName(ru)],
       term: $('#ue-d').value || t.term || ''
     });
     closeModal(); toast('Úkol upraven ✓'); render();
@@ -5659,7 +5672,7 @@ function kartaUkoly(p) {
           <span class="bx" onclick="taskDone('${t.id}')" title="Označit jako hotové"></span>
           <div style="cursor:pointer" onclick="S.ukolDetail=S.ukolDetail==='${t.id}'?null:'${t.id}';render()"><div class="tt">${esc(t.title)}${(t.odpovedi || []).length ? ` <span class="muted" style="font-weight:400">💬${t.odpovedi.length}</span>` : ''}</div>
             ${S.ukolDetail === t.id ? ukolDetailHtml(t) : (t.popis ? `<div class="muted" style="font-size:13px;margin-top:2px">${esc(t.popis.split('\n')[0].slice(0, 90))}${(t.popis.length > 90 || t.popis.includes('\n')) ? '…' : ''}</div>` : '')}
-            <div class="mt">${terminChip(t)}<span>🏗 ${esc((proj(t.pid) || {}).name || '')}</span>${t.zadal ? `<span>👤 zadal ${esc(t.zadal)}</span>` : ''}${t.resp && (!S.me || t.respId !== S.me.id) ? `<span>➜ ${esc(t.resp)}</span>` : ''}${S.me && t.zadalId === S.me.id ? `<span class="lnk" style="margin-left:auto" onclick="event.stopPropagation();smazatMujUkol('${t.id}')">✕ zrušit</span>` : ''}</div>
+            <div class="mt">${terminChip(t)}<span>🏗 ${esc((proj(t.pid) || {}).name || '')}</span>${t.zadal ? `<span>👤 zadal ${esc(t.zadal)}</span>` : ''}${t.resp && (!S.me || t.respId !== S.me.id) ? `<span>➜ ${esc(t.resp)}</span>` : ''}${S.me && t.zadalId === S.me.id ? `<span class="lnk" style="margin-left:auto" onclick="event.stopPropagation();ukolUpravit('${t.id}')">✏️ upravit</span><span class="lnk" onclick="event.stopPropagation();smazatMujUkol('${t.id}')">✕ zrušit</span>` : ''}</div>
             ${fotkyUkolu(t)}
           </div></div>`).join('')}
         ${hotoveDnes.map(t => `<div class="ukol hot">
@@ -5672,7 +5685,8 @@ function kartaUkoly(p) {
           <div style="cursor:pointer" onclick="S.ukolDetail=S.ukolDetail==='${t.id}'?null:'${t.id}';render()"><div class="tt">${esc(t.title)}${(t.odpovedi || []).length ? ` <span class="muted" style="font-weight:400">💬${t.odpovedi.length}</span>` : ''}</div>
             ${S.ukolDetail === t.id ? ukolDetailHtml(t) : (t.popis ? `<div class="muted" style="font-size:13px;margin-top:2px">${esc(t.popis.split('\n')[0].slice(0, 90))}${(t.popis.length > 90 || t.popis.includes('\n')) ? '…' : ''}</div>` : '')}
             <div class="mt">${terminChip(t)}<span class="badge ${STAVCOLOR[t.stav] || 'b-int'}">${STAVY[t.stav] || t.stav}</span><span>➜ ${esc(t.resp || 'nikomu')}</span>
-              <span class="lnk" style="margin-left:auto" onclick="smazatMujUkol('${t.id}')">✕ zrušit</span></div>
+              <span class="lnk" style="margin-left:auto" onclick="event.stopPropagation();ukolUpravit('${t.id}')">✏️ upravit</span>
+              <span class="lnk" onclick="event.stopPropagation();smazatMujUkol('${t.id}')">✕ zrušit</span></div>
             ${fotkyUkolu(t)}
           </div></div>`).join('')}
         ${!zadaneMnou.length ? '<div class="empty">Zatím jsi nikomu nic nezadal.</div>' : ''}

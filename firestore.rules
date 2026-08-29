@@ -7,6 +7,15 @@
 //  Živá verze: Firebase konzole → Firestore → Rules
 //  Když se změní tam, změň i tady, ať kopie nezastará.
 //
+//  Poslední změna 29. 8. 2026 (úkoly):
+//  16) /tasks update: přibyla druhá větev pro ZADAVATELE. Rozhodnutí Marca —
+//      „úkoly může upravovat vedení a člověk, co je zadal." Do bodu 10 se
+//      vešlo jen odškrtnutí a odpovědi, takže parta musela úkol smazat
+//      a založit znovu — a s ním se ztratily odpovědi i fotky. Nově smí ten,
+//      kdo úkol zadal, změnit title, popis, pid, respId, resp, res a term.
+//      NESMÍ sáhnout na zadalId (odepsat se od úkolu), stav, odpovedi,
+//      photos ani src. Kdo úkol jen dostal, zůstává na bodu 10.
+//
 //  Poslední změna 29. 8. 2026 (S4b):
 //  15) /projects: e-mail a telefon INVESTORA odešly do /kontakty pod klíčem
 //      "projekt_<id>" (jen vedení). Stavby čte celá parta i externí sub
@@ -215,14 +224,30 @@ service cloud.firestore {
       // zadat ukol smi kdokoli komukoli, ale musi se pod nej podepsat
       allow create: if isAdmin()
         || (hasRole() && request.resource.data.zadalId == mujDocId());
-      // Ne-admin smí u úkolu měnit JEN odškrtnutí a odpovědi (taskDone:
-      // stav+hotovoDne, ukolOdpovedet: odpovedi). Zadání úkolu — respId,
-      // title, termín — si přes REST nepřepíše a úkolu se tak nezbaví.
+      // Dvě větve pro ne-admina, každá pro jinou roli u úkolu:
+      //
+      // (a) KDOKOLI U ÚKOLU (přidělený i zadavatel) smí odškrtnout a odpovědět
+      //     (taskDone: stav+hotovoDne, ukolOdpovedet: odpovedi). Zadání si
+      //     přes REST nepřepíše a úkolu se tak nezbaví.
+      //
+      // (b) ZADAVATEL smí navíc opravit samotné zadání (ukolUpravit/ulozUkol,
+      //     rozhodnutí Marca 29. 8. 2026): nadpis, popis, stavbu, komu to patří
+      //     a termín. Vypsaná pole odpovídají PŘESNĚ tomu, co ulozUkol zapisuje.
+      //     Co v seznamu ZÁMĚRNĚ není a proč:
+      //       zadalId  — nesmí se od úkolu odepsat a schovat, kdo ho zadal;
+      //       stav     — posun stavu má vlastní větev (a) i s hotovoDne;
+      //       odpovedi — konverzaci nikdo nemaže ani nepodvrhává;
+      //       photos, src, created — historie a původ úkolu jsou neměnné.
+      //     hasOnly() hlídá jen POLE, KTERÁ SE ZMĚNILA, takže projde i oprava
+      //     samotného překlepu v nadpisu.
       allow update: if isAdmin()
         || (hasRole() && (resource.data.respId == mujDocId()
                           || resource.data.zadalId == mujDocId())
             && request.resource.data.diff(resource.data).affectedKeys()
-                 .hasOnly(['stav', 'hotovoDne', 'odpovedi']));
+                 .hasOnly(['stav', 'hotovoDne', 'odpovedi']))
+        || (hasRole() && resource.data.zadalId == mujDocId()
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['title', 'popis', 'pid', 'respId', 'resp', 'res', 'term']));
       // zrusit ukol smi vedeni a ten, kdo ho zadal — ne ten, kdo ho dostal
       allow delete: if isAdmin()
         || (hasRole() && resource.data.zadalId == mujDocId());
