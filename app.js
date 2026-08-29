@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '29. 8. 2026 p';
+const VERZE = '29. 8. 2026 r';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -214,6 +214,7 @@ const S = {
   ukolyView: 'seznam', orgFilter: 'vse', taskFormOpen: false, attFormOpen: false, vpFormOpen: false,
   hlaseni: [], subProject: null, subPocet: 1, subOdchodOpen: false, subZaznam: '',
   podkladyStav: null, podkladyCesta: [], poznamky: [], poznamkaEdit: null, entryEdit: null,
+  poznamkyProjekt: '', poznamkyHledat: '',
   taskFoto: [],
   klice: [],
   /* galerie fotek (viz sekce GALERIE FOTEK): filtry a kolik dlazdic uz kreslime */
@@ -1824,6 +1825,7 @@ function sidebar() {
     { k: 'organizace', ic: '🏢', t: 'Organizace', bdg: gpsBad || '' },
     { k: 'ukoly', ic: '📌', t: 'Úkoly', bdg: S.tasks.filter(isOverdue).length || '' },
     { k: 'viceprace', ic: '🧾', t: 'Vícepráce', bdg: S.viceprace.filter(v => v.stav === 'navrh' || v.stav === 'u_investora').length || '' },
+    { k: 'poznamky', ic: '📝', t: 'Poznámky' },
     { k: 'reporty', ic: '📈', t: 'Reporty' },
   ];
   const map = { projdetail: 'projekty', newuser: 'uzivatele', novy: 'denik' };
@@ -1848,6 +1850,7 @@ function viewAdmin() {
   else if (S.view === 'organizace') body = pgOrganizace();
   else if (S.view === 'ukoly') body = pgUkoly();
   else if (S.view === 'viceprace') body = pgViceprace();
+  else if (S.view === 'poznamky') body = pgPoznamky();
   else if (S.view === 'reporty') body = pgReporty();
   else body = pgDenik();
   return topbar() + `<div class="shell">${sidebar()}<div class="content">${body}</div></div>`;
@@ -5594,13 +5597,13 @@ function pzVidiSebrat(kl, autorId) {
   return { vidi: pzSAutorem(v.length ? v : ['vedeni'], autorId),
            vidiJmena: (S.pzLide || []).filter(u => v.includes(u.id)).map(u => u.jmeno) };
 }
-function kartaPoznamky(p) {
-  if (!p) return '';
-  const mp = S.poznamky.filter(z => z.pid === p.id);
-  return `<div class="card">
-    <h3>📝 Poznámky ke stavbě <span class="muted" style="font-weight:400">— ${esc(p.name || '')}</span></h3>
-    ${mp.map(z => S.poznamkaEdit === z.id ? `
+/* Jeden radek poznamky — pouziva ho karta u stavby i samostatna sekce
+   Poznamky, aby se dve mista nerozesla. `sStavbou` pripise, ke ktere
+   stavbe poznamka patri (v sekci jsou pohromade poznamky ze vsech). */
+function poznamkaRadek(z, sStavbou) {
+  return S.poznamkaEdit === z.id ? `
       <div class="ukform" style="margin-bottom:8px">
+        ${sStavbou ? `<div class="muted" style="margin-bottom:6px">🏗 ${esc((proj(z.pid) || {}).name || 'stavba smazána')}</div>` : ''}
         <label>Nadpis</label><input type="text" id="pz-n-${z.id}" value="${esc(z.nadpis || '')}">
         ${pzVidiHtml(z)}
         <label>Text</label><textarea id="pz-t-${z.id}" style="min-height:70px">${esc(z.text || '')}</textarea>
@@ -5609,6 +5612,7 @@ function kartaPoznamky(p) {
           <span class="lnk" style="margin-left:auto" onclick="smazPoznamku('${z.id}')">✕ smazat</span></div>
       </div>` : `
       <div style="border:1px solid var(--line);border-radius:10px;padding:11px 13px;margin-bottom:8px">
+        ${sStavbou ? `<div class="muted" style="font-size:12.5px;margin-bottom:4px">🏗 ${esc((proj(z.pid) || {}).name || 'stavba smazána')}</div>` : ''}
         <div style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap"><b style="flex:1;min-width:120px">${esc(z.nadpis || '')}</b>
           <span class="badge ${vidiBarva(z)}">${vidiPopis(z)}</span>
           ${(S.meAuth && (S.meAuth.role === 'admin' || z.autorId === S.meAuth.userDocId)) ? `<span class="lnk" style="font-size:12px" onclick="otevriPoznamku('${z.id}')">upravit</span>` : ''}</div>
@@ -5622,7 +5626,55 @@ function kartaPoznamky(p) {
                  onkeydown="if(event.key==='Enter')komentujPoznamku('${z.id}')">
           <button class="btn dark sm" style="flex:none" onclick="komentujPoznamku('${z.id}')">Přidat</button>
         </div>
-      </div>`).join('')}
+      </div>`;
+}
+/* ---- Poznamky — vlastni sekce ----
+   Poznamky doted zily jen jako karta v detailu stavby, takze kdo hledal
+   „kde se zavira voda" a nevedel u ktere zakazky, musel proklikat vsechny.
+   Tady jsou pohromade, s filtrem podle stavby a hledanim v textu. */
+function pgPoznamky() {
+  const fp = S.poznamkyProjekt || '';
+  const hl = (S.poznamkyHledat || '').trim().toLowerCase();
+  let rows = S.poznamky.slice();
+  if (fp) rows = rows.filter(z => z.pid === fp);
+  if (hl) rows = rows.filter(z => ((z.nadpis || '') + ' ' + (z.text || '')).toLowerCase().indexOf(hl) >= 0);
+  /* Radi se po stavbach, uvnitr podle nadpisu — posluchac uz je serazeny
+     podle nadpisu, takze staci stabilne preskladat podle jmena stavby. */
+  rows.sort((a, b) => ((proj(a.pid) || {}).name || '').localeCompare((proj(b.pid) || {}).name || '', 'cs'));
+  const stavbySPoznamkou = [...new Set(S.poznamky.map(z => z.pid))];
+  return `
+  <div class="strip"><h1>Poznámky</h1><span class="sp"></span>
+    <button class="btn amber" onclick="novaPoznamka()">➕ NOVÁ POZNÁMKA</button></div>
+  <main>
+    <div class="card">
+      <div class="frow">
+        <div><label>Stavba</label><select onchange="S.poznamkyProjekt=this.value;render()">
+          <option value="">Všechny stavby (${S.poznamky.length})</option>
+          ${S.projects.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', 'cs'))
+            .filter(x => stavbySPoznamkou.indexOf(x.id) >= 0)
+            .map(x => `<option value="${x.id}" ${fp === x.id ? 'selected' : ''}>${esc(x.name)} (${S.poznamky.filter(z => z.pid === x.id).length})</option>`).join('')}
+        </select></div>
+        <div><label>Hledat v textu</label><input type="text" id="pz-hledat" value="${esc(S.poznamkyHledat || '')}"
+          placeholder="kód od brány, voda, správce…" oninput="S.poznamkyHledat=this.value;render()"></div>
+      </div>
+      ${(fp || hl) ? `<div class="aprv"><button class="btn ghost sm" onclick="S.poznamkyProjekt='';S.poznamkyHledat='';zapomen('pz-hledat');render()">✕ Zrušit filtr</button>
+        <span class="muted" style="align-self:center">zobrazeno ${rows.length} z ${S.poznamky.length} poznámek</span></div>` : ''}
+    </div>
+    <div class="card">
+      ${rows.map(z => poznamkaRadek(z, true)).join('') || `<div class="empty">${
+        S.poznamky.length
+          ? 'Tomuhle filtru neodpovídá žádná poznámka.'
+          : 'Zatím žádné poznámky. Patří sem věci, které u zakázky zůstávají — kódy od brány, kde se zavírá voda, kontakt na správce. Parta i subdodavatelé je uvidí podle toho, komu je určíš.'}</div>`}
+    </div>
+    <div class="note">Poznámka zůstává u zakázky, i když se lidi na stavbě prostřídají. U každé se dá nastavit, kdo ji uvidí — celá parta, jen konkrétní lidi, nebo jen vedení. Upravit a smazat ji může vedení a ten, kdo ji napsal; ostatní ji můžou komentovat.</div>
+  </main>`;
+}
+function kartaPoznamky(p) {
+  if (!p) return '';
+  const mp = S.poznamky.filter(z => z.pid === p.id);
+  return `<div class="card">
+    <h3>📝 Poznámky ke stavbě <span class="muted" style="font-weight:400">— ${esc(p.name || '')}</span></h3>
+    ${mp.map(z => poznamkaRadek(z, false)).join('') || '<div class="empty">Zatím žádné poznámky. Patří sem věci, které u zakázky zůstávají — kódy od brány, kde se zavírá voda, kontakt na správce.</div>'}
     <div class="aprv"><button class="btn dark sm" onclick="novaPoznamka('${p.id}')">➕ Nová poznámka</button></div>
   </div>`;
 }
@@ -5630,22 +5682,36 @@ async function otevriPoznamku(id) {
   await nactiPzLide();
   S.poznamkaEdit = id; render();
 }
+/* pid je nepovinne: z karty u stavby prijde, ze sekce Poznamky ne —
+   tam se stavba vybira rovnou v okenku. */
 async function novaPoznamka(pid) {
   await nactiPzLide();
+  /* Kdyz stavbu neznáme, nabidnou se VSECHNY — poznamka patri k zakazce
+     bez ohledu na to, jestli ji parta zrovna vidi („kod od brany" plati
+     i u stavby, ktera stoji). Vypnute se jen oznaci. */
+  const vyber = !pid;
+  const stavby = S.projects.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', 'cs'));
   const v = await new Promise(hotovo => {
     window._pzHotovo = x => { window._pzHotovo = null; closeModal(); hotovo(x); };
-    modal(`<h3>📝 Nová poznámka — ${esc((proj(pid) || {}).name || '')}</h3>
+    modal(`<h3>📝 Nová poznámka${vyber ? '' : ' — ' + esc((proj(pid) || {}).name || '')}</h3>
+      ${vyber ? `<label>Stavba *</label>
+      <select id="pz-stavba">
+        <option value="">— vyber stavbu —</option>
+        ${stavby.map(x => `<option value="${x.id}" ${x.id === S.poznamkyProjekt ? 'selected' : ''}>${esc(x.name)}${x.active === false ? ' · parta ji nevidí' : ''}</option>`).join('')}
+      </select>` : ''}
       <label>Nadpis *</label>
       <input type="text" id="pz-nadpis" placeholder="">
       ${pzVidiHtml(null)}
       <div class="aprv">
-        <button class="btn amber" onclick="window._pzHotovo({n:document.querySelector('#pz-nadpis').value,v:pzVidiSebrat('nova')})">Vytvořit</button>
+        <button class="btn amber" onclick="window._pzHotovo({n:document.querySelector('#pz-nadpis').value,p:(document.querySelector('#pz-stavba')||{}).value,v:pzVidiSebrat('nova')})">Vytvořit</button>
         <button class="btn ghost" onclick="window._pzHotovo(null)">Zrušit</button>
       </div>`);
-    setTimeout(() => { const el = document.querySelector('#pz-nadpis'); if (el) el.focus(); }, 60);
+    setTimeout(() => { const el = document.querySelector(vyber ? '#pz-stavba' : '#pz-nadpis'); if (el) el.focus(); }, 60);
   });
   if (!v || !v.n || !v.n.trim()) return;
-  const r = await db.collection('poznamky').add({ pid, nadpis: v.n.trim(), text: '', komentare: [],
+  const cilPid = pid || v.p || '';
+  if (!cilPid) { toast('Vyber stavbu, ke které poznámka patří'); return; }
+  const r = await db.collection('poznamky').add({ pid: cilPid, nadpis: v.n.trim(), text: '', komentare: [],
     vidi: v.v.vidi, vidiJmena: v.v.vidiJmena,
     autorId: (S.meAuth && S.meAuth.userDocId) || (S.me && S.me.id) || '',
     autor: fullName(S.me || {}), createdAt: FV() })
