@@ -1077,9 +1077,15 @@ function priponaSouboru(name, mime) {
    ktere pak stinily tu pravou pri cteni nabidky. */
 function nazevSlozkyZakazky(p) {
   if (!p) return '';
-  const casti = String(p.name || '').split(' - ');
-  const lokalita = (casti[0] || String(p.address || '').split(/[\s,]/)[0] || '').trim();
-  const prijmeni = (casti[1] || String(p.client || '').split(' a ')[0].trim().split(/\s+/).pop() || '').trim();
+  /* Nazev stavby uz ten tvar nese obracene („Machuldova - Sasek"), takze
+     staci prohodit. Delitko muze byt spojovnik i pomlcka. Kdyz se nazev
+     nerozpadne (treba „TEST — zkusebni stavba"), poskladame nazev
+     z adresy a klienta — jinak by v nem skoncil cely nazev stavby. */
+  const casti = String(p.name || '').split(/\s+[-–—]\s+/);
+  const zAdresy = String(p.address || '').split(/[\s,]/).filter(Boolean)[0] || '';
+  const zKlienta = String(p.client || '').split(' a ')[0].trim().split(/\s+/).pop() || '';
+  const lokalita = (casti.length > 1 ? casti[0] : zAdresy).trim();
+  const prijmeni = (casti.length > 1 ? casti[1] : zKlienta).trim();
   return [String(p.cn || '').trim(), prijmeni, lokalita].filter(Boolean).join('_');
 }
 async function zaraditFotky(p, entryId, den) {
