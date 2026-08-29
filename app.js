@@ -210,7 +210,7 @@ const S = {
      poznamky bydli v samostatnych kolekcich, ktere cte jen vedeni */
   portaly: {}, kontakty: {}, entriesInterni: {},
   view: 'nastenka', nastenkaTab: 'prehled', tickety: [], adminFilter: null, detail: null,
-  projDetailId: null, projDetailTab: 'info', newUserType: null, editUserId: null,
+  projDetailId: null, projDetailTab: 'info', newUserType: null, editUserId: null, newUserActive: null,
   ukolyView: 'seznam', orgFilter: 'vse', taskFormOpen: false, attFormOpen: false, vpFormOpen: false,
   hlaseni: [], subProject: null, subPocet: 1, subOdchodOpen: false, subZaznam: '',
   podkladyStav: null, podkladyCesta: [], poznamky: [], poznamkaEdit: null, entryEdit: null,
@@ -519,7 +519,7 @@ function startData() {
   /* admin-only tajnosti zacinaji prazdne — po odhlaseni admina nesmi
      zustat v pameti pro dalsi prihlaseni jine role */
   S.portaly = {}; S.kontakty = {}; S.entriesInterni = {};
-  S.dotazeno = []; S.dotazenoZapisy = []; S.dotazenoTisk = [];
+  S.dotazeno = []; S.dotazenoZapisy = []; S.dotazenoTisk = []; S.zapisyOd = null;
   listen('projects', 'projects', { sort: (a, b) => (b.active - a.active) || String(a.cn || a.name).localeCompare(String(b.cn || b.name), 'cs') });
   /* razeni okennich kolekci drzi OKNO_SORT, at je stejne pro snapshot i archiv */
   listen('entries', 'entries', { where: [['date', '>=', oknoOd()]], okno: true });
@@ -719,6 +719,11 @@ function mountMaps() {
       const a = $('#pf-lat'), b = $('#pf-lng');
       if (a) a.value = c.lat.toFixed(7);
       if (b) b.value = c.lng.toFixed(7);
+      /* Popisek platil pro adresu z vyhledavani. Po pretazeni uz spendlik
+         nikde nesedi — lepsi zadny popisek nez lzivy. */
+      S.geoLabel = '';
+      const info = $('#pf-geoinfo');
+      if (info) { info.style.display = 'none'; info.innerHTML = ''; }
     });
     el._map = map;
     MAPS[el.dataset.map] = { map, marker };
@@ -736,9 +741,27 @@ function showFormMap(lat, lng) {
     setTimeout(() => MAPS.form.map.invalidateSize(), 60);
   } else mountMaps();
 }
+/* Souradnice z formulare. Cesky telefon i cesky clovek pisou desetinnou
+   CARKU — parseFloat zna jen tecku a z „50,0236914" udelal rovnych 50,
+   coz je stavba o padesat kilometru vedle a check-in nikomu nesedne. */
+function gpsCislo(v) {
+  const n = parseFloat(String(v == null ? '' : v).trim().replace(',', '.'));
+  return isFinite(n) ? n : NaN;
+}
+/* Hrube hranice Ceska — nechceme presnost na metr, chceme chytit preklep,
+   prohozene lat/lng a nulu uprostred Atlantiku. */
+function gpsVCesku(lat, lng) {
+  return isFinite(lat) && isFinite(lng) && lat >= 48 && lat <= 52 && lng >= 12 && lng <= 19;
+}
 function mapFromInputs() {
-  const lat = parseFloat($('#pf-lat').value), lng = parseFloat($('#pf-lng').value);
-  if (isFinite(lat) && isFinite(lng)) showFormMap(lat, lng);
+  const lat = gpsCislo($('#pf-lat').value), lng = gpsCislo($('#pf-lng').value);
+  /* Rucne prepsana souradnice uz neodpovida nalezene adrese — popisek
+     „Spendlik nastaven podle: …" by lhal, tak ho zahazujeme. Prazdny
+     retezec (ne null) = uzivatel ho vedome zrusil. */
+  S.geoLabel = '';
+  const info = $('#pf-geoinfo');
+  if (info) { info.style.display = 'none'; info.innerHTML = ''; }
+  if (gpsVCesku(lat, lng)) showFormMap(lat, lng);
 }
 /* adresa -> souradnice pres Nominatim (OpenStreetMap)
    POZOR: nikdy nebrat mlcky prvni vysledek. "Nadrazni 15, Brno" vraci jako
@@ -1059,7 +1082,7 @@ function nazevSlozkyZakazky(p) {
   const prijmeni = (casti[1] || String(p.client || '').split(' a ')[0].trim().split(/\s+/).pop() || '').trim();
   return [String(p.cn || '').trim(), prijmeni, lokalita].filter(Boolean).join('_');
 }
-async function zaraditFotky(p, entryId) {
+async function zaraditFotky(p, entryId, den) {
   const out = [];
   for (const ph of S.draftPhotos) {
     const id = uid8();
@@ -1073,7 +1096,10 @@ async function zaraditFotky(p, entryId) {
     /* nazev souboru = prijmeni nahravajiciho — iPhone posila "image",
        coz na Drive nic nerika; datum a cas prida most na zacatek */
     const jmeno = (S.me && S.me.prijmeni) || fullName(S.me || {}) || 'foto';
-    const spol = { entryId, photoId: id, folderId: (p && p.driveFolderId) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', folderName: nazevSlozkyZakazky(p), date: isoToday() };
+    /* Datum patri ZAPISU, ne dnesku — u zpetne psaneho zapisu se jinak
+       fotky na Disku pojmenovaly podle dne odeslani a pri dohledavani
+       "co bylo v patek" nesedely. Prilohy to uz delaly spravne. */
+    const spol = { entryId, photoId: id, folderId: (p && p.driveFolderId) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', folderName: nazevSlozkyZakazky(p), date: den || isoToday() };
     /* Kazda polozka ma svuj try. Kdyby byly spolecne a selhala prvni
        (typicky plna pamet telefonu), druha by se uz ani nezkusila. */
     let mamNahled = false;
@@ -1196,7 +1222,7 @@ async function addEntry(pid, author, txt, persons, date) {
   const works = txt ? rozdelNaVety(txt) : [];
   const d = date || isoToday();
   const ref = db.collection('entries').doc();
-  const photos = await zaraditFotky(p, ref.id);
+  const photos = await zaraditFotky(p, ref.id, d);
   await zaraditPrilohy(p, ref.id);
   ref.set({
     pid, date: d, createdAt: FV(), author, authorUid: S.authUser.uid,
@@ -1405,6 +1431,14 @@ async function mirrorEntry(e) {
 async function dorovnejPortaly() {
   for (const pid of Object.keys(S.portaly || {})) {
     const tok = tokenPortalu(pid); if (!tok) continue;
+    /* Dokumenty pro investora, ktere maji jen odkaz na Disk a ne kopii —
+       ty si investor neotevre (Disk po nem chce prihlaseni ke Googlu).
+       Doplni se pri prihlaseni vedeni, ktere jako jedine ma klic k mostu. */
+    const dk = await db.collection('portals').doc(tok).collection('docs').get().catch(() => null);
+    if (dk) for (const d of dk.docs) {
+      if (d.data().data || !d.data().driveId) continue;
+      await kopieDokNaPortal(tok, d.id, d.data().driveId).catch(() => {});
+    }
     const schvalene = S.entries.filter(e => e.pid === pid && e.status === 'approved');
     if (!schvalene.length) continue;
     const feed = await db.collection('portals').doc(tok).collection('feed').get().catch(() => null);
@@ -1936,6 +1970,22 @@ function pgProjekty() {
   return `
   <div class="strip"><h1>Projekty</h1><span class="sp"></span><button class="btn amber" onclick="projectForm()">➕ PŘIDAT</button></div>
   <main>
+    ${(() => {
+      const skryte = stavbySkrytePart();
+      if (!skryte.length) return '';
+      const kolik = skryte.length === 1 ? '1 stavba je v realizaci, ale parta ji nevidí'
+        : skryte.length < 5 ? skryte.length + ' stavby jsou v realizaci, ale parta je nevidí'
+        : skryte.length + ' staveb je v realizaci, ale parta je nevidí';
+      return `<div class="inote">
+        <b>⚠ ${kolik}.</b> Nemůže si na ně píchnout docházku ani napsat zápis.
+        ${skryte.map(x => `<div class="urow" style="border:0;padding:5px 0">
+          <span>🏗</span><b>${esc(x.name)}</b>
+          <span class="muted">${esc(x.cn || '')}</span>
+          <button class="btn ghost sm" style="margin-left:auto" onclick="toggleActive('${x.id}')">👁 Zapnout partě</button>
+        </div>`).join('')}
+        ${skryte.length > 1 ? `<div class="aprv"><button class="btn amber sm" onclick="zapniVsemVidi()">👁 Zapnout u všech (${skryte.length})</button></div>` : ''}
+      </div>`;
+    })()}
     <div class="tablecard">
       <div style="overflow-x:auto"><table>
         <tr><th>Název stavby</th><th>Zodpovědný</th><th>Vidí parta</th><th>Stav</th><th>Zakázka</th><th>Investor</th><th>Adresa</th><th>Deník</th><th>Průběh</th></tr>
@@ -1959,6 +2009,20 @@ function pgProjekty() {
   </main>`;
 }
 async function toggleActive(pid) { const p = proj(pid); await db.collection('projects').doc(pid).update({ active: !p.active }); }
+/* Stavba v realizaci, kterou parta nevidi, nebyla nikde videt. Devet
+   z dvanacti staveb melo „Vidi parta" vypnute — parta si na ne nemohla
+   pichnout ani napsat zapis a vedeni o tom nevedelo. */
+function stavbySkrytePart() {
+  return S.projects.filter(x => (x.stav || '') === 'Realizace' && !x.active);
+}
+async function zapniVsemVidi() {
+  const skryte = stavbySkrytePart();
+  if (!skryte.length) return;
+  if (!await potvrd('Zapnout „Vidí parta" u ' + skryte.length + ' staveb v realizaci?\n\n' +
+    skryte.map(x => '· ' + x.name).join('\n') + '\n\nObjeví se partě v seznamu, kde si píchá docházku a zakládá zápisy.', 'Ano, zapnout')) return;
+  for (const x of skryte) await db.collection('projects').doc(x.id).update({ active: true }).catch(() => {});
+  toast('Hotovo ✓ — parta stavby vidí');
+}
 function openProj(id) { S.projDetailId = id; S.projDetailTab = 'info'; S.view = 'projdetail'; render(); }
 function projectForm(id) {
   const p = id ? proj(id) : {};
@@ -2146,8 +2210,15 @@ async function saveProject(id) {
   if (!id && !$('#pf-drive').value.trim() && ($('#pf-cn').value || '').trim()) {
     await najdiDriveSlozku(true);
   }
-  const lat = parseFloat($('#pf-lat').value), lng = parseFloat($('#pf-lng').value);
+  const lat = gpsCislo($('#pf-lat').value), lng = gpsCislo($('#pf-lng').value);
   const prevGps = id ? ((proj(id) || {}).gps || null) : null;
+  /* Prazdna GPS je v poradku (stavba bez check-inu). Vyplnena, ale mimo
+     Cesko, uz ne — to je vzdycky preklep nebo prohozene pole. */
+  const gpsVyplnena = ($('#pf-lat').value || '').trim() !== '' || ($('#pf-lng').value || '').trim() !== '';
+  if (gpsVyplnena && !gpsVCesku(lat, lng)) {
+    toast('GPS je mimo Česko — zkontroluj souřadnice (šířka 48–52, délka 12–19)');
+    return;
+  }
   const data = {
     name, cn: $('#pf-cn').value.trim(), client: $('#pf-client').value.trim(),
     address: $('#pf-addr').value.trim(), type: $('#pf-type').value.trim(),
@@ -2156,7 +2227,10 @@ async function saveProject(id) {
        rikat. Prubeh (%) se rucne neuklada vubec: pocita se vyhradne
        z harmonogramu (msRecalc) a zapisuji ho jen funkce milniku. */
     phase: $('#pf-phase') ? $('#pf-phase').value.trim() : '',
-    gps: (lat && lng) ? { lat, lng, tol: CFG.gpsTolerance || 100, label: S.geoLabel || (prevGps && prevGps.label) || '' } : null,
+    /* Popisek: S.geoLabel === '' znamena „uzivatel spendlik pretahl nebo
+       souradnice prepsal rucne" — starou adresu tam nechat NESMIME, lhala by.
+       null znamena „v tomhle formulari se s GPS nehnulo" -> drzime puvodni. */
+    gps: gpsVCesku(lat, lng) ? { lat, lng, tol: CFG.gpsTolerance || 100, label: (S.geoLabel != null ? S.geoLabel : ((prevGps && prevGps.label) || '')) } : null,
     driveFolderId: $('#pf-drive').value.trim(), handover: $('#pf-hand').value.trim()
   };
   // Kdyz uz stavba ma harmonogram, fazi urcuje on — rucni text z formulare
@@ -2171,6 +2245,12 @@ async function saveProject(id) {
   const kMail = ($('#pf-cmail') ? $('#pf-cmail').value : '').trim();
   const kTel = ($('#pf-cphone') ? $('#pf-cphone').value : '').trim();
 
+  /* Stav stavby a prepinac „Vidi parta" doted zily kazdy zvlast: stavbu slo
+     oznacit za dokoncenou a parta si na ni pichala dal. Ptame se az po
+     zapisu, takze puvodni hodnoty si musime sebrat TED. */
+  const drivStav = id ? ((proj(id) || {}).stav || '') : '';
+  const drivVidi = id ? !!(proj(id) || {}).active : false;
+
   let pid = id;
   if (id) await db.collection('projects').doc(id).update(data);
   else { const ref = await db.collection('projects').add({ ...data, active: true, milestones: [], createdAt: FV() }); pid = ref.id; }
@@ -2181,6 +2261,19 @@ async function saveProject(id) {
   if (pid) {
     if (kMail || kTel) await db.collection('kontakty').doc(kontaktKlicStavby(pid)).set({ email: kMail, tel: kTel }).catch(() => {});
     else await db.collection('kontakty').doc(kontaktKlicStavby(pid)).delete().catch(() => {});
+  }
+  /* Portal investora dorovnat HNED. Casovac to jinak stihne az za minutu
+     a jen dokud ma vedeni appku otevrenou — adresa, jmeno investora, typ
+     a plan predani by se k nemu jinak dostaly klidne az druhy den. */
+  if (pid) syncPortalHeader({ ...(proj(pid) || {}), ...data, id: pid }).catch(() => {});
+  /* Dokonceno + „Vidi parta" uz nezijou kazdy zvlast. Nic se nerusi
+     natvrdo — jen se zeptame. */
+  if (id && data.stav === 'Dokončeno' && drivStav !== 'Dokončeno' && drivVidi) {
+    if (await potvrd('Stavba „' + name + '" je teď označená jako Dokončeno.\n\n' +
+      'Má ji parta přestat vidět? Zmizí ze seznamu, kde si píchá docházku a zakládá zápisy — hotové záznamy a deník zůstanou.\n\n' +
+      'Kdykoli ji vrátíš přepínačem „Vidí parta" v seznamu Projekty.', 'Ano, schovat partě')) {
+      await db.collection('projects').doc(id).update({ active: false }).catch(() => {});
+    }
   }
   closeModal(); toast('Projekt uložen ✓');
 }
@@ -2237,7 +2330,12 @@ function pgProjDetail() {
             <button class="btn amber sm" onclick="navigator.clipboard.writeText('${portalUrl}').then(()=>toast('Odkaz zkopírován ✓'))">📋 Kopírovat odkaz</button>
             <button class="btn ghost sm" onclick="window.open('${portalUrl}','_blank')">👁 Náhled portálu</button>
           </div>
-          <div class="note">Investor vidí jen schválené zápisy a fotky (#31). Odkaz mu pošli e-mailem — bez instalace a hesla.</div>`
+          <div class="note">Investor vidí jen schválené zápisy a fotky (#31). Odkaz mu pošli e-mailem — bez instalace a hesla.</div>
+          <div class="aprv">
+            <button class="btn ghost sm" onclick="novyPortal('${p.id}')">🔄 Vydat nový odkaz</button>
+            <button class="btn ghost sm" onclick="zrusPortal('${p.id}')">🗑 Zrušit portál</button>
+          </div>
+          <div class="note">Zrušením odkaz okamžitě přestane fungovat — na to sáhni, když se s investorem rozejdete. Nový odkaz starý zneplatní.</div>`
         : `<div class="empty">Portál zatím není vytvořen.</div>
           <div class="aprv"><button class="btn amber" onclick="createPortal('${p.id}')">🔗 Vytvořit portál investora</button></div>`}
       </div>
@@ -2350,6 +2448,48 @@ async function delStavbaDoc(pid, i) {
   const p = proj(pid); const docs = (p.stavbaDocs || []).slice(); docs.splice(i, 1);
   await db.collection('projects').doc(pid).update({ stavbaDocs: docs });
 }
+/* Strop kopie dokumentu na portal. Jeden zaznam v databazi uvezme 1 MB
+   i s hlavickou, takze base64 (o tretinu delsi nez soubor) musi zustat pod
+   tim. 650 kB souboru je bezna smlouva i vetsi pudorys. */
+const MAX_PORTAL_DOK_KB = 650;
+/* Investorovi nestaci ODKAZ na Disk: soubor vydava most a ten chce tajny
+   klic, ktery ma jen prihlaseny clovek. Investor prihlaseny neni, takze
+   dostal prihlasovaci stranku Googlu — a vedeni o tom nevedelo, protoze
+   jemu se soubor otevrel normalne. Kopie se proto uklada primo k portalu,
+   uplne stejne jako velke fotky. */
+/* Investor si dokument otevre z kopie ulozene u portalu — na Disk se
+   nesaha vubec, takze ho Google o nic nezada. */
+function portalDok(id, titulek) {
+  const d = (S.portalDocs || []).find(x => x.id === id);
+  if (!d || !d.data) { oznam('Dokument se ještě připravuje. Zkuste to prosím za chvíli.'); return; }
+  let url;
+  try {
+    const bajty = Uint8Array.from(atob(d.data), c => c.charCodeAt(0));
+    url = URL.createObjectURL(new Blob([bajty], { type: d.mime || 'application/octet-stream' }));
+  } catch (e) { oznam('Dokument se nepodařilo otevřít.'); return; }
+  const jePdf = (d.mime || '').indexOf('pdf') >= 0;
+  const jeObrazek = (d.mime || '').indexOf('image/') === 0;
+  $('#viewer').innerHTML = `<div class="viewer" onclick="if(event.target===this)closeDoc()"><div class="vwrap">
+    <div class="vhead"><b style="flex:1;min-width:120px">${esc(titulek)}</b>
+      <a class="btn amber sm" href="${url}" download="${esc(nazevKeStazeni(titulek, d.mime))}">⬇ Uložit</a>
+      <button class="btn dark sm" onclick="closeDoc()">✕ Zavřít</button></div>
+    <div class="vbody">${jeObrazek ? `<img src="${url}" style="max-width:100%;display:block;margin:0 auto">`
+      : jePdf ? `<iframe src="${url}" style="width:100%;height:78vh;border:0"></iframe>`
+      : `<div class="note">Tenhle typ souboru se v prohlížeči neukáže — stáhněte si ho tlačítkem ⬇ Uložit nahoře.</div>`}</div>
+  </div></div>`;
+}
+async function kopieDokNaPortal(tok, docId, driveId) {
+  const klic = S.tajne && S.tajne.mostKlic;
+  if (!tok || !klic || !CFG.scriptUrl || !S.online) return { ok: false, duvod: 'offline' };
+  try {
+    const j = await driveCall({ action: 'getFile', fileId: driveId, klic });
+    if (!j.ok || !j.data) return { ok: false, duvod: j.error || 'Disk soubor nevydal' };
+    const kb = Math.round(j.data.length * 3 / 4 / 1024);
+    if (kb > MAX_PORTAL_DOK_KB) return { ok: false, duvod: 'velky', kb };
+    await db.collection('portals').doc(tok).collection('docs').doc(docId).set({ data: j.data, mime: j.mime || '' }, { merge: true });
+    return { ok: true, kb };
+  } catch (e) { return { ok: false, duvod: e.message || 'nepovedlo se' }; }
+}
 async function addPortalDoc(pid) {
   const p = proj(pid);
   const title = $('#pd-title').value.trim();
@@ -2359,9 +2499,16 @@ async function addPortalDoc(pid) {
   const docs = [...(p.portalDocs || []), { title, driveId: m[0], mime: '' }];
   await db.collection('projects').doc(pid).update({ portalDocs: docs });
   const tok = await tokenPortaluAsync(pid); // token je v admin-only /portaly (S2)
-  if (tok) await db.collection('portals').doc(tok).collection('docs').add({ title, driveId: m[0] });
+  let hlaska = 'Dokument přidán na portál ✓';
+  if (tok) {
+    const ref = await db.collection('portals').doc(tok).collection('docs').add({ title, driveId: m[0] });
+    const k = await kopieDokNaPortal(tok, ref.id, m[0]);
+    if (!k.ok) hlaska = k.duvod === 'velky'
+      ? '⚠ Dokument je moc velký (' + k.kb + ' kB) — investor si ho na portálu neotevře. Pošli mu ho radši mailem.'
+      : '⚠ Dokument se na portál nepodařilo zkopírovat — investor si ho zatím neotevře. Zkus to znovu.';
+  }
   $('#pd-title').value = ''; $('#pd-id').value = ''; zapomen('pd-title', 'pd-id');
-  toast('Dokument přidán na portál ✓');
+  toast(hlaska);
 }
 async function delPortalDoc(pid, i) {
   const p = proj(pid);
@@ -2372,6 +2519,48 @@ async function delPortalDoc(pid, i) {
     const s = await db.collection('portals').doc(tok).collection('docs').where('driveId', '==', rm.driveId).get();
     s.docs.forEach(d => d.ref.delete());
   }
+}
+/* Smaze cely portal investora — dokument i vsechny podkolekce. Odkaz tim
+   okamzite prestane fungovat. Bez ptani: ptaji se volajici. */
+async function smazPortalData(pid) {
+  const tok = await tokenPortaluAsync(pid); // token je v admin-only /portaly (S2)
+  if (tok) {
+    /* 'fotky' = velke kopie fotek pro investora, 'actions' = jeho schvaleni
+       viceprace. Bez uklidu by v databazi zustali sirotci bez portalu. */
+    for (const kol of ['feed', 'vp', 'docs', 'fotky', 'actions']) {
+      const sn = await db.collection('portals').doc(tok).collection(kol).get().catch(() => null);
+      if (sn) for (const d of sn.docs) await d.ref.delete().catch(() => {});
+    }
+    await db.collection('portals').doc(tok).delete().catch(() => {});
+  }
+  await db.collection('portaly').doc(pid).delete().catch(() => {});
+  /* Pamet dorovnat HNED: tokenPortalu() cte z S.portaly a posluchac dorazi
+     az za chvili — jinak by createPortal videl stary token a novy portal
+     odmitl zalozit. */
+  if (S.portaly) delete S.portaly[pid];
+  return tok;
+}
+async function zrusPortal(pid) {
+  const p = proj(pid); if (!p) return;
+  if (!await potvrd('Zrušit portál investora u stavby „' + p.name + '"?\n\n' +
+    'Odkaz, který investor má, okamžitě přestane fungovat. Smažou se i zápisy, fotky, vícepráce a dokumenty, které se na portál kopírovaly.\n\n' +
+    'V Deníku nic nezmizí — jde jen o kopii pro investora. Portál se dá kdykoli vytvořit znovu, ale bude mít jiný odkaz.', 'Ano, zrušit portál')) return;
+  try {
+    await smazPortalData(pid);
+    toast('Portál zrušen ✓ — odkaz už nefunguje');
+  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  render();
+}
+async function novyPortal(pid) {
+  const p = proj(pid); if (!p) return;
+  if (!await potvrd('Vydat nový odkaz na portál u stavby „' + p.name + '"?\n\n' +
+    'Starý odkaz okamžitě přestane fungovat — kdo ho má, ten se dovnitř už nedostane. Nový odkaz musíš investorovi poslat znovu.\n\n' +
+    'Schválené zápisy a fotky se na nový portál nakopírují samy.', 'Ano, vydat nový')) return;
+  try {
+    await smazPortalData(pid);
+    await createPortal(pid);
+  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  render();
 }
 async function createPortal(pid) {
   const p = proj(pid);
@@ -2389,14 +2578,26 @@ async function createPortal(pid) {
   for (const e of entriesOf(pid).filter(x => x.status === 'approved')) {
     await mirrorEntry(e).catch(err => console.warn('zrcadleni pri zalozeni portalu', err));
   }
-  for (const d of (p.portalDocs || [])) await db.collection('portals').doc(token).collection('docs').add({ title: d.title, driveId: d.driveId });
+  for (const d of (p.portalDocs || [])) {
+    const ref = await db.collection('portals').doc(token).collection('docs').add({ title: d.title, driveId: d.driveId });
+    /* kopie souboru rovnou s sebou — bez ni si ji investor neotevre */
+    await kopieDokNaPortal(token, ref.id, d.driveId);
+  }
+  /* Hlavicka portalu (adresa, typ, plan predani, milniky) — bez tohohle by
+     investor do minuty videl jen jmeno stavby a jmeno sebe sama. */
+  await syncPortalHeader(p, token).catch(() => {});
   toast('Portál vytvořen ✓ — odkaz najdeš v detailu projektu');
 }
 function gpsFromHere(pid) {
   if (!navigator.geolocation) { toast('Zařízení nedává polohu'); return; }
   navigator.geolocation.getCurrentPosition(async pos => {
-    const prevGps = (proj(pid) || {}).gps || null;
-    await db.collection('projects').doc(pid).update({ gps: { lat: +pos.coords.latitude.toFixed(7), lng: +pos.coords.longitude.toFixed(7), tol: CFG.gpsTolerance || 100, label: (prevGps && prevGps.label) || '' } });
+    const lat = +pos.coords.latitude.toFixed(7), lng = +pos.coords.longitude.toFixed(7);
+    /* Telefon obcas vrati nesmysl (nula uprostred oceanu, poloha z jine site).
+       Radeji nic nez spendlik, proti kteremu se pak nikdo neprihlasi. */
+    if (!gpsVCesku(lat, lng)) { toast('Poloha vyšla mimo Česko — zkus to venku nebo zadej souřadnice ručně'); return; }
+    /* Popisek se ZAHAZUJE: „Nastaveno podle: Novodvorska 413/135" platilo
+       pro nalezenou adresu, ne pro misto, kde zrovna stojim. */
+    await db.collection('projects').doc(pid).update({ gps: { lat, lng, tol: CFG.gpsTolerance || 100, label: '' } });
     toast('GPS nastavena podle aktuální polohy ✓');
   }, () => toast('Polohu se nepodařilo zjistit'), { enableHighAccuracy: true, timeout: 10000 });
 }
@@ -2458,8 +2659,28 @@ async function addMile(pid) {
   await ulozMilniky(pid, ms);
 }
 async function delMile(pid, i) {
-  const p = proj(pid); const ms = (p.milestones || []).slice(); ms.splice(i, 1);
+  const p = proj(pid); const ms = (p.milestones || []).slice();
+  if (!ms[i]) return;
+  /* Doted stacilo jedno tuknuti na krizek — a zmena se hned propsala
+     investorovi na portal. Vratit to nejde. */
+  if (!await potvrd('Smazat milník „' + (ms[i].t || '') + '"?\n\n' +
+    'Zmizí i investorovi na portálu a přepočítá se průběh stavby. Vrátit to nejde — jen napsat milník znovu.', 'Ano, smazat')) return;
+  ms.splice(i, 1);
   await ulozMilniky(pid, ms);
+}
+/* Preklep v nazvu sel opravit jen tak, ze se milnik smazal a napsal znovu
+   — a tim se ztratil i jeho postup. Ted staci klepnout na text. */
+async function prejmenujMile(pid, i) {
+  const p = proj(pid); const ms = (p.milestones || []).map(m => ({ ...m }));
+  if (!ms[i]) return;
+  const t = await zeptejSe('✏️ Přejmenovat milník', 'Název vidí i investor na portálu. Postup milníku zůstane, jak je.', ms[i].t || '');
+  if (t === null) return;
+  const novy = String(t).trim();
+  if (!novy) { toast('Název milníku nesmí být prázdný'); return; }
+  if (novy === (ms[i].t || '')) return;
+  ms[i].t = novy;
+  await ulozMilniky(pid, ms);
+  toast('Milník přejmenován ✓');
 }
 
 
@@ -2808,6 +3029,11 @@ const _fgCache = new Map();
 let _fgNacitam = 0;   // poradove cislo nacitani — ochrana proti zavodu pri rychlem listovani
 function fgOpen(i) {
   window._fgIdx = i;
+  /* Seznam se pri kazdem prekresleni sklada znovu (a prekresluje se i kdyz
+     jen ubyde polozka fronty). Bez zapamatovaneho id by clovek po sipce
+     skocil na uplne jinou fotku, nez cekal. */
+  const f0 = (window._fgSeznam || [])[i];
+  window._fgId = f0 ? (f0.id || '') : '';
   $('#viewer').innerHTML = `<div class="fviewer">
     <div class="fvtop">
       <span id="fv-count" class="muted"></span>
@@ -2852,9 +3078,16 @@ function fgKrok(smer) {
 /* Prekresli prohlizec pro aktualni fotku: hned thumb (nebo velkou z cache),
    kontext pod fotkou, pak potichu dotahne velkou verzi. */
 async function fgUkaz() {
+  /* Kdyz se seznam mezitim preskladal, dohledame fotku podle id — jinak
+     by sipky listovaly v necem jinem, nez co je zrovna videt. */
+  if (window._fgId) {
+    const j = (window._fgSeznam || []).findIndex(x => x && x.id === window._fgId);
+    if (j >= 0 && j !== window._fgIdx) window._fgIdx = j;
+  }
   const f = window._fgSeznam[window._fgIdx];
   const img = $('#fv-img');
   if (!f || !img) return;
+  window._fgId = f.id || '';
   const moje = ++_fgNacitam;
   img.src = (f.id && _fgCache.get(f.id)) || f.thumb;
   const p = proj(f.pid) || {};
@@ -3063,6 +3296,7 @@ function pgDetail() {
         </div>
         <div class="card">
           <h3>📎 Přílohy</h3>
+          <div class="note" style="margin-top:0">Přílohy se investorovi neposílají — na portál se zrcadlí jen text pro klienta a schválené fotky, v PDF deníku se vypíše pouze název přílohy. Co má investor vidět, patří do textu zápisu nebo mezi fotky.</div>
           ${(e.attachments || []).map((a, i) => `<div class="urow" style="cursor:pointer" onclick="otevritPrilohu('${e.id}',${i})"><span>${(a.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(a.name)}</b><span class="muted" style="margin-left:auto">${a.driveId ? 'zobrazit' : a.data ? 'zobrazit' : 'čeká na odeslání'}</span></div>`).join('') || '<div class="muted">Žádné přílohy.</div>'}
           <div class="aprv"><input type="file" id="att-${e.id}" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" onchange="addAttsToEntry('${e.id}',this.files)"></div>
         </div>
@@ -3880,16 +4114,30 @@ function pgReporty() {
 /* Report za starsi obdobi potrebuje data, ktera nemame naživo (viz OKNO_DNU).
    Bez tohohle by tabulka tise ukazala nuly — a to je podklad pro vyplaty. */
 /* Zapisy starsi nez okno nejsou naživo — dotahnou se na pozadani. */
+/* Kam az jsme se prohledali. Driv se mez pocitala z nejstarsiho zapisu
+   v pameti — a kdyz byl usek prazdny, nic nepribylo, mez se neposunula
+   a dalsi tuknuti prohledalo tentyz prazdny usek porad dokola. Diru delsi
+   nez tri mesice tak neslo prekonat vubec a hlaska tvrdila „starsi zapisy
+   uz nejsou", i kdyz jich v databazi lezely stovky. */
 async function dotahniZapisy() {
-  const nejstarsi = S.entries.reduce((m, e) => (e.date && e.date < m ? e.date : m), oknoOd());
-  const do_ = shiftISO(nejstarsi, -1), od = shiftISO(nejstarsi, -91);
+  const zPameti = S.entries.reduce((m, e) => (e.date && e.date < m ? e.date : m), oknoOd());
+  let mez = (S.zapisyOd && S.zapisyOd < zPameti) ? S.zapisyOd : zPameti;
+  const zacatek = mez;
   S.dotahuji = true; render();
+  let pribylo = 0;
   try {
-    const snap = await db.collection('entries').where('date', '>=', od).where('date', '<=', do_).get();
-    const mam = new Set(S.entries.map(e => e.id));
-    const pribylo = snap.docs.filter(d => !mam.has(d.id)).length;
-    archivujDotazene('entries', snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    toast(pribylo ? 'Načteno ' + pribylo + ' starších zápisů ✓' : 'Starší zápisy už nejsou');
+    for (let kolo = 0; kolo < 3; kolo++) {
+      const do_ = shiftISO(mez, -1), od = shiftISO(mez, -91);
+      const snap = await db.collection('entries').where('date', '>=', od).where('date', '<=', do_).get();
+      const mam = new Set(S.entries.map(e => e.id));
+      pribylo += snap.docs.filter(d => !mam.has(d.id)).length;
+      archivujDotazene('entries', snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      mez = od; S.zapisyOd = od;                 /* posunout VZDY, i kdyz bylo prazdno */
+      if (pribylo) break;
+    }
+    toast(pribylo
+      ? 'Načteno ' + pribylo + ' starších zápisů ✓'
+      : 'V období od ' + fmtISO(S.zapisyOd) + ' do ' + fmtISO(shiftISO(zacatek, -1)) + ' nic není — ťukni znovu pro ještě starší.');
   } catch (e) { toast('Nepovedlo se načíst: ' + (e.code || e.message)); }
   S.dotahuji = false; render();
 }
@@ -4083,9 +4331,20 @@ function uzFiltrovani() {
   return S.users.filter(u => f.some(k => (u.typ || {})[k]));
 }
 
+/* Dva lide se stejnym jmenem se na prihlasovaci obrazovce nedaji rozeznat
+   (roster vypisuje jen jmeno a popis) a odpracovane hodiny se pak tise deli
+   mezi dve totoznosti. Seznam uzivatelu na to proto upozorni. */
+function jmenoKlic(u) { return fullName(u).trim().replace(/\s+/g, ' ').toLowerCase(); }
+function jmenovciMapa() {
+  const m = {};
+  S.users.forEach(u => { const k = jmenoKlic(u); if (k) m[k] = (m[k] || 0) + 1; });
+  return m;
+}
 function pgUzivatele() {
+  const JMENOVCI = jmenovciMapa();
+  const jsouJmenovci = Object.keys(JMENOVCI).some(k => JMENOVCI[k] > 1);
   return `
-  <div class="strip"><h1>Uživatelé</h1><span class="sp"></span><button class="btn amber" onclick="S.newUserType=null;S.editUserId=null;goPage('newuser')">➕ PŘIDAT</button></div>
+  <div class="strip"><h1>Uživatelé</h1><span class="sp"></span><button class="btn amber" onclick="S.newUserType=null;S.editUserId=null;S.newUserActive=null;goPage('newuser')">➕ PŘIDAT</button></div>
   <main>
     <div class="card">
       <h3>🔑 Jak fungují práva — jednoduše (#33)</h3>
@@ -4104,7 +4363,8 @@ function pgUzivatele() {
         ${uzFiltrovani().map(u => { const t = u.typ || {}; const s = S.sazby[u.id]; return `
         <tr style="${u.active === false ? 'opacity:.5' : ''}">
           <td><span class="uav">${ini(u)}</span></td>
-          <td><b>${esc(fullName(u))}</b></td>
+          <td><b>${esc(fullName(u))}</b>${(JMENOVCI[jmenoKlic(u)] || 1) > 1
+            ? `<br><span class="badge b-red" style="margin-top:3px">⚠ ${JMENOVCI[jmenoKlic(u)] === 2 ? 'Dva účty' : JMENOVCI[jmenoKlic(u)] + ' účty'} se stejným jménem</span>` : ''}</td>
           <td class="muted">${esc(kontaktOsoby(u.id).email || '—')}</td>
           <td style="text-align:center">${t.kanc ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
           <td style="text-align:center">${t.teren ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
@@ -4123,6 +4383,12 @@ function pgUzivatele() {
       <div class="pagefoot"><span>${uzFiltrovani().length} z ${S.users.length} uživatelů</span></div>
     </div>
     <div class="note">Čistá sazba (#34) je citlivý údaj — vidí ji jen Vedení. „Vytvořit přihlášení" založí pracovníkovi PIN pro mobilní přihlášení.</div>
+    ${jsouJmenovci ? `<div class="note" style="color:var(--red)">⚠ <b>Dva účty se stejným jménem.</b>
+      Na přihlašovací obrazovce se nedají rozeznat — kdo si vybere ten druhý, odpracuje si hodiny pod jinou identitou
+      a ve výplatách i v deníku pak člověk vypadá, že tam půl měsíce nebyl.<br>
+      <b>Co s tím:</b> otevři si u obou docházku a zjisti, který účet se opravdu používá.
+      Ten druhý přepni na <b>neaktivního</b> a zruš mu přihlášení (🚫) — historie zůstane dohledatelná.
+      Když jde opravdu o dva různé lidi, odliš je ve jméně (třeba „Marco Mercuri ml.").</div>` : ''}
   </main>`;
 }
 function loginForm(udi) {
@@ -4137,13 +4403,19 @@ async function createLogin(udi) {
   const pin = $('#lf-pin').value.trim();
   if (pin.length < 6) { toast('PIN musí mít aspoň 6 znaků'); return; }
   const u = userById(udi);
-  const authEmail = 'u' + udi.toLowerCase() + '@denik.rekovrana.cz';
+  /* Prihlasovaci adresa se cisluje stejne jako u resetPin (pinVerze).
+     Ucet ve Firebase Authentication z prohlizece smazat nejde — po zruseni
+     prihlaseni tam adresa zustava obsazena a druhy pokus by narazil na
+     „ucet uz existuje" a clovek by se nedal zapojit zpatky.
+     Verze 1 = adresa bez cisla, aby uz zalozene ucty platily dal. */
+  const verze = u.pinVerze || 1;
+  const authEmail = 'u' + udi.toLowerCase() + (verze > 1 ? '.v' + verze : '') + '@denik.rekovrana.cz';
   try {
     const secondary = firebase.apps.find(a => a.name === 'sec') || firebase.initializeApp(CFG.firebase, 'sec');
     const cred = await secondary.auth().createUserWithEmailAndPassword(authEmail, pin);
     const role = roleOfTypeKey(typeKeyOfUser(u));
     await db.collection('users_auth').doc(cred.user.uid).set({ role, userDocId: udi, name: fullName(u) });
-    await db.collection('users').doc(udi).update({ uid: cred.user.uid, authEmail });
+    await db.collection('users').doc(udi).update({ uid: cred.user.uid, authEmail, pinVerze: verze });
     /* Do verejneho rosteru jde jen parta a subdodavatele — ti se pres nej
        hledaji na prihlasovaci obrazovce. Vedeni (admin) tam nepatri (B6):
        roster cte kdokoli z internetu a vydal by prihlasovaci e-mail
@@ -4155,7 +4427,15 @@ async function createLogin(udi) {
     }
     await secondary.auth().signOut();
     closeModal(); toast('Účet vytvořen ✓ PIN předej pracovníkovi.');
-  } catch (e) { toast('Chyba: ' + (e.code === 'auth/email-already-in-use' ? 'účet už existuje' : e.message)); }
+  } catch (e) {
+    /* Zbyla adresa ze zruseneho prihlaseni (nebo z doby pred cislovanim):
+       zvednout pinVerze a nechat vedeni tuknout znovu — druhy pokus uz
+       sklada jinou adresu a projde. Nic se nemusi migrovat. */
+    if (e.code === 'auth/email-already-in-use') {
+      await db.collection('users').doc(udi).update({ pinVerze: verze + 1 }).catch(() => {});
+      toast('Adresa byla obsazená — ťukni prosím na „Vytvořit účet" ještě jednou.');
+    } else toast('Chyba: ' + e.message);
+  }
 }
 /* ---- zmena PINu a zruseni prihlaseni (B1) ----
    Firebase z prohlizece neumi zmenit heslo cizimu uctu — to svede jen server.
@@ -4252,8 +4532,16 @@ async function zrusitPrihlaseni(udi) {
   try {
     await db.collection('users_auth').doc(u.uid).delete().catch(() => {});
     await db.collection('roster').doc(udi).delete().catch(() => {});
-    await db.collection('users').doc(udi).update({ uid: firebase.firestore.FieldValue.delete(), authEmail: firebase.firestore.FieldValue.delete() });
-    toast('Přihlášení zrušeno ✓');
+    /* Ucet v Authentication zustava — smazat ho jde jen ze serveru. Proto
+       se zvedne pinVerze: az bude clovek potrebovat prihlaseni znovu,
+       createLogin mu poskladá NOVOU adresu a nenarazi na „ucet uz existuje".
+       Bez tohohle se zrusene prihlaseni uz nikdy nedalo zalozit. */
+    await db.collection('users').doc(udi).update({
+      uid: firebase.firestore.FieldValue.delete(),
+      authEmail: firebase.firestore.FieldValue.delete(),
+      pinVerze: (u.pinVerze || 1) + 1
+    });
+    toast('Přihlášení zrušeno ✓ Až mu ho budeš vytvářet znovu, dostane novou adresu.');
   } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
 }
 
@@ -4293,22 +4581,26 @@ async function delProject(pid) {
   /* Pocty, pojistka i mazani MUSI jit z databaze, ne z pameti — naživo je
      jen posledni mesic (OKNO_DNU). Z pameti by pojistka mlcela u starsi
      stavby a mazani by nechalo v databazi sirotky bez projektu. */
-  let ent, att, tsk, vpr, hls, kli, fot;
+  let ent, att, tsk, vpr, hls, kli, fot, pzn;
   try {
-    [ent, att, tsk, vpr, hls, kli, fot] = await Promise.all([
+    [ent, att, tsk, vpr, hls, kli, fot, pzn] = await Promise.all([
       db.collection('entries').where('pid', '==', pid).get(),
       db.collection('attendance').where('pid', '==', pid).get(),
       db.collection('tasks').where('pid', '==', pid).get(),
       db.collection('viceprace').where('pid', '==', pid).get(),
       db.collection('hlaseni').where('pid', '==', pid).get(),
       db.collection('klice').where('pid', '==', pid).get(),
-      db.collection('fotonahledy').where('pid', '==', pid).get()
+      db.collection('fotonahledy').where('pid', '==', pid).get(),
+      /* Poznamky ke stavbe (kody od dveri, kontakty na spravce) se vazou
+         pres pid a doted po smazani stavby zustavaly v databazi jako
+         sirotci — nikde uz se nezobrazily a nikdo je nesmazal. */
+      db.collection('poznamky').where('pid', '==', pid).get()
     ]);
   } catch (e) {
     await oznam('Nepodařilo se ověřit, co na stavbě visí (' + (e.code || e.message) + ').\n\nBez toho se stavba nemaže — zkus to znovu s připojením.');
     return;
   }
-  const zapisu = ent.size, dochazky = att.size, hlaseni = hls.size, klicu = kli.size;
+  const zapisu = ent.size, dochazky = att.size, hlaseni = hls.size, klicu = kli.size, poznamek = pzn.size;
   const ukolu = tsk.docs.filter(d => (d.data().stav || '') !== 'sablona').length;
   const vp = vpr.size;
   if (dochazky || hlaseni) {
@@ -4337,13 +4629,17 @@ async function delProject(pid) {
     for (const d of kli.docs) await d.ref.delete().catch(() => {});
     /* fotonahledy zapisu i ukolu stavby — delEntry je uklizi, tady se doted neuklizely vubec */
     for (const d of fot.docs) await d.ref.delete().catch(() => {});
+    /* poznamky ke stavbe — vazou se pres pid, doted se neuklizely vubec */
+    for (const d of pzn.docs) await d.ref.delete().catch(() => {});
     /* zapisy stavby pryc i z archivu slevani, at v Deniku nestrasi duchove */
     S.archiv.entries.forEach((d, id) => { if (d.pid === pid) S.archiv.entries.delete(id); });
     slozOkno('entries');
     const tok = await tokenPortaluAsync(pid); // token je v admin-only /portaly (S2)
     if (tok) {
       /* 'fotky' = velke kopie fotek pro investora — mazou se s portalem */
-      for (const kol of ['feed', 'vp', 'docs', 'fotky']) {
+      /* 'actions' = souhlasy investora s vicepracemi. Doted zustavaly
+         v databazi i po smazani stavby. */
+      for (const kol of ['feed', 'vp', 'docs', 'fotky', 'actions']) {
         const sn = await db.collection('portals').doc(tok).collection(kol).get().catch(() => null);
         if (sn) for (const d of sn.docs) await d.ref.delete().catch(() => {});
       }
@@ -4407,7 +4703,9 @@ function typeKeyOfUser(u) {
   const t = (u && u.typ) || {};
   return t.kanc ? 'kanc' : t.inv ? 'inv' : t.sub ? 'sub' : 'teren';
 }
-function editUser(udi) { S.editUserId = udi; S.newUserType = null; goPage('newuser'); }
+/* newUserActive = prepinac „Aktivni uzivatel" v pameti. Nuluje se pri kazdem
+   otevreni formulare, jinak by se stav prenesl na dalsiho cloveka. */
+function editUser(udi) { S.editUserId = udi; S.newUserType = null; S.newUserActive = null; goPage('newuser'); }
 function pgNewUser() {
   const edit = S.editUserId ? userById(S.editUserId) : null;
   const t = S.newUserType || (edit ? (edit.typ.kanc ? 'kanc' : edit.typ.inv ? 'inv' : edit.typ.sub ? 'sub' : 'teren') : null);
@@ -4446,10 +4744,28 @@ function pgNewUser() {
         <label>Popis — ukáže se pod jménem na přihlašovací obrazovce</label>
         <input type="text" id="nu-r" value="${esc(edit ? edit.role || '' : '')}" placeholder="např. Vedoucí party, Subdodavatel — elektro…">
       </div>
-      ${edit ? `<div class="formsec"><label style="display:flex;align-items:center;gap:8px;text-transform:none"><span class="toggle ${edit.active !== false ? 'on' : ''}" onclick="db.collection('users').doc('${edit.id}').update({active:${edit.active === false}}).then(render)"><i></i></span> Aktivní uživatel</label></div>` : ''}
+      ${/* Prepinac se drive ukladal SAM, hned po tuknuti — odchod pres „←"
+           uz zmenu nevratil a tichou chybu zapisu (bez catch) se clovek
+           nedozvedel. Ted zije v pameti a uklada se s celym formularem. */''}
+      ${edit ? (() => { const akt = S.newUserActive != null ? S.newUserActive : edit.active !== false; return `
+      <div class="formsec"><label style="display:flex;align-items:center;gap:8px;text-transform:none"><span class="toggle ${akt ? 'on' : ''}" onclick="S.newUserActive=${!akt};render()"><i></i></span> Aktivní uživatel</label>
+        ${akt !== (edit.active !== false) ? '<div class="note" style="margin-top:6px">Změna se uloží až tlačítkem <b>💾 ULOŽIT</b>.</div>' : ''}</div>`; })() : ''}
       ` : '<div class="empty">Nejdřív vyber typ přístupu ↑</div>'}
     </div>
   </main>`;
+}
+/* Hromadna zmena jednoho pole ve vice dokumentech. Po jednom by se u cloveka
+   s rocni historii cekalo pul minuty — do jedne davky se vejde 500 zmen. */
+async function prepisPole(docs, zmena) {
+  let n = 0;
+  for (let i = 0; i < docs.length; i += 400) {
+    const b = db.batch();
+    const cast = docs.slice(i, i + 400);
+    cast.forEach(d => b.update(d.ref, zmena));
+    await b.commit();
+    n += cast.length;
+  }
+  return n;
 }
 async function saveUser() {
   const edit = S.editUserId ? userById(S.editUserId) : null;
@@ -4468,7 +4784,9 @@ async function saveUser() {
        delala ze suba pracovnika i tam, kam nepatri (rucni doplneni dochazky,
        seznam dochazky). Seznamy se ted ptaji na suba rovnou. */
     typ: { kanc: typKey === 'kanc' ? 1 : 0, teren: (typKey === 'kanc' || typKey === 'teren') ? 1 : 0, inv: typKey === 'inv' ? 1 : 0, sub: typKey === 'sub' ? 1 : 0 },
-    role: $('#nu-r').value.trim(), active: edit ? edit.active !== false : true
+    /* prepinac „Aktivni uzivatel" zije jen v pameti a uklada se az tady,
+       stejne jako vsechna ostatni policka formulare */
+    role: $('#nu-r').value.trim(), active: S.newUserActive != null ? S.newUserActive : (edit ? edit.active !== false : true)
   };
   // FIX: sazby přečíst z formuláře PŘED zápisem do users — await níže spustí onSnapshot render(),
   // který formulář překreslí a vyprázdní, takže se sazba nikdy neuložila (a existující se mazala).
@@ -4484,7 +4802,7 @@ async function saveUser() {
      prepne cloveka na subdodavatele nebo investora, formular pole se sazbou
      vubec nevykresli — proto se stara hodnota musi smazat natvrdo, jinak by
      subovi v seznamu uzivatelu dal svitilo treba „300 Kc/h". */
-  if (typKey === 'sub' || typKey === 'inv') {
+  if (typKey === 'sub' || typKey === 'inv' || typKey === 'kanc') {
     await db.collection('sazby').doc(docId).delete().catch(() => {});
   } else if (shEl) {
     if (shVal) await db.collection('sazby').doc(docId).set(scVal ? { h: shVal, c: scVal } : { h: shVal });
@@ -4519,18 +4837,33 @@ async function saveUser() {
   const noveJmeno = (j + ' ' + p).trim();
   let opraveno = 0;
   if (edit && stareJmeno && stareJmeno !== noveJmeno) {
+    /* Jmenovec: kdyz totez jmeno nosi jeste nekdo dalsi, nesmi se
+       prejmenovavat podle TEXTU — prepsali bychom i cizi zapisy.
+       U takoveho cloveka jdeme jen podle jeho prihlasovaciho uctu. */
+    const jmenovec = S.users.some(x => x.id !== docId && fullName(x).trim() === stareJmeno);
+    toast('Přepisuji jméno i ve starších záznamech…');
     try {
-      for (const t of S.tasks.filter(x => x.respId === docId || x.resp === stareJmeno)) {
+      for (const t of S.tasks.filter(x => x.respId === docId || (!jmenovec && x.resp === stareJmeno))) {
         const res = (t.res || []).map(x => x === stareJmeno ? noveJmeno : x);
         await db.collection('tasks').doc(t.id).update({ respId: docId, resp: noveJmeno, res });
         opraveno++;
       }
-      for (const e of S.entries.filter(x => x.author === stareJmeno)) {
-        await db.collection('entries').doc(e.id).update({ author: noveJmeno }); opraveno++;
-      }
-      for (const a of S.attendance.filter(x => x.userDocId === docId && x.userName !== noveJmeno)) {
-        await db.collection('attendance').doc(a.id).update({ userName: noveJmeno }); opraveno++;
-      }
+      /* Zapisy, dochazka a hlaseni se hledaji v DATABAZI, ne v pameti: naživo
+         je jen poslednich 30 dni, takze ve starsim deniku by preklep zustal —
+         a delUser, ktery se pta databaze uz na NOVE jmeno, by ty starsi zapisy
+         nenasel a nabidl by cloveka smazat, i kdyz po nem zaznamy zustavaji.
+         Cena: jednorazove radove stovky cteni pri oprave jmena. */
+      const zapisy = new Map();
+      if (edit.uid) (await db.collection('entries').where('authorUid', '==', edit.uid).get())
+        .docs.forEach(d => zapisy.set(d.id, d));
+      if (!jmenovec) (await db.collection('entries').where('author', '==', stareJmeno).get())
+        .docs.forEach(d => zapisy.set(d.id, d));
+      opraveno += await prepisPole([...zapisy.values()].filter(d => d.data().author !== noveJmeno), { author: noveJmeno });
+      const dch = await db.collection('attendance').where('userDocId', '==', docId).get();
+      opraveno += await prepisPole(dch.docs.filter(d => d.data().userName !== noveJmeno), { userName: noveJmeno });
+      const hls = await db.collection('hlaseni').where('userDocId', '==', docId).get();
+      opraveno += await prepisPole(hls.docs.filter(d => d.data().userName !== noveJmeno), { userName: noveJmeno });
+      if (jmenovec && !edit.uid) toast('⚠ Stejné jméno má i někdo další a tenhle člověk nemá přihlášení — starší zápisy jsem raději nepřepisoval, aby se nepřepsaly cizí.');
     } catch (e) { toast('⚠ Jméno jsem změnil, ale ne všude se to propsalo: ' + (e.code || e.message)); }
     // jmeno srovnat i v rosteru — ale jen u party a subu, vedeni v rosteru byt nema (B6)
     /* update, ne set(merge): kdo v rosteru zaznam nema (nema prihlaseni),
@@ -5998,7 +6331,9 @@ function viewPortal() {
     </div>` : ''}
     ${S.portalDocs.length ? `<div class="card">
       <h3>📁 Dokumenty</h3>
-      ${S.portalDocs.map(d => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${esc(d.title)}')"><span>📄</span><b>${esc(d.title)}</b><span class="muted" style="margin-left:auto">zobrazit</span></div>`).join('')}
+      ${S.portalDocs.map(d => d.data
+        ? `<div class="urow" style="cursor:pointer" onclick="portalDok('${d.id}','${esc(d.title)}')"><span>📄</span><b>${esc(d.title)}</b><span class="muted" style="margin-left:auto">zobrazit</span></div>`
+        : `<div class="urow"><span>📄</span><b>${esc(d.title)}</b><span class="muted" style="margin-left:auto">připravuje se</span></div>`).join('')}
     </div>` : ''}
     <div class="card">
       <h3>📓 Průběh stavby <span class="muted" style="font-weight:400">— zápisy a fotky</span></h3>
@@ -6027,8 +6362,10 @@ async function portalVpAction(vpid, action) {
 }
 
 /* ---- sync portal hlavičky při změně projektu ---- */
-async function syncPortalHeader(p) {
-  const tok = tokenPortalu(p.id); // token je v admin-only /portaly (S2); bezi jen u admina s nactenym seznamem
+async function syncPortalHeader(p, tokZnamy) {
+  /* tokZnamy: pri zakladani portalu je token cerstve zapsany a v pameti
+     (S.portaly) jeste nemusi byt — posluchac dorazi az za chvili. */
+  const tok = tokZnamy || tokenPortalu(p.id); // token je v admin-only /portaly (S2); bezi jen u admina s nactenym seznamem
   if (!tok) return;
   // Do mirroru jde prubeh i faze uz odvozene z harmonogramu (ne stary rucni
   // zapis) — portal pak nemuze ukazat jine cislo nez detail projektu.
