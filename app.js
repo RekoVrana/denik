@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '29. 8. 2026 k';
+const VERZE = '29. 8. 2026 l';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -867,8 +867,16 @@ async function frontaZapsatDoZaznamu(it, fileId) {
   const snap = await ref.get();
   if (!snap.exists) return;
   const e = snap.data();
-  if (it.druh === 'foto') {
-    const photos = (e.photos || []).map(ph => ph.id === it.photoId ? { ...ph, driveId: fileId } : ph);
+  if (it.druh === 'foto' || it.druh === 'nahled') {
+    /* Na fotku ted jdou na Drive DVA soubory a kazdy ma v zaznamu sve pole:
+       - 'nahled' (prohlizeci kopie 1600 px) -> driveId — z nej cte prohlizeni,
+         galerie i portal, presne jako driv;
+       - 'foto' s priznakem original -> origId — puvodni soubor z telefonu
+         i s metadaty (datum, GPS), otevira ho „Plné rozlišení".
+       Polozka 'foto' BEZ priznaku je jeste ze stare fronty (pred touto
+       zmenou) — byla to prohlizeci kopie, patri tedy dal do driveId. */
+    const pole = (it.druh === 'foto' && it.original) ? 'origId' : 'driveId';
+    const photos = (e.photos || []).map(ph => ph.id === it.photoId ? { ...ph, [pole]: fileId } : ph);
     await ref.update({ photos });
     /* Zrcadleni na portal smi jen admin — u pracovnika by spadlo i po
        uspesnem zapisu fotek a polozka by se vracela do fronty. Portal se
@@ -911,11 +919,31 @@ function zmensitDataUrl(dataUrl, maxPx, q) {
    nese ~25-60 kB — bez stropu by se zaznam s 20+ fotkami tise neulozil,
    ale uzivatel by videl "ulozeno". Osm sedi na kalkulaci u fotonahledu. */
 const MAX_FOTEK_ZAZNAMU = 8;
+/* Nahradni dlazdice pro fotku, ktere prohlizec neumi vyrobit nahled
+   (typicky HEIC mimo iPhone) — bez ni by v mrizce strasil rozbity obrazek. */
+const NAHLED_NEDOSTUPNY = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" fill="#d8dde3"/><text x="60" y="58" font-size="34" text-anchor="middle">📷</text><text x="60" y="88" font-size="12" text-anchor="middle" fill="#556">bez náhledu</text></svg>');
+/* Strop pro original: most (Apps Script) ma limit na velikost pozadavku
+   a prilohy uz dnes jedou s 15 MB — vetsi soubor by pri odesilani stejne
+   spadl a donekonecna blokoval frontu. Bezna fotka z iPhonu ma 3-5 MB. */
+const MAX_ORIGINAL_MB = 15;
 async function processPhotos(files, label) {
   for (const f of files) {
     if (S.draftPhotos.length >= MAX_FOTEK_ZAZNAMU) {
       oznam('Do jednoho záznamu jde nejvíc ' + MAX_FOTEK_ZAZNAMU + ' fotek — víc by se nevešlo a záznam by se neuložil.\nDalší fotky prosím přidej do nového zápisu.');
       break;
+    }
+    /* ORIGINAL: bajty presne tak, jak prisly z telefonu. Prekresleni pres
+       platno (scaleJpeg) zahodi datum porizeni, GPS a dalsi metadata — pro
+       denik, ktery muze slouzit jako doklad, se proto original uklada
+       vedle zmensenin a nahraje se na Drive netknuty. */
+    let orig = null;
+    if (f.size > MAX_ORIGINAL_MB * 1024 * 1024) {
+      toast('⚠ ' + (f.name || 'Soubor') + ' má přes ' + MAX_ORIGINAL_MB + ' MB — na Drive půjde jen zmenšená kopie (bez metadat).');
+    } else {
+      try {
+        const data = await new Promise((ok, ne) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => ne(r.error); r.readAsDataURL(f); });
+        orig = { data, mime: f.type || 'application/octet-stream', name: f.name || '' };
+      } catch (e) { console.warn('original fotky se nepodarilo precist', e); }
     }
     try {
       const img = await fileToImage(f);
@@ -925,31 +953,54 @@ async function processPhotos(files, label) {
          Firestoru). Prohlizeni si velkou verzi vyzvedne pres most z Drive. */
       const mid = scaleJpeg(img, 1100, 0.72);
       const full = scaleJpeg(img, 1600, 0.82);
-      S.draftPhotos.push({ tmp: uid8(), thumb, mid, full, label: label || f.name.replace(/\.[^.]+$/, ''), status: 'pending', driveId: null });
+      S.draftPhotos.push({ tmp: uid8(), thumb, mid, full, orig, label: label || f.name.replace(/\.[^.]+$/, ''), status: 'pending', driveId: null });
       URL.revokeObjectURL(img.src);
-    } catch (e) { toast('Fotku se nepodařilo načíst: ' + f.name); }
+    } catch (e) {
+      /* Prohlizec fotku nedokazal dekodovat (napr. HEIC na pocitaci).
+         Kdyz mame aspon original, fotka NESMI propadnout: nahraje se on,
+         jen dlazdice zustane bez nahledu a clovek dostane hlasku. */
+      if (orig) {
+        S.draftPhotos.push({ tmp: uid8(), thumb: NAHLED_NEDOSTUPNY, mid: null, full: null, orig, label: label || (f.name || '').replace(/\.[^.]+$/, ''), status: 'pending', driveId: null });
+        toast('⚠ Náhled fotky ' + (f.name || '') + ' se nepodařilo vyrobit — originál se ale na Drive nahraje.');
+      } else toast('Fotku se nepodařilo načíst: ' + f.name);
+    }
   }
   render();
 }
 /* Fotky uz se nenahravaji pred ulozenim zaznamu. Zaznam vznikne hned (i bez
    signalu) a plne verze se postavi do fronty — odeslou se samy. */
+/* Pripona pro original na Drive: z puvodniho jmena souboru, jinak podle
+   mime — HEIC z iPhonu nesmi skoncit s priponou .jpg, to by mátlo. */
+function priponaSouboru(name, mime) {
+  const m = /\.([A-Za-z0-9]{1,5})$/.exec(name || '');
+  if (m) return '.' + m[1].toLowerCase();
+  const mapa = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/heic': '.heic', 'image/heif': '.heif', 'image/gif': '.gif', 'image/tiff': '.tif' };
+  return mapa[(mime || '').toLowerCase()] || '.bin';
+}
 async function zaraditFotky(p, entryId) {
   const out = [];
   for (const ph of S.draftPhotos) {
     const id = uid8();
-    out.push({ id, thumb: ph.thumb, label: ph.label, status: 'pending', driveId: null });
+    /* driveId = prohlizeci kopie (jako dosud), origId = puvodni soubor
+       s metadaty — obe doplni fronta, az se soubory nahraji na Drive. */
+    out.push({ id, thumb: ph.thumb, label: ph.label, status: 'pending', driveId: null, origId: null });
     /* Stredni verze se do /fotonahledy UZ NEUKLADA: velka verze lezi na
        Drive a most ji umi vydat (getPhoto), takze by tu jen zabirala
        ~220 kB na fotku a tisice fotek by vycerpaly 1GB limit databaze.
        Stare fotky svuj nahled v /fotonahledy maji dal — slouzi jako zaloha. */
+    /* nazev souboru = prijmeni nahravajiciho — iPhone posila "image",
+       coz na Drive nic nerika; datum a cas prida most na zacatek */
+    const jmeno = (S.me && S.me.prijmeni) || fullName(S.me || {}) || 'foto';
+    const spol = { entryId, photoId: id, folderId: (p && p.driveFolderId) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', date: isoToday() };
     try {
-      await frontaPridat({
-        druh: 'foto', entryId, photoId: id,
-        /* nazev souboru = prijmeni nahravajiciho — iPhone posila "image",
-           coz na Drive nic nerika; datum a cas prida most na zacatek */
-        name: ((S.me && S.me.prijmeni) || fullName(S.me || {}) || 'foto') + '.jpg', mime: 'image/jpeg',
-        data: ph.full, folderId: (p && p.driveFolderId) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', date: isoToday()
-      });
+      /* PROHLIZECI KOPIE (1600 px JPEG) — druh 'nahled', at ji most odlisi
+         od originalu. Jeji fileId se zapise do driveId, takze prohlizeni,
+         galerie i portal jedou beze zmeny. */
+      if (ph.full) await frontaPridat({ druh: 'nahled', name: jmeno + '.jpg', mime: 'image/jpeg', data: ph.full, ...spol });
+      /* ORIGINAL tak, jak prisel z telefonu — vcetne data porizeni a GPS.
+         Skutecny mime i pripona (klidne HEIC); priznak original rika
+         fronte, ze jeho fileId patri do origId, ne do driveId. */
+      if (ph.orig) await frontaPridat({ druh: 'foto', original: true, name: jmeno + priponaSouboru(ph.orig.name, ph.orig.mime), mime: ph.orig.mime, data: ph.orig.data, ...spol });
     } catch (e) { console.warn('fronta foto', e); toast('⚠ Fotku se nepodařilo uložit do fronty — zůstal jen náhled'); }
   }
   S.draftPhotos = [];
@@ -2147,22 +2198,26 @@ async function delMile(pid, i) {
 /* ---- fotka: dlaždice ---- */
 function phTile(ph, clientView, eid) {
   const st = clientView ? '' : `<span class="st" ${eid ? `onclick="event.stopPropagation();cyclePhoto('${eid}','${ph.id}')"` : ''}>${ph.status === 'approved' ? '✓' : ph.status === 'pending' ? '⏳' : '🔒'}</span>`;
-  return `<div class="ph" onclick="otevritFoto('${ph.id || ''}','${ph.driveId || ''}','${esc(ph.label)}',this)">
+  return `<div class="ph" onclick="otevritFoto('${ph.id || ''}','${ph.driveId || ''}','${esc(ph.label)}',this,'${ph.origId || ''}')">
     <img src="${ph.thumb}" alt="">${st}<small>${esc(ph.label || '')}</small></div>`;
 }
 /* Tlacitko "Plne rozliseni (Drive)" jen pro prihlasene: firemni Drive je
    soukromy a investora na portalu by odkaz jen poslal na prihlasovaci
    obrazovku Googlu se zadosti o pristup — nikdy by mu nefungoval. */
-function openPhoto(driveId, label, el) {
+function openPhoto(driveId, label, el, origId) {
   const img = el ? el.querySelector('img') : null;
   const src = img ? img.src : '';
+  /* „Plné rozlišení" otevira prednostne ORIGINAL (origId) — ten nese datum
+     porizeni a GPS. Stare fotky original nemaji, tam se otevre prohlizeci
+     kopie (driveId) jako driv. */
+  const plneId = origId || driveId;
   $('#viewer').innerHTML = `<div class="viewer" onclick="if(event.target===this)closeDoc()"><div class="vwrap">
     <div class="vhead"><b style="flex:1;min-width:120px">${esc(label)}</b>
       ${/* Plne rozliseni vydava MOST, ne Google — stejne jako u priloh a
             podkladu. Driv to byl primy odkaz na drive.google.com, takze to
             po kazdem chtelo ucet Google (a parta ho nema vubec). Most soubor
             vyda i cloveku bez uctu a klic pritom neopousti server. */''}
-      ${driveId && !S.portalToken ? `<button class="btn ghost sm" onclick="openDriveDoc('${driveId}','${esc(label)}')">🔍 Plné rozlišení</button>` : '<span class="badge b-int">jen náhled</span>'}
+      ${plneId && !S.portalToken ? `<button class="btn ghost sm" onclick="openDriveDoc('${plneId}','${esc(label)}')">🔍 Plné rozlišení</button>` : '<span class="badge b-int">jen náhled</span>'}
       <button class="btn dark sm" onclick="closeDoc()">✕ Zavřít</button></div>
     <div class="vbody" style="padding:0;align-items:center"><img src="${src}" style="width:100%;max-height:80vh"></div></div></div>`;
 }
@@ -2173,8 +2228,8 @@ function closeDoc() { $('#viewer').innerHTML = ''; }
    fotky, ktere tam nahled jeste maji; (c) kdyz nic z toho, zustane maly
    nahled a nic nespadne (typicky offline). Parta nepotrebuje ucet Google —
    klic k mostu ma z databaze kazdy prihlaseny. */
-async function otevritFoto(photoId, driveId, label, el) {
-  openPhoto(driveId, label, el);
+async function otevritFoto(photoId, driveId, label, el, origId) {
+  openPhoto(driveId, label, el, origId);
   const v = $('#viewer');
   const img = v && v.querySelector('.vbody img');
   if (!img || (!photoId && !driveId)) return;
@@ -2271,14 +2326,22 @@ async function openDriveDoc(driveId, title) {
       if (j.ok) {
         const bajty = Uint8Array.from(atob(j.data), c => c.charCodeAt(0));
         const url = URL.createObjectURL(new Blob([bajty], { type: j.mime || 'application/octet-stream' }));
-        const jeObrazek = (j.mime || '').indexOf('image/') === 0;
+        const mm = (j.mime || '').toLowerCase();
+        /* Original z iPhonu byva HEIC/HEIF — do <img> ho cpat nejde, vetsina
+           prohlizecu ho neumi a ukazala by rozbity obrazek. Zobrazi se jen
+           formaty, ktere prohlizece bezne umeji; u ostatnich obrazku dostane
+           clovek srozumitelnou hlasku + tlacitko Uložit nahore uz existuje. */
+        const jeObrazek = mm.indexOf('image/') === 0;
+        const zobrazitelny = /^image\/(jpe?g|png|webp|gif|avif|svg)/.test(mm);
         $('#viewer').innerHTML = `<div class="viewer" onclick="if(event.target===this)closeDoc()"><div class="vwrap">
           <div class="vhead"><b style="flex:1;min-width:120px">${esc(title)}</b>
             <a class="btn ghost sm" href="${url}" download="${esc(nazevKeStazeni(title, j.mime))}">⬇ Uložit do telefonu</a>
             <button class="btn dark sm" onclick="closeDoc()">✕ Zavřít</button></div>
-          <div class="vbody" style="padding:0;align-items:center">${jeObrazek
+          <div class="vbody" style="padding:0;align-items:center">${zobrazitelny
             ? `<img src="${url}" style="width:100%;max-height:80vh">`
-            : `<iframe src="${url}" style="width:100%;height:80vh;border:0"></iframe>`}</div></div></div>`;
+            : jeObrazek
+              ? `<div class="empty" style="padding:30px">Tenhle formát fotky (${esc(j.mime || '')}) prohlížeč zobrazit neumí.<br>Originál i s datem pořízení a polohou si ulož tlačítkem „⬇ Uložit do telefonu" nahoře.</div>`
+              : `<iframe src="${url}" style="width:100%;height:80vh;border:0"></iframe>`}</div></div></div>`;
         return;
       }
       console.warn('most getFile', j.error);
@@ -2531,8 +2594,9 @@ async function fgUkaz() {
   $('#fv-cap').innerHTML = `<b>${fmtISOFull(f.date)}</b>
     <span>🛠 ${esc(p.name || '—')} · 👷 ${esc(f.author || '—')}${f.label ? ' · 📷 ' + esc(f.label) : ''}</span>
     ${f.veta ? `<em>„${esc(f.veta)}"</em>` : ''}`;
-  /* Plne rozliseni z Drive — jen kdyz fotka na Drive opravdu je */
-  $('#fv-drive').innerHTML = f.driveId ? `<button class="fvbtn" onclick="fgDrive()">🔍 Plné rozlišení</button>` : '';
+  /* Plne rozliseni z Drive — jen kdyz fotka na Drive opravdu je
+     (original origId, nebo aspon prohlizeci kopie driveId) */
+  $('#fv-drive').innerHTML = (f.origId || f.driveId) ? `<button class="fvbtn" onclick="fgDrive()">🔍 Plné rozlišení</button>` : '';
   const prev = $('#fv-prev'), next = $('#fv-next');
   if (prev) prev.disabled = window._fgIdx === 0;
   if (next) next.disabled = window._fgIdx === window._fgSeznam.length - 1;
@@ -2570,11 +2634,12 @@ async function fgVelka(f) {
 }
 function fgDrive() {
   const f = window._fgSeznam[window._fgIdx];
-  if (!f || !f.driveId) return;
+  if (!f || (!f.origId && !f.driveId)) return;
   /* openDriveDoc prevezme #viewer — klavesy galerie se musi odvesit,
      jinak by Esc a sipky strasily nad cizim oknem */
   document.removeEventListener('keydown', fgKlavesy);
-  openDriveDoc(f.driveId, (proj(f.pid) || {}).name || f.label || 'Fotka');
+  /* prednostne original s metadaty, jinak prohlizeci kopie jako driv */
+  openDriveDoc(f.origId || f.driveId, (proj(f.pid) || {}).name || f.label || 'Fotka');
 }
 
 /* ---- stranka Fotky (menu vedeni) — galerie pres vsechny stavby ---- */
