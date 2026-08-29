@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '28. 8. 2026 o';
+const VERZE = '29. 8. 2026 a';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
