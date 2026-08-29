@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '29. 8. 2026 c';
+const VERZE = '29. 8. 2026 d';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -1065,7 +1065,11 @@ async function keepInternalEntry(id) {
   await db.collection('entries').doc(id).update({ status: 'internal', photos });
   /* token portalu uz neni na projektu, ale v admin-only /portaly (S2) */
   const tok = await tokenPortaluAsync(e.pid);
-  if (tok) await db.collection('portals').doc(tok).collection('feed').doc(id).delete().catch(() => {});
+  if (tok) {
+    await db.collection('portals').doc(tok).collection('feed').doc(id).delete().catch(() => {});
+    /* velke fotky zapisu pryc z portalu — interni zapis tam nema co nechat */
+    for (const ph of (e.photos || [])) if (ph.id) db.collection('portals').doc(tok).collection('fotky').doc(ph.id).delete().catch(() => {});
+  }
   toast('Označeno jako interní — investor neuvidí');
 }
 async function mirrorEntry(e) {
@@ -1076,10 +1080,43 @@ async function mirrorEntry(e) {
      to zapadnout: investor by zapis nevidel a vedeni by o tom nevedelo.
      Proto se pripadna chyba hlasi a dorovnaPortaly() to pak dozene. */
   if (!tok) return;
-  await db.collection('portals').doc(tok).collection('feed').doc(e.id).set({
-    date: e.date, client: e.client,
-    photos: (e.photos || []).filter(ph => ph.status === 'approved').map(ph => ({ thumb: ph.thumb, driveId: ph.driveId || null, label: ph.label || '' }))
-  }).catch(e2 => { console.warn('zrcadleni na portal selhalo', e2); throw e2; });
+  const feedRef = db.collection('portals').doc(tok).collection('feed').doc(e.id);
+  /* Velka fotka pro investora: stredni verze z /fotonahledy se kopiruje do
+     /portals/{token}/fotky/{id} — investor neni prihlaseny, takze na
+     /fotonahledy (jen role) ani na Drive (soukromy) nedosahne. KAZDA fotka
+     ma VLASTNI dokument (~200 kB, limit dokumentu je 1 MB). Co uz je
+     zkopirovane, se pozna z markeru fotoId v minulem feed dokumentu — NE
+     vypisem /fotky, ten by stahoval vsechny velke dokumenty najednou.
+     fotoId: id = velka verze na portalu je; '' = stredni verze neexistuje
+     (starsi fotka) a znovu se nezkousi; null = kopie se nepovedla,
+     dorovnejPortaly() ji pri pristim prihlaseni vedeni zkusi znovu. */
+  const stary = await feedRef.get().catch(() => null);
+  const uzMa = {};
+  if (stary && stary.exists) for (const ph of (stary.data().photos || [])) {
+    if (ph.id && ph.fotoId !== undefined) uzMa[ph.id] = ph.fotoId;
+  }
+  const photos = [];
+  for (const ph of (e.photos || []).filter(x => x.status === 'approved')) {
+    let fotoId = (ph.id && uzMa[ph.id] != null) ? uzMa[ph.id] : null;
+    if (fotoId === null && ph.id) {
+      try {
+        const d = await db.collection('fotonahledy').doc(ph.id).get();
+        if (d.exists && d.data().data) {
+          await db.collection('portals').doc(tok).collection('fotky').doc(ph.id).set({ data: d.data().data, entryId: e.id, date: e.date || '' });
+          fotoId = ph.id;
+        } else fotoId = '';   // stara fotka bez stredni verze — investor uvidi aspon nahled
+      } catch (err) { console.warn('kopie velke fotky na portal', err); }  // fotoId zustava null → dorovna se
+    }
+    photos.push({ id: ph.id || '', thumb: ph.thumb, driveId: ph.driveId || null, label: ph.label || '', fotoId: ph.id ? fotoId : '' });
+  }
+  /* fotka uz neni schvalena (prepnuta na interni / smazana) → jeji velka
+     verze nesmi na portalu zustat */
+  const aktualni = new Set(photos.map(ph => ph.id));
+  for (const id of Object.keys(uzMa)) {
+    if (uzMa[id] && !aktualni.has(id)) db.collection('portals').doc(tok).collection('fotky').doc(id).delete().catch(() => {});
+  }
+  await feedRef.set({ date: e.date, client: e.client, photos })
+    .catch(e2 => { console.warn('zrcadleni na portal selhalo', e2); throw e2; });
 }
 
 /* Portal investora se sam dorovna (29. 8.).
@@ -1099,7 +1136,16 @@ async function dorovnejPortaly() {
     const uzTam = new Set(feed.docs.map(d => d.id));
     const chybi = schvalene.filter(e => !uzTam.has(e.id));
     for (const e of chybi) await mirrorEntry(e).catch(() => {});
-    if (chybi.length) console.log('portal ' + ((proj(pid) || {}).name || pid) + ': doplneno ' + chybi.length + ' zaznamu');
+    /* Dorovnat i velke fotky: feed dokument s fotkou bez markeru fotoId
+       (zrcadleny starsi verzi aplikace, nebo se kopie tehdy nepovedla)
+       se zrcadli znovu — mirrorEntry doplni jen to, co chybi.
+       Porovnani == null schvalne: pokryva undefined i null. */
+    const bezFotek = schvalene.filter(e => {
+      const fd = feed.docs.find(d => d.id === e.id);
+      return fd && (fd.data().photos || []).some(ph => ph.fotoId == null);
+    });
+    for (const e of bezFotek) await mirrorEntry(e).catch(() => {});
+    if (chybi.length || bezFotek.length) console.log('portal ' + ((proj(pid) || {}).name || pid) + ': doplneno ' + chybi.length + ' zaznamu, ' + bezFotek.length + ' zaznamu s fotkami');
   }
 }
 async function cyclePhoto(eid, phid) {
@@ -1965,12 +2011,10 @@ async function createPortal(pid) {
      vsechny role vcetne externiho suba a kdo zna token, umi podvrhnout
      schvaleni viceprace investorem. */
   await db.collection('portaly').doc(pid).set({ token });
-  // zrcadli už schválené záznamy
+  /* zrcadli už schválené záznamy — přes mirrorEntry, ať se s nimi zkopírují
+     i velké verze fotek do /fotky (dřív tu byla kopie kódu bez fotek) */
   for (const e of entriesOf(pid).filter(x => x.status === 'approved')) {
-    await db.collection('portals').doc(token).collection('feed').doc(e.id).set({
-      date: e.date, client: e.client,
-      photos: (e.photos || []).filter(ph => ph.status === 'approved').map(ph => ({ thumb: ph.thumb, driveId: ph.driveId || null, label: ph.label || '' }))
-    });
+    await mirrorEntry(e).catch(err => console.warn('zrcadleni pri zalozeni portalu', err));
   }
   for (const d of (p.portalDocs || [])) await db.collection('portals').doc(token).collection('docs').add({ title: d.title, driveId: d.driveId });
   toast('Portál vytvořen ✓ — odkaz najdeš v detailu projektu');
@@ -2016,12 +2060,15 @@ function phTile(ph, clientView, eid) {
   return `<div class="ph" onclick="otevritFoto('${ph.id || ''}','${ph.driveId || ''}','${esc(ph.label)}',this)">
     <img src="${ph.thumb}" alt="">${st}<small>${esc(ph.label || '')}</small></div>`;
 }
+/* Tlacitko "Plne rozliseni (Drive)" jen pro prihlasene: firemni Drive je
+   soukromy a investora na portalu by odkaz jen poslal na prihlasovaci
+   obrazovku Googlu se zadosti o pristup — nikdy by mu nefungoval. */
 function openPhoto(driveId, label, el) {
   const img = el ? el.querySelector('img') : null;
   const src = img ? img.src : '';
   $('#viewer').innerHTML = `<div class="viewer" onclick="if(event.target===this)closeDoc()"><div class="vwrap">
     <div class="vhead"><b style="flex:1;min-width:120px">${esc(label)}</b>
-      ${driveId ? `<a class="btn ghost sm" href="${driveViewUrl(driveId)}" target="_blank">📁 Plné rozlišení (Drive)</a>` : '<span class="badge b-int">jen náhled</span>'}
+      ${driveId && !S.portalToken ? `<a class="btn ghost sm" href="${driveViewUrl(driveId)}" target="_blank">📁 Plné rozlišení (Drive)</a>` : '<span class="badge b-int">jen náhled</span>'}
       <button class="btn dark sm" onclick="closeDoc()">✕ Zavřít</button></div>
     <div class="vbody" style="padding:0;align-items:center"><img src="${src}" style="width:100%;max-height:80vh"></div></div></div>`;
 }
@@ -2039,6 +2086,23 @@ async function otevritFoto(photoId, driveId, label, el) {
     const img = $('#viewer') && $('#viewer').querySelector('.vbody img');
     if (img) img.src = d.data().data;
   } catch (e) { /* nahled nedorazil — zustava maly, to neni chyba */ }
+}
+/* Totez pro portal investora: velka verze se cte z verejne kopie
+   /portals/{token}/fotky (na /fotonahledy ani na Drive neprihlaseny
+   investor nedosahne) — a az po tuknuti, at se stovky kB nestahuji
+   zbytecne u kazde fotky. Bez kopie (stara fotka) zustane maly nahled. */
+async function otevritFotoPortal(fotoId, label, el) {
+  openPhoto('', label, el);   // bez Drive tlacitka — investorovi nikdy fungovat nemuze
+  if (!fotoId || !S.portalToken) return;
+  try {
+    const d = await db.collection('portals').doc(S.portalToken).collection('fotky').doc(fotoId).get();
+    if (!d.exists || !d.data().data) return;
+    const v = $('#viewer');
+    const img = v && v.querySelector('.vbody img');
+    if (img) img.src = d.data().data;
+    const badge = v && v.querySelector('.vhead .badge');   // "jen nahled" uz neplati
+    if (badge) badge.remove();
+  } catch (e) { /* velka verze nedorazila — zustava maly nahled */ }
 }
 /* Priloha muze byt trojiho druhu a kazda se otevira jinak:
    - driveId  -> lezi na Drive
@@ -3274,6 +3338,8 @@ async function delEntry(id) {
     if (tok) await db.collection('portals').doc(tok).collection('feed').doc(id).delete().catch(() => {});
     for (const ph of (e.photos || [])) {
       if (ph.id) db.collection('fotonahledy').doc(ph.id).delete().catch(() => {});
+      /* velka kopie fotky na portalu — bez uklidu by tam strasila navzdy */
+      if (ph.id && tok) db.collection('portals').doc(tok).collection('fotky').doc(ph.id).delete().catch(() => {});
     }
     /* interni poznamka bydli v /entries_interni (S5) — uklidit s ni */
     db.collection('entries_interni').doc(id).delete().catch(() => {});
@@ -3335,7 +3401,8 @@ async function delProject(pid) {
     slozOkno('entries');
     const tok = await tokenPortaluAsync(pid); // token je v admin-only /portaly (S2)
     if (tok) {
-      for (const kol of ['feed', 'vp', 'docs']) {
+      /* 'fotky' = velke kopie fotek pro investora — mazou se s portalem */
+      for (const kol of ['feed', 'vp', 'docs', 'fotky']) {
         const sn = await db.collection('portals').doc(tok).collection(kol).get().catch(() => null);
         if (sn) for (const d of sn.docs) await d.ref.delete().catch(() => {});
       }
@@ -4862,7 +4929,7 @@ function viewPortal() {
         <div style="border:1px solid var(--line);border-radius:9px;padding:11px 13px;margin-bottom:9px">
           <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>${fmtISOFull(e.date)}</b>${i === 0 ? '<span class="badge b-ok">nové</span>' : ''}</div>
           <div style="margin-top:4px">${esc(e.client).replace(/\n/g, '<br>')}</div>
-          ${(e.photos || []).length ? `<div class="photos">${e.photos.map(ph => `<div class="ph" onclick="openPhoto('${ph.driveId || ''}','${esc(ph.label)}',this)"><img src="${ph.thumb}"><small>${esc(ph.label || '')}</small></div>`).join('')}</div>` : ''}
+          ${(e.photos || []).length ? `<div class="photos">${e.photos.map(ph => `<div class="ph" onclick="otevritFotoPortal('${ph.fotoId || ''}','${esc(ph.label)}',this)"><img src="${ph.thumb}"><small>${esc(ph.label || '')}</small></div>`).join('')}</div>` : ''}
         </div>`).join('') : '<div class="empty">Zatím žádné zápisy.</div>'}
     </div>
     <div class="card">

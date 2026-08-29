@@ -345,6 +345,11 @@ service cloud.firestore {
       match /feed/{id} { allow read: if true; allow write: if isAdmin(); }
       match /vp/{id}   { allow read: if true; allow write: if isAdmin(); }
       match /docs/{id} { allow read: if true; allow write: if isAdmin(); }
+      // Velke kopie fotek pro investora (~200 kB/dokument). Jen 'get':
+      // portal cte fotku po jedne az po tuknuti — vypis cele kolekce
+      // zvenku by zbytecne stahoval vsechna data. 'list' potrebuje
+      // vedeni pri mazani stavby.
+      match /fotky/{id} { allow get: if true; allow list: if isAdmin(); allow write: if isAdmin(); }
       match /actions/{id} {
         // Utazeno 28. 8.: vpid musi ukazovat na existujici vicepraci
         // TOHOTO portalu — nejde sypat schvaleni na vymyslena id.
