@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '29. 8. 2026 d';
+const VERZE = '29. 8. 2026 e';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -2068,7 +2068,11 @@ function openPhoto(driveId, label, el) {
   const src = img ? img.src : '';
   $('#viewer').innerHTML = `<div class="viewer" onclick="if(event.target===this)closeDoc()"><div class="vwrap">
     <div class="vhead"><b style="flex:1;min-width:120px">${esc(label)}</b>
-      ${driveId && !S.portalToken ? `<a class="btn ghost sm" href="${driveViewUrl(driveId)}" target="_blank">📁 Plné rozlišení (Drive)</a>` : '<span class="badge b-int">jen náhled</span>'}
+      ${/* Plne rozliseni vydava MOST, ne Google — stejne jako u priloh a
+            podkladu. Driv to byl primy odkaz na drive.google.com, takze to
+            po kazdem chtelo ucet Google (a parta ho nema vubec). Most soubor
+            vyda i cloveku bez uctu a klic pritom neopousti server. */''}
+      ${driveId && !S.portalToken ? `<button class="btn ghost sm" onclick="openDriveDoc('${driveId}','${esc(label)}')">🔍 Plné rozlišení</button>` : '<span class="badge b-int">jen náhled</span>'}
       <button class="btn dark sm" onclick="closeDoc()">✕ Zavřít</button></div>
     <div class="vbody" style="padding:0;align-items:center"><img src="${src}" style="width:100%;max-height:80vh"></div></div></div>`;
 }
