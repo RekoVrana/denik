@@ -197,6 +197,42 @@
   .viewer .vbody{overflow:auto;flex:1;display:flex;justify-content:center;background:#dde3ea;min-height:300px}
   .viewer .vbody img{max-width:100%;height:auto;object-fit:contain}
   .viewer .vbody iframe{width:100%;min-height:70vh;border:none;background:#fff}
+  /* ── galerie fotek ─────────────────────────────────────
+     Mrizka ctvercovych dlazdic po dnech. Pomer stran drzi trik s paddingem
+     (padding-top:100 %), ne aspect-ratio — to starsi iPhony neumi. */
+  .fgbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:14px}
+  .fgbar input[type=date],.fgbar select{width:auto;flex:1 1 128px;min-width:0;padding:8px 10px}
+  .fgbar .btn{flex:none}
+  .fgday{margin-bottom:20px}
+  .fghead{display:flex;align-items:baseline;gap:10px;margin:0 2px 7px;flex-wrap:wrap}
+  .fghead b{font-size:13.5px;color:var(--navy)}
+  .fghead .pn{font-size:12px;font-weight:700;color:var(--amber-d)}
+  .fghead .n{font-size:11.5px;color:var(--ink2);margin-left:auto;white-space:nowrap}
+  .fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:6px}
+  @media(min-width:700px){.fgrid{grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:8px}}
+  .fg{position:relative;border-radius:10px;overflow:hidden;background:#33475c;cursor:pointer}
+  .fg:before{content:'';display:block;padding-top:100%}
+  .fg img{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;display:block;transition:transform .25s}
+  .fg:hover img{transform:scale(1.05)}
+  .fg .st{position:absolute;top:5px;right:5px;font-size:10px;background:rgba(255,255,255,.93);color:var(--ink);border-radius:99px;padding:1px 6px;font-weight:700}
+  /* prohlizec pres celou obrazovku — tmave pozadi, fotka uprostred,
+     kontext (den, zakazka, autor, veta ze zapisu) dole */
+  .fviewer{position:fixed;top:0;left:0;right:0;bottom:0;background:#0b141f;z-index:130;display:flex;flex-direction:column;padding-top:var(--sat)}
+  .fvtop{display:flex;align-items:center;gap:8px;padding:10px 14px;color:#c5d3e2;font-size:12.5px}
+  .fvtop .sp{flex:1}
+  .fvbtn{border:none;background:rgba(255,255,255,.13);color:#fff;border-radius:99px;padding:7px 14px;font-size:12.5px;font-weight:700;cursor:pointer}
+  .fvbtn:hover{background:rgba(255,255,255,.24)}
+  .fvbody{flex:1;position:relative;display:flex;align-items:center;justify-content:center;min-height:0;touch-action:pan-y}
+  .fvbody img{max-width:100%;max-height:100%;object-fit:contain;user-select:none;-webkit-user-drag:none}
+  .fvnav{position:absolute;top:50%;transform:translateY(-50%);border:none;background:rgba(10,20,32,.5);color:#fff;font-size:26px;line-height:1;width:44px;height:64px;cursor:pointer;border-radius:12px;z-index:2}
+  .fvnav.prev{left:8px}.fvnav.next{right:8px}
+  .fvnav:disabled{opacity:.18;cursor:default}
+  @media(hover:none) and (pointer:coarse){.fvnav{display:none}}  /* na telefonu se listuje prstem */
+  .fvhint{position:absolute;top:12px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.55);color:#fff;padding:4px 12px;border-radius:99px;font-size:12px;white-space:nowrap}
+  .fvcap{padding:12px 16px calc(14px + var(--sab));color:#e8eef4;font-size:13px;display:flex;flex-direction:column;gap:3px}
+  .fvcap b{font-size:14px}
+  .fvcap span{color:#9db1c4;font-size:12.5px}
+  .fvcap em{color:#cdd9e4;margin-top:2px;line-height:1.4}
   /* login */
   .login{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(160deg,var(--navy) 0%,#0e2033 100%);padding:16px;padding-top:calc(16px + var(--sat));padding-bottom:calc(16px + var(--sab))}
   .lbox{background:#fff;border-radius:14px;padding:28px 24px;width:100%;max-width:400px;box-shadow:0 18px 50px rgba(0,0,0,.4)}
@@ -282,9 +318,9 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js" integrity="sha384-ZaR6mWzmJtrRibZ1Vm7SoHFr8OXjyAuGAXalGDKqbxFT18oi/z+oZLIRFkpeNor1" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" integrity="sha384-I1LYojsZ5RM1cOda44Z2h42Qa6YfsQ1XkXxREnhp4ueYBR/4d1pG1K+NZM537Vsj" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" integrity="sha384-Ke0FJhH7LyRqDxZ0wt+/OXV38yfQVu7g9VPEEGjYmB4RVOY/ta04uecRhsMwT7V3" crossorigin="anonymous"></script>
-<script src="vypocty.js?v=20260829j"></script>
-<script src="navod.js?v=20260829j"></script>
-<script src="config.js?v=20260829j"></script>
-<script src="app.js?v=20260829j"></script>
+<script src="vypocty.js?v=20260829k"></script>
+<script src="navod.js?v=20260829k"></script>
+<script src="config.js?v=20260829k"></script>
+<script src="app.js?v=20260829k"></script>
 </body>
 </html>

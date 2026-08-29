@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '29. 8. 2026 j';
+const VERZE = '29. 8. 2026 k';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -216,6 +216,8 @@ const S = {
   podkladyStav: null, podkladyCesta: [], poznamky: [], poznamkaEdit: null,
   taskFoto: [],
   klice: [],
+  /* galerie fotek (viz sekce GALERIE FOTEK): filtry a kolik dlazdic uz kreslime */
+  fgFrom: '', fgTo: '', fgProj: null, fgAutor: '', fgZobrazeno: 60,
   repWorkers: [], repProjects: [], repLoaded: false, repFrom: isoToday().slice(0, 8) + '01', repTo: isoToday(),
   workerProject: null, draftPhotos: [], draftAtts: [], uploading: 0, signFor: null, tplOpen: false,
   loginMode: 'teren', loginWorker: null, loginHledani: null,
@@ -1495,6 +1497,7 @@ function sidebar() {
     { k: 'nastenka', ic: '📊', t: 'Nástěnka' },
     { k: 'projekty', ic: '🛠️', t: 'Projekty' },
     { k: 'denik', ic: '📓', t: 'Stavební deník' },
+    { k: 'fotky', ic: '🖼', t: 'Fotky' },
     { k: 'schvaleni', ic: '✅', t: 'Schvalování', bdg: n || '' },
     { k: 'uzivatele', ic: '👥', t: 'Uživatelé' },
     { k: 'organizace', ic: '🏢', t: 'Organizace', bdg: gpsBad || '' },
@@ -1516,6 +1519,7 @@ function viewAdmin() {
   else if (S.view === 'nastenka') body = pgNastenka();
   else if (S.view === 'projekty') body = pgProjekty();
   else if (S.view === 'projdetail') body = pgProjDetail();
+  else if (S.view === 'fotky') body = pgFotky();
   else if (S.view === 'schvaleni') body = pgSchvaleni();
   else if (S.view === 'novy') body = pgNovy();
   else if (S.view === 'uzivatele') body = pgUzivatele();
@@ -1942,16 +1946,11 @@ function pgProjDetail() {
       </div>
     </div></main>`;
   } else if (t === 'media') {
-    const phs = entriesOf(p.id).flatMap(e => (e.photos || []).map(ph => ({ ...ph, eid: e.id, date: e.date, author: e.author, epending: e.status === 'pending' })));
-    const byDate = {};
-    phs.forEach(ph => (byDate[ph.date] = byDate[ph.date] || []).push(ph));
-    body = `<main><div class="card">
-      <h3>🖼 Média na stavbě za 30 dní (${phs.length})</h3>
-      ${Object.entries(byDate).map(([d, list]) => `
-        <label>${fmtISO(d)} · ${esc(list[0].author || '')}</label>
-        <div class="photos">${list.map(ph => phTile(ph, false, ph.eid)).join('')}</div>`).join('') || '<div class="empty">Zatím žádná média.</div>'}
-      <div class="note">Výchozí stav fotky je vždy „⏳ čeká" — k investorovi jde až po schválení (#31). Klik na fotku = otevřít, klik na štítek stavu = přepnout ⏳→✓→🔒. Plné rozlišení bydlí na Drive ve složce zakázky.</div>
-    </div></main>`;
+    /* Stara zalozka "Média" (plochy seznam malych dlazdic) je NAHRAZENA
+       galerii — ukazovala stejna data, jen hur: bez filtru, bez listovani
+       a bez moznosti dohlednout dal nez mesic. Vsechno, co umela (otevreni
+       fotky, prepinani stavu ⏳→✓→🔒), umi galerie taky. */
+    body = `<main>${fgTelo(p.id)}</main>`;
   } else if (t === 'podklady') {
     const docs = p.stavbaDocs || [];
     body = `<main><div class="card">
@@ -1986,7 +1985,7 @@ function pgProjDetail() {
   <div class="strip"><span class="back" onclick="goPage('projekty')">←</span><h1>${esc(p.name)}</h1><span class="sp"></span></div>
   <div class="sectabs">
     <div class="t ${t === 'info' ? 'active' : ''}" onclick="S.projDetailTab='info';render()">ℹ️ Základní informace</div>
-    <div class="t ${t === 'media' ? 'active' : ''}" onclick="S.projDetailTab='media';render()">🖼 Média</div>
+    <div class="t ${t === 'media' ? 'active' : ''}" onclick="S.projDetailTab='media';render()">🖼 Fotky</div>
     <div class="t ${t === 'podklady' ? 'active' : ''}" onclick="S.projDetailTab='podklady';render()">📐 Podklady stavby (${(p.stavbaDocs || []).length})</div>
     <div class="t ${t === 'dokumenty' ? 'active' : ''}" onclick="S.projDetailTab='dokumenty';render()">📁 Dokumenty pro investora</div>
     <div class="t ${t === 'ukoly' ? 'active' : ''}" onclick="S.projDetailTab='ukoly';render()">📌 Úkoly (${S.tasks.filter(x => x.pid === p.id && x.stav !== 'hotovo' && x.stav !== 'sablona').length})</div>
@@ -2338,6 +2337,256 @@ function modal(html) {
   setTimeout(mountMaps, 0);
 }
 function closeModal() { $('#modal').innerHTML = ''; }
+
+/* ============ GALERIE FOTEK ============
+   Fotky ziji na zaznamech deniku (entry.photos) — galerie je jen jiny pohled
+   na stejna data: mrizka po dnech, nejnovejsi nahore, s kontextem (zakazka,
+   autor, veta ze zapisu), ktery Google Fotky nemaji. Mrizka kresli VYHRADNE
+   male nahledy (thumb) z pameti — velka verze se dotahuje z mostu az po
+   tuknuti na fotku, stejne jako u otevritFoto. Obe galerie (u zakazky
+   i pres vsechny stavby) sdileji fgTelo(). */
+
+/* Vybere fotky podle filtru a prilepi k nim kontext ze zapisu.
+   pid = galerie jedne zakazky; null = pres vsechny stavby (plati S.fgProj).
+   S.entries uz jsou serazene od nejnovejsich, takze vysledek taky. */
+function fotkyVyber(pid) {
+  const od = S.fgFrom || '', do_ = S.fgTo || '';
+  const seznam = [];
+  S.entries.forEach(e => {
+    if (pid ? e.pid !== pid : (S.fgProj && e.pid !== S.fgProj)) return;
+    if (od && e.date < od) return;
+    if (do_ && e.date > do_) return;
+    if (S.fgAutor && (e.author || '') !== S.fgAutor) return;
+    (e.photos || []).forEach(ph => {
+      if (!ph.thumb) return;   // bez nahledu neni co kreslit (fotka jeste ve fronte)
+      seznam.push({ ...ph, eid: e.id, date: e.date, author: e.author || '', pid: e.pid, veta: fotoVeta(e) });
+    });
+  });
+  return seznam;
+}
+/* Veta ze zapisu pod velkou fotkou: prvni radek zneni pro investora,
+   jinak prvni polozka praci. Zkracena, at nepretece pres obrazovku. */
+function fotoVeta(e) {
+  const t = ((e.client || '').trim().split('\n')[0] || (e.works || [])[0] || '').trim();
+  return t.length > 160 ? t.slice(0, 157) + '…' : t;
+}
+
+/* Lista filtru: obdobi od–do, zakazka (jen pres vsechny stavby), kdo fotil.
+   Zamerne jen nativni policka — na telefonu se ovladaji palcem nejlip. */
+function fgFiltry(pid) {
+  const autori = [...new Set(S.entries
+    .filter(e => (e.photos || []).length && (!pid || e.pid === pid))
+    .map(e => e.author).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'cs'));
+  const aktivni = S.fgFrom || S.fgTo || (!pid && S.fgProj) || S.fgAutor;
+  return `<div class="fgbar">
+    <input type="date" id="fg-od" value="${S.fgFrom || ''}" title="Od" onchange="fgObdobi()">
+    <span class="muted">–</span>
+    <input type="date" id="fg-do" value="${S.fgTo || ''}" title="Do" onchange="fgObdobi()">
+    ${pid ? '' : `<select id="fg-proj" onchange="S.fgProj=this.value||null;S.fgZobrazeno=60;render()">
+      <option value="">Všechny zakázky</option>
+      ${S.projects.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', 'cs')).map(p => `<option value="${p.id}" ${S.fgProj === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+    </select>`}
+    <select id="fg-autor" onchange="S.fgAutor=this.value;S.fgZobrazeno=60;render()">
+      <option value="">Všichni fotili</option>
+      ${autori.map(a => `<option value="${esc(a)}" ${S.fgAutor === a ? 'selected' : ''}>${esc(a)}</option>`).join('')}
+    </select>
+    ${aktivni ? `<button class="btn ghost sm" onclick="fgReset()">✕ Zrušit filtry</button>` : ''}
+  </div>`;
+}
+/* Zmena obdobi. Kdyz „od" saha pred zive okno (OKNO_DNU), starsi zapisy se
+   dotahnou samy — stejny mechanismus jako u reportu. Bez toho by filtr na
+   brezen tise ukazal prazdno a vypadalo by to, ze se tehdy nefotilo. */
+async function fgObdobi() {
+  S.fgFrom = ($('#fg-od') && $('#fg-od').value) || '';
+  S.fgTo = ($('#fg-do') && $('#fg-do').value) || '';
+  S.fgZobrazeno = 60;
+  if (S.fgFrom && S.fgFrom < oknoOd()) {
+    S.dotahuji = true; render();
+    await dotahniZapisyProReport(S.fgFrom, shiftISO(oknoOd(), -1));
+    S.dotahuji = false;
+  }
+  render();
+}
+function fgReset() {
+  S.fgFrom = ''; S.fgTo = ''; S.fgProj = null; S.fgAutor = ''; S.fgZobrazeno = 60;
+  /* Policka je nutne vyprazdnit PRIMO v DOM jeste pred prekreslenim:
+     pamet formularu (FORMMEM) si pri renderu ulozi aktualni hodnoty
+     a vratila by stare datum zpatky — zapomen() tu nestaci, protoze
+     defaultValue policka nese hodnotu z minuleho prekresleni. */
+  ['fg-od', 'fg-do', 'fg-proj', 'fg-autor'].forEach(i => {
+    delete FORMMEM[i];
+    const el = document.getElementById(i);
+    if (el) el.value = '';
+  });
+  render();
+}
+
+/* Telo galerie — mrizka seskupena po dnech (pres vsechny stavby po dnech
+   a zakazkach), tlacitko „Zobrazit dalsi" a „Nacist starsi" z deniku.
+   Kresli se jen prvnich S.fgZobrazeno dlazdic, at stovky fotek nezaseknou
+   telefon; prohlizec ale listuje pres CELY vyber (_fgSeznam). */
+function fgTelo(pid) {
+  const vse = fotkyVyber(pid);
+  window._fgSeznam = vse;
+  const limit = S.fgZobrazeno || 60;
+  const fotky = vse.slice(0, limit);
+  const skupiny = [];
+  let posl = null;
+  fotky.forEach((f, i) => {
+    const klic = f.date + (pid ? '' : '|' + f.pid);
+    if (!posl || posl.klic !== klic) { posl = { klic, date: f.date, pid: f.pid, fotky: [] }; skupiny.push(posl); }
+    posl.fotky.push({ f, i });
+  });
+  return `
+    ${fgFiltry(pid)}
+    ${skupiny.map(sk => {
+      const p = proj(sk.pid) || {};
+      const autori = [...new Set(sk.fotky.map(x => x.f.author).filter(Boolean))];
+      return `<div class="fgday">
+        <div class="fghead"><b>${fmtISOFull(sk.date)}</b>
+          ${pid ? '' : `<span class="pn">🛠 ${esc(p.name || '')}</span>`}
+          <span class="n">${esc(autori.join(', '))}${autori.length ? ' · ' : ''}${sk.fotky.length} ${sk.fotky.length === 1 ? 'fotka' : sk.fotky.length <= 4 ? 'fotky' : 'fotek'}</span>
+        </div>
+        <div class="fgrid">${sk.fotky.map(x => fgDlazdice(x.f, x.i)).join('')}</div>
+      </div>`;
+    }).join('') || `<div class="card"><div class="empty">📷 Žádné fotky${(S.fgFrom || S.fgTo || S.fgAutor || (!pid && S.fgProj)) ? ' pro zvolené filtry' : ' za posledních ' + OKNO_DNU + ' dní'}.<br><span class="muted">Zkus „⤓ Načíst starší" nebo uprav filtry.</span></div></div>`}
+    <div class="aprv" style="justify-content:center;margin-bottom:14px">
+      ${vse.length > limit ? `<button class="btn ghost" onclick="S.fgZobrazeno=${limit + 120};render()">⤓ Zobrazit další (zbývá ${vse.length - limit})</button>` : ''}
+      <button class="btn ghost sm" onclick="dotahniZapisy()">${S.dotahuji ? '⏳ načítám…' : '⤓ Načíst starší z databáze'}</button>
+    </div>
+    <div class="note">Ťukni na fotku a listuj prstem (na počítači šipkami). Klik na štítek stavu = přepnout ⏳ čeká → ✓ klient → 🔒 interní — k investorovi jde fotka až po schválení (#31).</div>`;
+}
+/* Ctvercova dlazdice — jen thumb z pameti + stitek stavu jako u phTile.
+   Popisek fotky nezere misto v mrizce, ukaze se az u velke verze. */
+function fgDlazdice(f, i) {
+  return `<div class="fg" onclick="fgOpen(${i})">
+    <img src="${f.thumb}" alt="">
+    <span class="st" title="Přepnout stav" onclick="event.stopPropagation();cyclePhoto('${f.eid}','${f.id}')">${f.status === 'approved' ? '✓' : f.status === 'pending' ? '⏳' : '🔒'}</span>
+  </div>`;
+}
+
+/* ---- prohlizec pres celou obrazovku ----
+   Otevre se hned s malym nahledem a velka verze se doplni z mostu (stejne
+   zdroje jako otevritFoto: getPhoto z Drive, zaloha /fotonahledy). Listuje
+   se prstem, sipkami na klavesnici i tlacitky; zavreni ✕ nebo Esc.
+   Uz stazene velke verze drzi maly mezipamet, at se pri listovani tam
+   a zpatky nestahuji znovu. */
+window._fgSeznam = window._fgSeznam || [];
+window._fgIdx = 0;
+const _fgCache = new Map();
+let _fgNacitam = 0;   // poradove cislo nacitani — ochrana proti zavodu pri rychlem listovani
+function fgOpen(i) {
+  window._fgIdx = i;
+  $('#viewer').innerHTML = `<div class="fviewer">
+    <div class="fvtop">
+      <span id="fv-count" class="muted"></span>
+      <span class="sp"></span>
+      <span id="fv-drive"></span>
+      <button class="fvbtn" onclick="fgZavri()">✕ Zavřít</button>
+    </div>
+    <div class="fvbody" id="fv-body">
+      <button class="fvnav prev" id="fv-prev" onclick="fgKrok(-1)">‹</button>
+      <img id="fv-img" alt="">
+      <button class="fvnav next" id="fv-next" onclick="fgKrok(1)">›</button>
+      <div class="fvhint" id="fv-hint" style="display:none"><span class="spin"></span> Načítám plnou kvalitu…</div>
+    </div>
+    <div class="fvcap" id="fv-cap"></div>
+  </div>`;
+  /* listovani prstem: vodorovny tah aspon 45 px, ktery je jasne vodorovnejsi
+     nez svisly (jinak by kazdy pokus o zoom prehazoval fotky) */
+  const b = $('#fv-body');
+  let x0 = null, y0 = null;
+  b.addEventListener('touchstart', ev => { if (ev.touches.length !== 1) { x0 = null; return; } x0 = ev.touches[0].clientX; y0 = ev.touches[0].clientY; }, { passive: true });
+  b.addEventListener('touchend', ev => {
+    if (x0 == null || !ev.changedTouches.length) return;
+    const dx = ev.changedTouches[0].clientX - x0, dy = ev.changedTouches[0].clientY - y0; x0 = null;
+    if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.5) fgKrok(dx < 0 ? 1 : -1);
+  }, { passive: true });
+  document.removeEventListener('keydown', fgKlavesy);   // pojistka proti dvojimu naveseni
+  document.addEventListener('keydown', fgKlavesy);
+  fgUkaz();
+}
+function fgKlavesy(ev) {
+  /* nektera prostredi hlasi sipky postaru jako "Left"/"Right" */
+  if (ev.key === 'Escape' || ev.key === 'Esc') fgZavri();
+  else if (ev.key === 'ArrowLeft' || ev.key === 'Left') fgKrok(-1);
+  else if (ev.key === 'ArrowRight' || ev.key === 'Right') fgKrok(1);
+}
+function fgZavri() { document.removeEventListener('keydown', fgKlavesy); closeDoc(); }
+function fgKrok(smer) {
+  const n = window._fgIdx + smer;
+  if (n < 0 || n >= window._fgSeznam.length) return;
+  window._fgIdx = n; fgUkaz();
+}
+/* Prekresli prohlizec pro aktualni fotku: hned thumb (nebo velkou z cache),
+   kontext pod fotkou, pak potichu dotahne velkou verzi. */
+async function fgUkaz() {
+  const f = window._fgSeznam[window._fgIdx];
+  const img = $('#fv-img');
+  if (!f || !img) return;
+  const moje = ++_fgNacitam;
+  img.src = _fgCache.get(f.id) || f.thumb;
+  const p = proj(f.pid) || {};
+  $('#fv-count').textContent = (window._fgIdx + 1) + ' / ' + window._fgSeznam.length;
+  $('#fv-cap').innerHTML = `<b>${fmtISOFull(f.date)}</b>
+    <span>🛠 ${esc(p.name || '—')} · 👷 ${esc(f.author || '—')}${f.label ? ' · 📷 ' + esc(f.label) : ''}</span>
+    ${f.veta ? `<em>„${esc(f.veta)}"</em>` : ''}`;
+  /* Plne rozliseni z Drive — jen kdyz fotka na Drive opravdu je */
+  $('#fv-drive').innerHTML = f.driveId ? `<button class="fvbtn" onclick="fgDrive()">🔍 Plné rozlišení</button>` : '';
+  const prev = $('#fv-prev'), next = $('#fv-next');
+  if (prev) prev.disabled = window._fgIdx === 0;
+  if (next) next.disabled = window._fgIdx === window._fgSeznam.length - 1;
+  if (_fgCache.has(f.id)) return;
+  const hint = $('#fv-hint');
+  if (hint && (f.driveId || f.id)) hint.style.display = '';
+  const velka = await fgVelka(f);
+  if (moje !== _fgNacitam) return;   // uzivatel uz mezitim odlistoval jinam
+  if (hint) hint.style.display = 'none';
+  if (velka) {
+    _fgCache.set(f.id, velka);
+    if (_fgCache.size > 25) _fgCache.delete(_fgCache.keys().next().value);   // strop pameti
+    if (img.isConnected) img.src = velka;
+  }
+}
+/* Velka verze fotky — stejne poradi zdroju jako otevritFoto:
+   (a) most vyda velkou verzi z Drive, (b) /fotonahledy jako zaloha pro
+   stare fotky, (c) nic — zustane maly nahled (typicky offline). */
+async function fgVelka(f) {
+  try {
+    const klic = S.tajne && S.tajne.mostKlic;
+    if (f.driveId && klic && CFG.scriptUrl && S.online) {
+      try {
+        const j = await driveCall({ action: 'getPhoto', fileId: f.driveId, sirka: 1600, klic });
+        if (j.ok && j.data) return 'data:' + (j.mime || 'image/jpeg') + ';base64,' + j.data;
+        console.warn('galerie getPhoto', j.error);
+      } catch (e) { console.warn('galerie getPhoto', e); }
+    }
+    if (f.id) {
+      const d = await db.collection('fotonahledy').doc(f.id).get();
+      if (d.exists && d.data().data) return d.data().data;
+    }
+  } catch (e) { /* zadny zdroj — neni to chyba */ }
+  return null;
+}
+function fgDrive() {
+  const f = window._fgSeznam[window._fgIdx];
+  if (!f || !f.driveId) return;
+  /* openDriveDoc prevezme #viewer — klavesy galerie se musi odvesit,
+     jinak by Esc a sipky strasily nad cizim oknem */
+  document.removeEventListener('keydown', fgKlavesy);
+  openDriveDoc(f.driveId, (proj(f.pid) || {}).name || f.label || 'Fotka');
+}
+
+/* ---- stranka Fotky (menu vedeni) — galerie pres vsechny stavby ---- */
+function pgFotky() {
+  return `
+  <div class="strip"><h1>Fotky ze staveb</h1><span class="sp"></span><span class="muted">co se kde dělo — napříč zakázkami</span></div>
+  <div class="sectabs">
+    <div class="t active">🖼 Galerie</div>
+    <div class="t" style="margin-left:auto;color:var(--navy)" onclick="dotahniZapisy()">${S.dotahuji ? '⏳ načítám…' : '⤓ Načíst starší'}</div>
+  </div>
+  <main>${fgTelo(null)}</main>`;
+}
 
 /* ---- Stavební deník ---- */
 function pgDenik() {
