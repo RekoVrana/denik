@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '29. 8. 2026 b';
+const VERZE = '29. 8. 2026 c';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -521,7 +521,7 @@ function startData() {
      Kazdy klic (vsichni / parta / ja) ma vlastni posluchac a vysledky
      se skladaji dohromady, stejne jako u ukolu. */
   const pzSort = (a, b) => (a.nadpis || '').localeCompare(b.nadpis || '', 'cs');
-  if (role === 'admin') { listen('poznamky', 'poznamky', { sort: pzSort }); prevedStarePoznamky(); uklidRosterAdminy(); prevedTajnosti(); uklidTypySubu(); }
+  if (role === 'admin') { listen('poznamky', 'poznamky', { sort: pzSort }); prevedStarePoznamky(); uklidRosterAdminy(); prevedTajnosti(); uklidTypySubu(); setTimeout(dorovnejPortaly, 6000); }
   else {
     const pzMid = (S.meAuth && S.meAuth.userDocId) || '__nikdo__';
     listenPoznamky(role === 'sub' ? ['vsichni', pzMid] : ['vsichni', 'parta', pzMid]);
@@ -1071,11 +1071,36 @@ async function keepInternalEntry(id) {
 async function mirrorEntry(e) {
   // STRUKTURÁLNÍ ZÁRUKA #31: na portál se fyzicky kopíruje JEN klientský text a schválené fotky.
   const tok = await tokenPortaluAsync(e.pid); // token bydli v admin-only /portaly (S2)
+  /* Stavba bez portalu je bezny stav (investor ho nemusi mit) — mlcet je
+     tu spravne. Ale kdyz portal existuje a zrcadleni presto selze, nesmi
+     to zapadnout: investor by zapis nevidel a vedeni by o tom nevedelo.
+     Proto se pripadna chyba hlasi a dorovnaPortaly() to pak dozene. */
   if (!tok) return;
   await db.collection('portals').doc(tok).collection('feed').doc(e.id).set({
     date: e.date, client: e.client,
     photos: (e.photos || []).filter(ph => ph.status === 'approved').map(ph => ({ thumb: ph.thumb, driveId: ph.driveId || null, label: ph.label || '' }))
-  });
+  }).catch(e2 => { console.warn('zrcadleni na portal selhalo', e2); throw e2; });
+}
+
+/* Portal investora se sam dorovna (29. 8.).
+   Zrcadleni na portal bezi ve chvili schvaleni zapisu. Kdyz se to tehdy
+   nepovede — vypadek site, nebo aplikace jeste s ulozenou starsi verzi —
+   zapis uz na portal nikdy nedorazi a nikdo to nepozna: investor jen nic
+   nevidi. Vedeni proto pri prihlaseni srovna kazdy portal se schvalenymi
+   zapisy a doplni, co chybi. Cte se jen seznam ID, takze to skoro nic
+   nestoji, a opakovany beh nic nezkazi. */
+async function dorovnejPortaly() {
+  for (const pid of Object.keys(S.portaly || {})) {
+    const tok = tokenPortalu(pid); if (!tok) continue;
+    const schvalene = S.entries.filter(e => e.pid === pid && e.status === 'approved');
+    if (!schvalene.length) continue;
+    const feed = await db.collection('portals').doc(tok).collection('feed').get().catch(() => null);
+    if (!feed) continue;
+    const uzTam = new Set(feed.docs.map(d => d.id));
+    const chybi = schvalene.filter(e => !uzTam.has(e.id));
+    for (const e of chybi) await mirrorEntry(e).catch(() => {});
+    if (chybi.length) console.log('portal ' + ((proj(pid) || {}).name || pid) + ': doplneno ' + chybi.length + ' zaznamu');
+  }
 }
 async function cyclePhoto(eid, phid) {
   const e = S.entries.find(x => x.id === eid); if (!e) return;
