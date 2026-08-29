@@ -53,12 +53,17 @@
         if (otevrena === null) otevrena = naMinuty(z.time);
         // druhy zacatek po sobe: prvni plati, tenhle se zahodi
       } else if (z.akce === akceDo) {
-        if (otevrena !== null) {
+        if (otevrena === null) {
+          /* Konec bez zacatku: hodiny z nej neudelame, ale den je NEUPLNY.
+             Driv zmizel uplne beze stopy — a report pritom slibuje, ze na
+             dny "jen prichod nebo jen odchod" upozorni. */
+          nedokoncene = 1;
+        } else {
           var konec = naMinuty(z.time);
           if (konec > otevrena) out.push({ od: otevrena, do: konec });
+          else nedokoncene = 1;      /* konec driv nez zacatek je taky neuplny den */
           otevrena = null;
         }
-        // konec bez zacatku: zahodit
       }
     });
     if (otevrena !== null) nedokoncene = 1;
@@ -105,18 +110,21 @@
     var pracovniMin = delka(prace.useky);
     var pauzaMin = prekryvMinut(useky, prace.useky);
 
-    /* Starsi zaznamy maji pauzu jako pocet minut u odchodu (drive to byl
-       prepinac na pevnych 30 min). Kdyz nove pauzove zaznamy nejsou,
-       pouzije se ta stara hodnota, at se historie nerozjede. */
-    if (!useky.length) {
-      var stara = z.reduce(function (m, r) { return Math.max(m, parseInt(r.pauza, 10) || 0); }, 0);
-      pauzaMin = Math.min(stara, pracovniMin);
-    }
+    /* Rucne zadana pauza PREBIJI casovac. Vyplnuje ji vedeni pri oprave
+       zaznamu, pri rucnim pridani dne a schvalenim zadosti o doplneny odchod —
+       vzdycky proto, ze vi neco, co casovac nevi (parta byla na obede hodinu
+       a nikdo nic nezmackl). Driv se cislo tise zahodilo, kdyz ten den
+       existoval pauzovy zaznam z casovace. Nula = nechat casovac.
+       Zaroven tim dal funguji stara data, kde pauza byla jen cislo
+       u odchodu (drive to byl prepinac na pevnych 30 minut). */
+    var rucni = z.reduce(function (m, r) { return Math.max(m, parseInt(r.pauza, 10) || 0); }, 0);
+    if (rucni > 0) pauzaMin = Math.min(rucni, pracovniMin);
 
     return {
       minuty: Math.max(0, pracovniMin - pauzaMin),
       pracovniMin: pracovniMin,
       pauzaMin: pauzaMin,
+      pauzaRucni: rucni > 0,
       useky: prace.useky,
       nedokonceno: prace.nedokoncene === 1,
       pauzaBezi: pauzy.otevrenyOd !== null && !prace.useky.length

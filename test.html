@@ -89,12 +89,26 @@ test('Dvě směny za den', 'Ráno 6:00–10:00 a večer 18:00–21:00 → 7 hodi
   [z('Příchod','6:00'), z('Odchod','10:00'), z('Příchod','18:00'), z('Odchod','21:00')], 420);
 
 /* ---- 11. odchod bez prichodu ---- */
-test('Odchod bez příchodu', 'Osamocený odchod nesmí vyrobit hodiny ani záporné číslo',
-  [z('Odchod','16:00')], 0);
+test('Odchod bez příchodu', 'Osamocený odchod nesmí vyrobit hodiny — a den musí zůstat označený jako neúplný, ať v reportu nezmizí beze stopy',
+  [z('Odchod','16:00')], 0, { nedokonceno: true });
 
 /* ---- 12. stara pauza jako pocet minut ---- */
 test('Starý záznam s pauzou v minutách', 'Historická data mají pauzu jako číslo u odchodu — musí dál fungovat',
   [z('Příchod','7:00'), (function(){ var r = z('Odchod','16:00'); r.pauza = 30; return r; })()], 510);
+
+/* ---- 13. odchod navic, ktery drive zmizel ---- */
+test('Odchod navíc', 'Příchod 7:00, odchod 12:00 a ještě jeden odchod v 16:00 → 5 hodin a upozornění na neúplný den',
+  [z('Příchod','7:00'), z('Odchod','12:00'), z('Odchod','16:00')], 300, { nedokonceno: true });
+
+/* ---- 14. rucni pauza prebiji casovac (rozhodnuti 29. 8.) ---- */
+test('Ruční pauza přebíjí časovač', 'Časovač zapsal 30 min, vedení opravou zadalo 60 → odečte se 60, ne 90',
+  [z('Příchod','7:00'), z('Pauza','12:00'), z('Konec pauzy','12:30'),
+   (function () { var r = z('Odchod','16:00'); r.pauza = 60; return r; })()], 480, { pauzaRucni: true });
+
+/* ---- 15. nula v poli pauzy nic neprebiji ---- */
+test('Nula v poli pauzy nic nepřebíjí', 'Vedení pole nevyplnilo (0) — platí pauza z časovače, 30 minut',
+  [z('Příchod','7:00'), z('Pauza','12:00'), z('Konec pauzy','12:30'),
+   (function () { var r = z('Odchod','16:00'); r.pauza = 0; return r; })()], 510, { pauzaRucni: false });
 
 /* ---- vypis ---- */
 var padlo = testy.filter(function (t) { return !t.ok; }).length;
