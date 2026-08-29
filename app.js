@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '29. 8. 2026 f';
+const VERZE = '29. 8. 2026 g';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -1622,7 +1622,9 @@ function pgProjekty() {
           <td>${esc(p.client || '')}</td>
           <td class="muted">${esc(p.address || '')}</td>
           <td onclick="event.stopPropagation();S.adminFilter='${p.id}';goPage('denik')"><span class="lnk">📓 otevřít</span></td>
-          <td style="min-width:110px"><div class="prog"><i style="width:${p.progress || 0}%"></i></div><span class="muted" style="font-size:11px">${p.progress || 0} % · ${esc(p.phase || '')}</span></td>
+          ${/* Prubeh se pocita z harmonogramu (projProgress). Bez harmonogramu ho nezname
+              — ukazujeme „—", ne lzive 0 %. A tecka za procenty jen kdyz je i faze. */''}
+          <td style="min-width:110px">${projProgress(p) != null ? `<div class="prog"><i style="width:${projProgress(p)}%"></i></div>` : ''}<span class="muted" style="font-size:11px">${projProgress(p) != null ? projProgress(p) + ' %' : '—'}${projPhase(p) ? ' · ' + esc(projPhase(p)) : ''}</span></td>
         </tr>`).join('')}
       </table></div>
       <div class="pagefoot"><span>${S.projects.length} projektů</span></div>
@@ -1670,10 +1672,13 @@ function projectForm(id) {
         ).map(s => `<option ${p.stav === s ? 'selected' : ''}>${esc(s)}</option>`).join('')
       }</select></div>
     </div>
-    <div class="frow">
-      ${id ? `<div><label>Fáze</label><input type="text" id="pf-phase" value="${esc(p.phase || '')}" placeholder="Hrubé rozvody"></div>
-      <div><label>Průběh (%)</label><input type="number" id="pf-prog" value="${p.progress || 0}" min="0" max="100"></div>` : ''}
+    ${/* Rucni pole „Prubeh (%)" je pryc — mely jsme dva zdroje pravdy (rucni cislo
+        vs. vypocet z milniku) a prepisovaly se navzajem. Ted plati jen harmonogram.
+        Faze jde rucne jen dokud stavba nema milniky; pak ji urcuje harmonogram. */''}
+    ${id ? `<div class="frow">
+      <div><label>Fáze</label><input type="text" id="pf-phase" value="${esc(p.phase || '')}" placeholder="Hrubé rozvody"${(p.milestones || []).length ? ' disabled' : ''}></div>
     </div>
+    <div class="note">Průběh (%) se počítá automaticky z harmonogramu — postup nastavíš u milníků v detailu projektu.${(p.milestones || []).length ? ' Fázi teď určuje harmonogram (první nedokončený milník).' : ''}</div>` : ''}
     <div class="frow">
       <div><label>GPS lat</label><input type="text" id="pf-lat" value="${p.gps ? p.gps.lat : ''}" placeholder="50.0236914" oninput="mapFromInputs()"></div>
       <div><label>GPS lng</label><input type="text" id="pf-lng" value="${p.gps ? p.gps.lng : ''}" placeholder="14.4368684" oninput="mapFromInputs()"></div>
@@ -1817,13 +1822,19 @@ async function saveProject(id) {
     investorEmail: $('#pf-cmail').value.trim(), investorPhone: $('#pf-cphone').value.trim(),
     address: $('#pf-addr').value.trim(), type: $('#pf-type').value.trim(),
     resp: $('#pf-resp').value.trim(), stav: $('#pf-stav').value,
-    /* Faze a prubeh se pri zalozeni nezadavaji — u stavby, ktera jeste
-       nezacala, nemaji co rikat. Objevi se az pri uprave existujici. */
+    /* Faze se pri zalozeni nezadava — u stavby, ktera jeste nezacala, nema co
+       rikat. Prubeh (%) se rucne neuklada vubec: pocita se vyhradne
+       z harmonogramu (msRecalc) a zapisuji ho jen funkce milniku. */
     phase: $('#pf-phase') ? $('#pf-phase').value.trim() : '',
-    progress: $('#pf-prog') ? Math.min(100, Math.max(0, parseInt($('#pf-prog').value) || 0)) : 0,
     gps: (lat && lng) ? { lat, lng, tol: CFG.gpsTolerance || 100, label: S.geoLabel || (prevGps && prevGps.label) || '' } : null,
     driveFolderId: $('#pf-drive').value.trim(), handover: $('#pf-hand').value.trim()
   };
+  // Kdyz uz stavba ma harmonogram, fazi urcuje on — rucni text z formulare
+  // by se pri pristi zmene milniku stejne prepsal, tak at nemate uzivatele.
+  if (id) {
+    const prev = proj(id) || {};
+    if ((prev.milestones || []).length) data.phase = msRecalc(prev.milestones, prev).phase;
+  }
   if (id) await db.collection('projects').doc(id).update(data);
   else await db.collection('projects').add({ ...data, active: true, milestones: [], createdAt: FV() });
   closeModal(); toast('Projekt uložen ✓');
@@ -1846,7 +1857,7 @@ function pgProjDetail() {
         <div class="kv"><span>Investor</span><span>${esc(p.client)}${p.investorEmail ? ' · ' + esc(p.investorEmail) : ''}${p.investorPhone ? ' · <a href="tel:' + esc(p.investorPhone.replace(/\s/g, '')) + '">' + esc(p.investorPhone) + '</a>' : ''}</span></div>
         <div class="kv"><span>Adresa</span><span>${esc(p.address)}</span></div>
         <div class="kv"><span>Typ</span><span>${esc(p.type || '—')}</span></div>
-        <div class="kv"><span>Stav</span><span>${esc(p.stav)} · ${esc(p.phase || '')} (${p.progress || 0} %)</span></div>
+        <div class="kv"><span>Stav</span><span>${esc(p.stav)}${projPhase(p) ? ' · ' + esc(projPhase(p)) : ''} · ${projProgress(p) != null ? projProgress(p) + ' %' : 'harmonogram nezadán'}</span></div>
         <div class="kv"><span>Drive složka</span><span>${p.driveFolderId ? `<a href="https://drive.google.com/drive/folders/${p.driveFolderId}" target="_blank">📁 otevřít</a>` : '<span class="muted">vytvoří se s první fotkou</span>'}</span></div>
         <div class="aprv"><button class="btn amber" onclick="projectForm('${p.id}')">✏️ Upravit</button>
           <button class="btn ghost" onclick="delProject('${p.id}')">🗑 Smazat stavbu</button></div>
@@ -1886,9 +1897,21 @@ function pgProjDetail() {
       </div>
       <div class="card">
         <h3>📅 Harmonogram — milníky</h3>
-        ${(p.milestones || []).map((m, i) => `<div class="mile ${m.s}"><div class="dot" style="cursor:pointer" onclick="cycleMile('${p.id}',${i})">${m.s === 'done' ? '✓' : m.s === 'now' ? '●' : ''}</div><div style="flex:1">${m.s === 'now' ? '<b>' + esc(m.t) + ' — probíhá</b>' : esc(m.t)}</div><span class="lnk" style="font-size:11px" onclick="delMile('${p.id}',${i})">✕</span></div>`).join('') || '<div class="empty">Zatím žádné milníky.</div>'}
+        ${/* Milnik ma postup 0–100 % (milePct). Tlacitka 0/25/50/75/100 jsou na
+            telefonu rychlejsi nez posuvnik (zadny jemny tah prstem, jeden tuk).
+            Kolecko odskrtava hotovo (100 %) / vraci na 0 %. */''}
+        ${(p.milestones || []).map((m, i) => { const pct = milePct(m); const cls = pct === 100 ? 'done' : pct > 0 ? 'now' : 'next'; return `
+          <div class="mile ${cls}"><div class="dot" style="cursor:pointer" title="Odškrtnout hotovo / vrátit" onclick="setMilePct('${p.id}',${i},${pct === 100 ? 0 : 100})">${pct === 100 ? '✓' : pct > 0 ? '●' : ''}</div>
+          <div style="flex:1">
+            <div>${cls === 'now' ? '<b>' + esc(m.t) + ' — probíhá</b>' : esc(m.t)}${m.dur ? ' <span class="muted" style="font-size:11px">(' + esc(m.dur) + ')</span>' : ''}</div>
+            <div style="display:flex;gap:5px;align-items:center;margin-top:5px;flex-wrap:wrap">
+              ${[0, 25, 50, 75, 100].map(v => `<button onclick="setMilePct('${p.id}',${i},${v})" style="width:40px;padding:4px 0;border:1px solid var(--line);border-radius:7px;cursor:pointer;font-size:12px;${v === pct ? 'background:var(--amber);font-weight:700' : 'background:var(--int-soft)'}">${v}</button>`).join('')}
+              <span class="muted" style="font-size:11px">${pct} %</span>
+            </div>
+          </div>
+          <span class="lnk" style="font-size:11px" onclick="delMile('${p.id}',${i})">✕</span></div>`; }).join('') || '<div class="empty">Zatím žádné milníky.</div>'}
         <div class="aprv"><input type="text" id="mile-t" placeholder="Nový milník…" style="max-width:260px"><button class="btn ghost sm" onclick="addMile('${p.id}')">➕ Přidat</button></div>
-        <div class="note">Klik na kolečko přepíná stav: čeká → probíhá → hotovo. Milníky vidí investor na portálu.</div>
+        <div class="note">Postup milníku nastavíš tlačítky, kolečko odškrtne hotovo. Průběh stavby (%) je průměr milníků a fáze = první nedokončený milník. Milníky vidí investor na portálu.</div>
       </div>
     </div></main>`;
   } else if (t === 'media') {
@@ -2035,31 +2058,62 @@ function gpsFromHere(pid) {
     toast('GPS nastavena podle aktuální polohy ✓');
   }, () => toast('Polohu se nepodařilo zjistit'), { enableHighAccuracy: true, timeout: 10000 });
 }
-// FIX: průběh (%) a fáze se přepočítají z milníků při každé změně.
-// Vzorec: hotový milník = plná váha, probíhající = poloviční. Fáze = první probíhající milník;
-// když jsou všechny hotové → „Dokončeno". Bez milníků se průběh nemění (zůstává ruční).
-function msRecalc(ms, p) {
-  if (!ms || !ms.length) return {};
-  const done = ms.filter(m => m.s === 'done').length, now = ms.filter(m => m.s === 'now').length;
-  const progress = Math.round((done + now * 0.5) / ms.length * 100);
-  const firstNow = ms.find(m => m.s === 'now');
-  const phase = firstNow ? firstNow.t : (done === ms.length ? 'Dokončeno' : (p.phase || ''));
-  return { progress, phase };
+// Prubeh stavby ma JEDEN zdroj pravdy: harmonogram (milniky). Rucni pole je pryc —
+// dva zdroje se prepisovaly navzajem a portal pak ukazoval nesmysly („0 % · Dokončeno").
+// Milnik: { t: text, p: postup 0–100, s: 'next'|'now'|'done' (odvozene, drzime kvuli
+// starym datum a portalum), volitelne dur: odhad doby („2–3 týdny"). Stary milnik bez
+// „p" se bere: hotovy = 100 %, jinak 0 %.
+function milePct(m) {
+  const v = typeof m.p === 'number' ? m.p : (m.s === 'done' ? 100 : 0);
+  return Math.min(100, Math.max(0, Math.round(v)));
 }
-async function cycleMile(pid, i) {
-  const p = proj(pid); const ms = (p.milestones || []).slice();
-  ms[i].s = ms[i].s === 'next' ? 'now' : ms[i].s === 'now' ? 'done' : 'next';
-  await db.collection('projects').doc(pid).update({ milestones: ms, ...msRecalc(ms, p) });
+// Prubeh = prumer postupu vsech milniku, cela procenta. Faze = prvni rozdelany
+// milnik (0<p<100), jinak prvni nedokonceny; vse hotovo → „Dokončeno".
+// Bez milniku prubeh NEZNAME → progress: null (zobrazuje se „—", ne 0 %).
+function msRecalc(ms, p) {
+  if (!ms || !ms.length) return { progress: null, phase: (p && p.phase) || '' };
+  const progress = Math.round(ms.reduce((a, m) => a + milePct(m), 0) / ms.length);
+  const run = ms.find(m => { const v = milePct(m); return v > 0 && v < 100; });
+  const open = ms.find(m => milePct(m) < 100);
+  return { progress, phase: run ? run.t : (open ? open.t : 'Dokončeno') };
+}
+// Prubeh pro zobrazeni — pocita se zivy z milniku, aby stary rucne zapsany
+// progress v databazi nemohl lhat. null = harmonogram nezadan.
+function projProgress(p) { return msRecalc((p && p.milestones) || [], p || {}).progress; }
+/* Faze se odvozuje ZIVE z harmonogramu, stejne jako prubeh. Ulozene pole
+   phase je jen posledni znamy stav — kdyz se milnik zmenil jinde (nebo
+   zustalo z doby rucniho zadavani), ukazovalo to nesmysl typu
+   "0 % · Dokonceno". Bez harmonogramu plati rucne zadana faze. */
+function projPhase(p) {
+  const ms = (p && p.milestones) || [];
+  return ms.length ? msRecalc(ms, p || {}).phase : ((p && p.phase) || '');
+}
+// Spolecny zapis: milniky vzdy, progress/phase jen kdyz se opravdu zmenily
+// (zadne zbytecne zapisy, zadne prekreslovaci smycky).
+async function ulozMilniky(pid, ms) {
+  const p = proj(pid); const r = msRecalc(ms, p);
+  const upd = { milestones: ms };
+  if (r.progress !== (typeof p.progress === 'number' ? p.progress : null)) upd.progress = r.progress;
+  if (r.phase !== (p.phase || '')) upd.phase = r.phase;
+  await db.collection('projects').doc(pid).update(upd);
+}
+// Nastavi postup milniku (tlacitka 0/25/75/… i odskrtnuti kolecka = 100 %).
+async function setMilePct(pid, i, pct) {
+  const p = proj(pid); const ms = (p.milestones || []).map(m => ({ ...m }));
+  if (!ms[i]) return;
+  ms[i].p = Math.min(100, Math.max(0, Math.round(pct) || 0));
+  ms[i].s = ms[i].p === 100 ? 'done' : ms[i].p > 0 ? 'now' : 'next';
+  await ulozMilniky(pid, ms);
 }
 async function addMile(pid) {
   const t = $('#mile-t').value.trim(); if (!t) return;
-  const p = proj(pid); const ms = [...(p.milestones || []), { t, s: 'next' }];
+  const p = proj(pid); const ms = [...(p.milestones || []), { t, s: 'next', p: 0 }];
   $('#mile-t').value = ''; zapomen('mile-t');
-  await db.collection('projects').doc(pid).update({ milestones: ms, ...msRecalc(ms, p) });
+  await ulozMilniky(pid, ms);
 }
 async function delMile(pid, i) {
   const p = proj(pid); const ms = (p.milestones || []).slice(); ms.splice(i, 1);
-  await db.collection('projects').doc(pid).update({ milestones: ms, ...msRecalc(ms, p) });
+  await ulozMilniky(pid, ms);
 }
 
 
@@ -2386,7 +2440,7 @@ function pgDetail() {
           <h3>ℹ️ Projekt</h3>
           <div class="kv"><span>Zakázka</span><b>${esc(p.cn || '')}</b></div>
           <div class="kv"><span>Investor</span><span>${esc(p.client || '')}</span></div>
-          <div class="kv"><span>Fáze</span><span>${esc(p.phase || '')} (${p.progress || 0} %)</span></div>
+          <div class="kv"><span>Fáze</span><span>${esc(projPhase(p) || '—')} (${projProgress(p) != null ? projProgress(p) + ' %' : 'harmonogram nezadán'})</span></div>
         </div>
       </div>
     </div>
@@ -4325,6 +4379,7 @@ function viewSub() {
       </div>` : ''}
     </div>
     ${kartaUkoly(p)}
+    ${typeof navodHtml === "function" ? navodHtml('sub') : ""}
     ${kartaKlice()}
     ${kartaPodklady(p)}
     ${kartaPoznamky(p)}
@@ -4362,6 +4417,8 @@ async function subOdchod() {
   if (!otevrena) { S.subOdchodOpen = false; render(); return; }
   const text = $('#so-z').value.trim();
   if (!text) { toast('Sepiš aspoň větu, co jste udělali'); return; }
+  /* Fotka je u odchodu subdodavatele povinna stejne jako u party. */
+  if (!S.draftPhotos.length) { toast('📷 Přidej aspoň jednu fotku — bez ní odchod zapsat nejde'); return; }
   try {
     /* zaznam + fotky jdou do deniku ke schvaleni stejne jako od party;
        pocet osob = kolik jich sub nahlasil pri prichodu (sub nema dochazku,
@@ -4469,6 +4526,7 @@ function viewWorker() {
       ${(p.stavbaDocs || []).map(d => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${esc(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('')}
     </div>` : ''}
     ${kartaUkoly(p)}
+    ${typeof navodHtml === "function" ? navodHtml('worker') : ""}
     ${kartaKlice()}
     ${kartaPodklady(p)}
     ${kartaPoznamky(p)}
@@ -4887,7 +4945,12 @@ async function workerPrechod() {
 
 async function workerSubmit() {
   const txt = $('#wt').value.trim();
-  if (!txt && !S.draftPhotos.length) { toast('Napiš text nebo přidej fotku'); return; }
+  /* Zapis ze stavby musi mit text I fotku (rozhodnuti Marca 29. 8.).
+     Driv stacilo jedno z toho, takze vetsina zapisu chodila bez
+     fotodokumentace. Vedeni ma vlastni formular bez teto podminky —
+     doplnuje zapisy z kancelare, kde fotit neni co. */
+  if (!txt) { toast('Napiš, co jste dnes dělali'); return; }
+  if (!S.draftPhotos.length) { toast('📷 Přidej aspoň jednu fotku — bez ní zápis odeslat nejde'); return; }
   $('#w-save').disabled = true;
   /* Pocet osob pracovnik nezadava — kdo byl na stavbe, je videt z dochazky
      a rucni cislo bylo jen dalsi udaj, ktery mohl byt spatne. */
@@ -4911,7 +4974,11 @@ function viewPortal() {
       <div class="hm">Rekonstrukce pro: <b style="color:#fff">${esc(P.client || '')}</b></div>
       <h2 style="margin:3px 0 2px">${esc(P.address || P.name || '')}</h2>
       <div class="hm">${esc(P.type || '')}</div>
-      ${P.progress != null ? `<div class="prog"><i style="width:${P.progress}%"></i></div><div class="hm">Hotovo ${P.progress} % ${P.phase ? '· fáze: ' + esc(P.phase) : ''} ${P.handover ? '· ' + esc(P.handover) : ''}</div>` : ''}
+      ${/* Prubeh na portalu se pocita z milniku v mirroru — kdyz harmonogram neni,
+          radek s procenty vubec neukazujeme (radsi nic nez lzive „Hotovo 0 %"). */''}
+      ${(() => { const pr = projProgress(P); return pr != null
+        ? `<div class="prog"><i style="width:${pr}%"></i></div><div class="hm">Hotovo ${pr} % ${P.phase ? '· fáze: ' + esc(P.phase) : ''} ${P.handover ? '· ' + esc(P.handover) : ''}</div>`
+        : ((P.phase || P.handover) ? `<div class="hm">${P.phase ? 'fáze: ' + esc(P.phase) : ''}${P.phase && P.handover ? ' · ' : ''}${esc(P.handover || '')}</div>` : ''); })()}
     </div>
     ${(vps.length || done.length) ? `
     <div class="card" ${vps.length ? 'style="border:2px solid var(--amber)"' : ''}>
@@ -4930,7 +4997,8 @@ function viewPortal() {
     </div>` : ''}
     ${(P.milestones || []).length ? `<div class="card">
       <h3>📅 Harmonogram</h3>
-      ${P.milestones.map(m => `<div class="mile ${m.s}"><div class="dot">${m.s === 'done' ? '✓' : m.s === 'now' ? '●' : ''}</div><div>${m.s === 'now' ? '<b>' + esc(m.t) + ' — probíhá</b>' : esc(m.t)}</div></div>`).join('')}
+      ${/* Stav milniku na portalu se bere z postupu (milePct) — funguje i pro stara data bez „p". */''}
+      ${P.milestones.map(m => { const pc = milePct(m); const cls = pc === 100 ? 'done' : pc > 0 ? 'now' : 'next'; return `<div class="mile ${cls}"><div class="dot">${pc === 100 ? '✓' : pc > 0 ? '●' : ''}</div><div>${cls === 'now' ? '<b>' + esc(m.t) + ' — probíhá (' + pc + ' %)</b>' : esc(m.t)}${m.dur ? ' <span class="muted" style="font-size:11px">(' + esc(m.dur) + ')</span>' : ''}</div></div>`; }).join('')}
     </div>` : ''}
     ${S.portalDocs.length ? `<div class="card">
       <h3>📁 Dokumenty</h3>
@@ -4966,9 +5034,12 @@ async function portalVpAction(vpid, action) {
 async function syncPortalHeader(p) {
   const tok = tokenPortalu(p.id); // token je v admin-only /portaly (S2); bezi jen u admina s nactenym seznamem
   if (!tok) return;
+  // Do mirroru jde prubeh i faze uz odvozene z harmonogramu (ne stary rucni
+  // zapis) — portal pak nemuze ukazat jine cislo nez detail projektu.
+  const r = msRecalc(p.milestones || [], p);
   await db.collection('portals').doc(tok).set({
     pid: p.id, client: p.client || '', name: p.name, address: p.address || '', type: p.type || '',
-    progress: p.progress || 0, phase: p.phase || '', handover: p.handover || '', milestones: p.milestones || []
+    progress: r.progress, phase: r.phase, handover: p.handover || '', milestones: p.milestones || []
   }, { merge: true }).catch(() => {});
 }
 // automaticky syncuj portal hlavičky když se změní projekty (levné — jen při renderu adminů)
@@ -5011,15 +5082,15 @@ async function seedData() {
   const batchAdd = async (col, data) => (await db.collection(col).add(data)).id;
   const pecka = await batchAdd('projects', {
     kod: '020', cn: 'CN20260055', client: 'Štěpán Pecka', name: 'Novodvorská - Pecka', address: 'Novodvorská 413/135, Praha 4',
-    type: 'Kompletní rekonstrukce · 3+kk panelák, 70 m²', resp: 'Zdeno Balúch', stav: 'Realizace', phase: 'Kompletace', progress: 88,
+    type: 'Kompletní rekonstrukce · 3+kk panelák, 70 m²', resp: 'Zdeno Balúch', stav: 'Realizace', phase: 'Kompletace a montáže zařízení', progress: 79, // = prumer milniku niz
     active: true, gps: { lat: 50.0236914, lng: 14.4368684, tol: 100 }, handover: 'plán předání 24. 7. 2026', driveFolderId: '', investorEmail: '',
-    milestones: [{ t: 'Přípravné práce, demontáže', s: 'done' }, { t: 'SDK konstrukce, elektro, ZTI, VZT', s: 'done' }, { t: 'Obklady, dlažba, hydroizolace', s: 'done' }, { t: 'Nivelace a pokládka vinylu', s: 'done' }, { t: 'Malování', s: 'done' }, { t: 'Kompletace a montáže zařízení', s: 'now' }, { t: 'Úklid a předání', s: 'next' }], createdAt: FV()
+    milestones: [{ t: 'Přípravné práce, demontáže', s: 'done', p: 100 }, { t: 'SDK konstrukce, elektro, ZTI, VZT', s: 'done', p: 100 }, { t: 'Obklady, dlažba, hydroizolace', s: 'done', p: 100 }, { t: 'Nivelace a pokládka vinylu', s: 'done', p: 100 }, { t: 'Malování', s: 'done', p: 100 }, { t: 'Kompletace a montáže zařízení', s: 'now', p: 50 }, { t: 'Úklid a předání', s: 'next', p: 0 }], createdAt: FV()
   });
   const saarova = await batchAdd('projects', {
     kod: '028', cn: 'CN20260060', client: 'Šárka Šaarová', name: 'V Předpolí - Šaarová', address: 'V Předpolí 1472/27, Praha 10',
-    type: 'Komplet reko · činžovní dům', resp: 'Zdeno Balúch', stav: 'Realizace', phase: 'Hrubé rozvody', progress: 35,
+    type: 'Komplet reko · činžovní dům', resp: 'Zdeno Balúch', stav: 'Realizace', phase: 'Elektro a ZTI — hrubé rozvody', progress: 30, // = prumer milniku niz
     active: true, gps: { lat: 50.0712, lng: 14.4990, tol: 100 }, handover: 'dle harmonogramu', driveFolderId: '', investorEmail: '',
-    milestones: [{ t: 'Přípravné práce, demontáže', s: 'done' }, { t: 'Elektro a ZTI — hrubé rozvody', s: 'now' }, { t: 'SDK konstrukce', s: 'next' }, { t: 'Obklady, dlažba', s: 'next' }, { t: 'Podlahy, malování, kompletace', s: 'next' }], createdAt: FV()
+    milestones: [{ t: 'Přípravné práce, demontáže', s: 'done', p: 100 }, { t: 'Elektro a ZTI — hrubé rozvody', s: 'now', p: 50 }, { t: 'SDK konstrukce', s: 'next', p: 0 }, { t: 'Obklady, dlažba', s: 'next', p: 0 }, { t: 'Podlahy, malování, kompletace', s: 'next', p: 0 }], createdAt: FV()
   });
   const U = [
     { jmeno: 'Ruslan', prijmeni: 'Gorbunov', email: 'gorbunovruslan430@gmail.com', typ: { kanc: 0, teren: 1, inv: 0, sub: 0 }, role: 'Vedoucí party Ruslan', sazba: { h: 300 } },
