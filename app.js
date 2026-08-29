@@ -4070,22 +4070,34 @@ async function vpPapir(id) {
 /* Hodiny za obdobi. Vlastni matematika je ve vypocty.js, aby se dala
    otestovat samostatne — otevri test.html a uvidis zelena/cervena. */
 function hoursFromAttendance(from, to) {
+  /* Seskupuje se podle CLOVEKA A STAVBY, ne podle dne — smenu pres pulnoc
+     musi rozdelit az Vypocty.spocitejSmeny(), ktere odchod v 6:00 rano
+     pripoji ke smene z predchoziho vecera. Driv se seskupovalo i podle dne
+     a nocni smena se rozpadla na dva prazdne dny; osm hodin zmizelo.
+     Do parovani se proto pousti i den PO konci obdobi (odchod z posledni
+     noci), ale zapocita se jen smena, jejiz DEN PRICHODU do obdobi patri. */
+  const doPlus1 = shiftISO(to, 1);
   const byKey = {};
-  S.attendance.filter(a => a.date >= from && a.date <= to && jeSchvaleno(a)).forEach(a => {
-    const k = a.userDocId + '|' + a.pid + '|' + a.date;
+  S.attendance.filter(a => a.date >= from && a.date <= doPlus1 && jeSchvaleno(a)).forEach(a => {
+    const k = a.userDocId + '|' + a.pid;
     (byKey[k] = byKey[k] || []).push(a);
   });
   const out = {};
   Object.entries(byKey).forEach(([k, recs]) => {
     const [udi, pid] = k.split('|');
-    const d = Vypocty.spocitejDen(recs);
-    out[udi] = out[udi] || {};
-    out[udi][pid] = out[udi][pid] || { h: 0, dni: 0, incomplete: 0, pauzaMin: 0, pauzaRucni: false };
-    out[udi][pid].h += d.minuty / 60;
-    out[udi][pid].pauzaMin += d.pauzaMin;
-    if (d.pauzaRucni) out[udi][pid].pauzaRucni = true;   /* aspon jeden den ma pauzu od vedeni */
-    out[udi][pid].dni++;
-    if (d.nedokonceno) out[udi][pid].incomplete++;
+    Vypocty.spocitejSmeny(recs).forEach(d => {
+      if (d.den < from || d.den > to) return;     /* smena mimo obdobi */
+      out[udi] = out[udi] || {};
+      out[udi][pid] = out[udi][pid] || { h: 0, dni: 0, incomplete: 0, pauzaMin: 0, pauzaRucni: false, poDnech: [] };
+      out[udi][pid].h += d.minuty / 60;
+      out[udi][pid].pauzaMin += d.pauzaMin;
+      if (d.pauzaRucni) out[udi][pid].pauzaRucni = true;   /* aspon jeden den ma pauzu od vedeni */
+      out[udi][pid].dni++;
+      if (d.nedokonceno) out[udi][pid].incomplete++;
+      /* Rozpad po dnech — potrebuje ho vyplata, kdyz se cloveku behem
+         obdobi zmenila sazba: kazdy den se nasobi tou, ktera tehdy platila. */
+      out[udi][pid].poDnech.push({ den: d.den, h: d.minuty / 60 });
+    });
   });
   return out;
 }

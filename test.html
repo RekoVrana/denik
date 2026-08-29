@@ -36,7 +36,22 @@
    Kdyz nekdy nekdo zmeni vypocet hodin, tady to spadne do cervene. */
 var testy = [], poradi = 0;
 
-function z(akce, cas) { poradi++; return { akce: akce, time: cas, createdAt: { seconds: 1e9 + poradi * 60 } }; }
+function z(akce, cas) { poradi++; return { akce: akce, time: cas, date: '2026-08-10', createdAt: { seconds: 1e9 + poradi * 60 } }; }
+/* zaznam s vlastnim datem — pro smeny pres pulnoc */
+function zd(akce, cas, datum) { poradi++; return { akce: akce, time: cas, date: datum, createdAt: { seconds: 1e9 + poradi * 60 } }; }
+/* Spocita SMENY (ne kalendarni dny) a vrati je jako pole. */
+function smeny(zaznamy) { return Vypocty.spocitejSmeny(zaznamy); }
+function testSmena(nazev, popis, zaznamy, cekamSmen, cekamMinutPrvni, dalsi) {
+  var v = smeny(zaznamy);
+  var prvni = v[0] || {};
+  var ok = v.length === cekamSmen && prvni.minuty === cekamMinutPrvni;
+  var poznamky = [];
+  if (v.length !== cekamSmen) poznamky.push('směn: čekáno ' + cekamSmen + ', vyšlo ' + v.length);
+  if (dalsi) Object.keys(dalsi).forEach(function (k) {
+    if (prvni[k] !== dalsi[k]) { ok = false; poznamky.push(k + ': čekáno ' + dalsi[k] + ', vyšlo ' + prvni[k]); }
+  });
+  testy.push({ nazev: nazev, popis: popis, ok: ok, cekano: cekamMinutPrvni, vyslo: prvni.minuty, poznamky: poznamky });
+}
 function test(nazev, popis, zaznamy, cekamMinut, dalsi) {
   var v = Vypocty.spocitejDen(zaznamy);
   var ok = v.minuty === cekamMinut;
@@ -109,6 +124,28 @@ test('Ruční pauza přebíjí časovač', 'Časovač zapsal 30 min, vedení opr
 test('Nula v poli pauzy nic nepřebíjí', 'Vedení pole nevyplnilo (0) — platí pauza z časovače, 30 minut',
   [z('Příchod','7:00'), z('Pauza','12:00'), z('Konec pauzy','12:30'),
    (function () { var r = z('Odchod','16:00'); r.pauza = 0; return r; })()], 510, { pauzaRucni: false });
+
+/* ---- 16. smena pres pulnoc ---- */
+testSmena('Směna přes půlnoc', 'Příchod v úterý 22:00, odchod ve středu 6:00 → 8 hodin, a celé se to počítá k úterku',
+  [zd('Příchod','22:00','2026-08-11'), zd('Odchod','6:00','2026-08-12')], 1, 480, { den: '2026-08-11' });
+
+/* ---- 17. pauza uprostred nocni smeny ---- */
+testSmena('Pauza v noční směně', 'Příchod 22:00, pauza 1:00–1:30 po půlnoci, odchod 6:00 → 7,5 hodiny',
+  [zd('Příchod','22:00','2026-08-11'), zd('Pauza','1:00','2026-08-12'),
+   zd('Konec pauzy','1:30','2026-08-12'), zd('Odchod','6:00','2026-08-12')], 1, 450);
+
+/* ---- 18. zapomenuty odchod NENI nocni smena ---- */
+testSmena('Zapomenutý odchod se nenatáhne', 'Příchod v pondělí 7:00 a odchod až ve středu 16:00 (přes 24 h) → pondělí zůstane neúplné, hodiny se nevyrobí',
+  [zd('Příchod','7:00','2026-08-10'), zd('Odchod','16:00','2026-08-12')], 2, 0, { nedokonceno: true });
+
+/* ---- 19. novy prichod uzavira predchozi smenu ---- */
+testSmena('Nový příchod uzavře zapomenutý den', 'Příchod v pondělí 7:00 bez odchodu, v úterý normální den 7:00–16:00 → pondělí neúplné, úterý 9 hodin',
+  [zd('Příchod','7:00','2026-08-10'),
+   zd('Příchod','7:00','2026-08-11'), zd('Odchod','16:00','2026-08-11')], 2, 0, { nedokonceno: true });
+
+/* ---- 20. bezny den se timhle nesmi zmenit ---- */
+testSmena('Běžný den zůstává jedním dnem', 'Příchod 7:00, odchod 16:00 v jeden den → jedna směna, 9 hodin',
+  [zd('Příchod','7:00','2026-08-10'), zd('Odchod','16:00','2026-08-10')], 1, 540, { nedokonceno: false });
 
 /* ---- vypis ---- */
 var padlo = testy.filter(function (t) { return !t.ok; }).length;

@@ -15,6 +15,13 @@
     var p = String(t || '').split(':');
     return (parseInt(p[0], 10) || 0) * 60 + (parseInt(p[1], 10) || 0);
   }
+  /* Minuty zaznamu VCETNE posunu o dny. Smena pres pulnoc se pocita
+     k dni prichodu, takze odchod v 6:00 nasledujiciho rana je 30:00 —
+     osm hodin od prichodu ve 22:00. Bez toho se noc rozpadla na dva
+     prazdne dny a hodiny zmizely uplne. */
+  function minutyZaznamu(z) {
+    return naMinuty(z && z.time) + 1440 * ((z && z._posun) || 0);
+  }
   function naCas(min) {
     var h = Math.floor(min / 60), m = min % 60;
     return h + ' h ' + (m < 10 ? '0' : '') + m + ' min';
@@ -50,7 +57,7 @@
     var out = [], otevrena = null, nedokoncene = 0;
     serazene.forEach(function (z) {
       if (z.akce === akceOd) {
-        if (otevrena === null) otevrena = naMinuty(z.time);
+        if (otevrena === null) otevrena = minutyZaznamu(z);
         // druhy zacatek po sobe: prvni plati, tenhle se zahodi
       } else if (z.akce === akceDo) {
         if (otevrena === null) {
@@ -59,7 +66,7 @@
              dny "jen prichod nebo jen odchod" upozorni. */
           nedokoncene = 1;
         } else {
-          var konec = naMinuty(z.time);
+          var konec = minutyZaznamu(z);
           if (konec > otevrena) out.push({ od: otevrena, do: konec });
           else nedokoncene = 1;      /* konec driv nez zacatek je taky neuplny den */
           otevrena = null;
@@ -70,6 +77,60 @@
     return { useky: out, otevrenyOd: otevrena, nedokoncene: nedokoncene };
   }
 
+  /* Kolik celych dni je mezi dvema daty (YYYY-MM-DD). Pocita se v UTC,
+     aby letni cas neposunul vysledek o den. */
+  function dnyMezi(od, doo) {
+    var a = new Date(od + 'T00:00:00Z'), b = new Date(doo + 'T00:00:00Z');
+    return Math.round((b - a) / 86400000);
+  }
+  /* Smena pres pulnoc. Hodiny se pocitaji po dnech, takze prichod ve 22:00
+     a odchod v 6:00 rano se driv rozpadl na dva prazdne dny a osm hodin
+     zmizelo beze stopy. Tady se kazdemu zaznamu urci, ke KTEREMU DNI patri
+     (vzdy den prichodu) a o kolik dni pozdeji se stal.
+
+     Pres pulnoc se paruje jen odchod do 24 hodin od prichodu. Delsi mezera
+     neni nocni smena, ale zapomenuty odchod — ten musi zustat neuzavrenym
+     dnem, jinak by se clovek s vybitym telefonem dostal k desitkam hodin.
+     Novy prichod predchozi smenu vzdycky uzavira: kdo si pichnul v pondeli
+     a odchod zapomnel, ma pondeli neuplne a utery zacina nanovo. */
+  function pripravSmeny(zaznamy) {
+    var serazene = (zaznamy || []).slice().sort(function (a, b) {
+      return (poradi(a) - poradi(b)) || (casZapisu(a) - casZapisu(b));
+    });
+    var otevrena = null;
+    var doDvacetiCtyr = function (z) {
+      return otevrena !== null && (poradi(z) - poradi(otevrena)) <= 24 * 3600;
+    };
+    return serazene.map(function (z) {
+      var zaklad = z.date;
+      if (z.akce === 'Příchod') {
+        otevrena = z;
+      } else if (z.akce === 'Odchod') {
+        if (doDvacetiCtyr(z)) zaklad = otevrena.date;
+        otevrena = null;
+      } else if (doDvacetiCtyr(z)) {
+        zaklad = otevrena.date;      /* pauza patri k bezici smene */
+      }
+      var kopie = {};
+      for (var k in z) if (Object.prototype.hasOwnProperty.call(z, k)) kopie[k] = z[k];
+      kopie._smenaDen = zaklad;
+      kopie._posun = z.date ? dnyMezi(zaklad, z.date) : 0;
+      return kopie;
+    });
+  }
+  /* Rozdeli zaznamy jednoho cloveka na jedne stavbe na SMENY (ne na
+     kalendarni dny) a kazdou spocita. Vraci pole { den, ...vysledek }. */
+  function spocitejSmeny(zaznamy) {
+    var podleDne = {};
+    pripravSmeny(zaznamy).forEach(function (z) {
+      (podleDne[z._smenaDen] = podleDne[z._smenaDen] || []).push(z);
+    });
+    return Object.keys(podleDne).sort().map(function (den) {
+      var v = spocitejDen(podleDne[den]);
+      v.den = den;
+      return v;
+    });
+  }
   function delka(useky) {
     return useky.reduce(function (s, u) { return s + (u.do - u.od); }, 0);
   }
@@ -136,6 +197,9 @@
     naCas: naCas,
     poradi: poradi,
     dvojice: dvojice,
+    dnyMezi: dnyMezi,
+    pripravSmeny: pripravSmeny,
+    spocitejSmeny: spocitejSmeny,
     spocitejDen: spocitejDen
   };
 })(typeof window !== 'undefined' ? window : this);
