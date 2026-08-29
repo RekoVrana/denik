@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '29. 8. 2026 o';
+const VERZE = '29. 8. 2026 p';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -542,7 +542,7 @@ function startData() {
      Kazdy klic (vsichni / parta / ja) ma vlastni posluchac a vysledky
      se skladaji dohromady, stejne jako u ukolu. */
   const pzSort = (a, b) => (a.nadpis || '').localeCompare(b.nadpis || '', 'cs');
-  if (role === 'admin') { listen('poznamky', 'poznamky', { sort: pzSort }); prevedStarePoznamky(); uklidRosterAdminy(); prevedTajnosti(); prevedKontaktyInvestoru(); uklidTypySubu(); setTimeout(dorovnejPortaly, 6000); }
+  if (role === 'admin') { listen('poznamky', 'poznamky', { sort: pzSort }); prevedStarePoznamky(); uklidRosterAdminy(); prevedTajnosti(); prevedKontaktyInvestoru(); uklidTypySubu(); prevedSazbyNaHistorii(); setTimeout(dorovnejPortaly, 6000); }
   else {
     const pzMid = (S.meAuth && S.meAuth.userDocId) || '__nikdo__';
     listenPoznamky(role === 'sub' ? ['vsichni', pzMid] : ['vsichni', 'parta', pzMid]);
@@ -4079,6 +4079,111 @@ async function vpPapir(id) {
   toast('Označeno jako schválené papírově ✓');
 }
 
+/* ---- Hodinova sazba a jeji historie (#34) ----
+   Sazba zije v /sazby/{userId} jako { h, c, hist }. Pole h a c jsou POSLEDNI
+   (aktualni) sazba — kvuli seznamu uzivatelu a starym datum. hist je pole
+   zaznamu { od:'YYYY-MM-DD', h, c, kdo, kdy }.
+   Duvod: report nasobil hodiny za JAKEKOLI obdobi dnesni sazbou, takze
+   po zvyseni sazby se prepocitala i uz vyplacena minulost — cerven vytisteny
+   v cervnu na 48 000 dnes ukazoval 52 800. Ted se kazdy den ocenuje sazbou
+   platnou TEN den.
+   Proc pole a ne podkolekce: report potrebuje historii vsech vybranych lidi
+   naraz, takze by slo o collectionGroup dotaz — a ten chce vlastni zastupne
+   pravidlo i rucni index. Presne na tom uz jednou uvazl souhlas investora
+   pres /actions. Navic sazba a jeji historie se musi menit jednim zapisem.
+   POZOR: uvnitr pole nejde pouzit serverTimestamp (Firestore zapis odmitne),
+   proto je 'kdy' obycejne datum. */
+const SAZBA_ODJAKZIVA = '2000-01-01';   /* sazba, ktera platila jeste pred zavedenim historie */
+
+/* Zaznamy historie serazene podle data, bez smeti. */
+function sazbaHist(s) {
+  return (s && Array.isArray(s.hist) ? s.hist : [])
+    .filter(z => z && typeof z.od === 'string' && z.od && typeof z.h === 'number')
+    .slice().sort((a, b) => a.od < b.od ? -1 : a.od > b.od ? 1 : 0);
+}
+/* Sazba platna pro cloveka v konkretni den; null = sazba k tomu dni neni.
+   - bez historie plati aktualni sazba (stara data — jinak by se vsem lidem
+     vynulovaly uz vytistene reporty),
+   - den PRED prvnim zaznamem dostane nejstarsi znamou sazbu, ne tu dnesni,
+   - zaznam s h == 0 znamena „tady sazba skoncila" (clovek prestal byt
+     v parte); dny od nej dal jsou zase bez sazby. */
+function sazbaKeDni(udi, den) {
+  const s = S.sazby[udi];
+  if (!s) return null;
+  const hist = sazbaHist(s);
+  if (!hist.length) return s.h ? { h: s.h, c: s.c || 0, od: null } : null;
+  let plati = null;
+  for (const z of hist) { if (z.od <= den) plati = z; else break; }
+  if (!plati) plati = hist[0];
+  return plati.h ? { h: plati.h, c: plati.c || 0, od: plati.od } : null;
+}
+/* Penize za jednu bunku reportu — den po dni, sazbou platnou ten den.
+   Kdyby rozpad po dnech chybel (starsi verze v telefonu), spocita se cela
+   bunka sazbou platnou k poslednimu dni obdobi — report nikdy nespadne
+   a nikdy neukaze nulu misto penez. */
+function penizeZaHodiny(udi, h) {
+  const dny = (h && Array.isArray(h.poDnech) && h.poDnech.length)
+    ? h.poDnech : [{ den: S.repTo || isoToday(), h: (h && h.h) || 0 }];
+  let hruba = 0, cista = 0, maCistou = false, hodBezSazby = 0;
+  const pouzite = {};
+  dny.forEach(d => {
+    const hod = d.h || 0;
+    const s = sazbaKeDni(udi, d.den);
+    if (!s) { hodBezSazby += hod; return; }
+    hruba += hod * s.h;
+    /* Bez ciste sazby dostane clovek celou hrubou — stejne to pocital
+       i dosavadni export, aby souhrny sedely. */
+    cista += hod * (s.c || s.h);
+    if (s.c) maCistou = true;
+    const k = s.h + '|' + (s.c || 0);
+    if (!pouzite[k]) pouzite[k] = { h: s.h, c: s.c || 0, od: s.od, hod: 0, dni: 0 };
+    pouzite[k].hod += hod;
+    if (hod > 0) pouzite[k].dni++;
+  });
+  const sazby = Object.keys(pouzite).map(k => pouzite[k]).sort((a, b) => a.h - b.h);
+  return { hruba, cista, maCistou, hodBezSazby, sazby };
+}
+/* Popisek sazeb pod bunkou reportu. Jedna sazba = presne stejny vzhled
+   jako driv. Vic sazeb = vypsat kazdou zvlast i s tim, kolik hodin a dnu
+   na ni padlo — at si to Katka umi prepocitat na papire. */
+function sazbyPopisek(p) {
+  const chybi = p.hodBezSazby > 0 ? `<span class="badge b-red">${p.sazby.length ? fmtH(p.hodBezSazby) + ' bez sazby!' : 'chybí sazba!'}</span>` : '';
+  if (!p.sazby.length) return chybi || '<span class="badge b-red">chybí sazba!</span>';
+  if (p.sazby.length === 1) {
+    const s = p.sazby[0];
+    return (s.c ? `<span class="badge b-wait">hrubá ${s.h}</span> <span class="badge b-ok">čistá ${s.c}</span>`
+                : `<span class="badge b-wait">${s.h} Kč/h</span>`) + (chybi ? '<br>' + chybi : '');
+  }
+  const n = p.sazby.length;
+  return `<span class="badge b-wait">⇄ v období ${n} ${n < 5 ? 'sazby' : 'sazeb'}</span><br>`
+    + p.sazby.map(s => `<span class="muted" style="font-size:11px">${s.h} Kč/h${s.c ? ` (čistá ${s.c})` : ''} · ${fmtH(s.hod)} · ${s.dni} ${s.dni === 1 ? 'den' : s.dni < 5 ? 'dny' : 'dní'}</span>`).join('<br>')
+    + (chybi ? '<br>' + chybi : '');
+}
+/* Poskladá novy obsah dokumentu /sazby/{id} vcetne historie.
+   Vraci null, kdyz se nema nic menit — bez toho by kazde otevreni
+   a ulozeni karty pridalo dalsi zbytecny zaznam. */
+function sazbySloz(stara, od, h, c) {
+  const hist = sazbaHist(stara);
+  /* Stara sazba bez historie dostane zaznam „odjakziva". Bez nej by se
+     vsechny uz vytistene reporty prepocitaly novou sazbou. */
+  if (!hist.length && stara && stara.h) {
+    const p0 = { od: SAZBA_ODJAKZIVA, h: stara.h, kdo: 'převod dat', kdy: isoToday() };
+    if (stara.c) p0.c = stara.c;
+    hist.push(p0);
+  }
+  let plati = null;
+  for (const z of hist) { if (z.od <= od) plati = z; else break; }
+  if (plati && plati.h === h && (plati.c || 0) === (c || 0) && !hist.some(z => z.od === od)) return null;
+  const zaznam = { od, h, kdo: fullName(S.me || {}).trim() || 'vedení', kdy: isoToday() };
+  if (c) zaznam.c = c;
+  const i = hist.findIndex(z => z.od === od);
+  if (i >= 0) hist[i] = zaznam; else hist.push(zaznam);
+  hist.sort((a, b) => a.od < b.od ? -1 : a.od > b.od ? 1 : 0);
+  const posl = hist[hist.length - 1];
+  const out = { hist };
+  if (posl.h) { out.h = posl.h; if (posl.c) out.c = posl.c; }
+  return out;
+}
 /* ---- Reporty — hodiny z docházky ---- */
 /* Hodiny za obdobi. Vlastni matematika je ve vypocty.js, aby se dala
    otestovat samostatne — otevri test.html a uvidis zelena/cervena. */
@@ -4243,21 +4348,24 @@ function repTable() {
   let totKc = 0, totC = 0, totH = 0, missing = [], anyCista = false, anyIncomplete = false;
   const rows = sel.map(udi => {
     const u = userById(udi); if (!u) return '';
-    const s = S.sazby[udi];
-    let rowKc = 0, rowC = 0, rowH = 0;
+    let rowKc = 0, rowC = 0, rowH = 0, rowBez = 0, rowCista = false, rowVice = false;
     const cells = selP.map(pid => {
       const h = H[udi] && H[udi][pid];
       if (!h || (!h.h && !h.incomplete)) return '<td class="muted" style="text-align:center">—</td>';
       if (h.incomplete) anyIncomplete = true;
-      const kcv = s ? h.h * s.h : 0, cc = (s && s.c) ? h.h * s.c : 0;
-      rowKc += kcv; rowC += cc; rowH += h.h;
-      return `<td style="text-align:center"><b>${s ? kc(kcv) + ' Kč' : '⚠'}</b><br><span class="muted">${fmtH(h.h)} · ${h.dni} ${h.dni === 1 ? 'den' : h.dni < 5 ? 'dny' : 'dní'}${h.pauzaMin ? ` · <span title="${h.pauzaRucni ? 'Část pauzy zadalo ručně vedení — ta přebíjí časovač v mobilu.' : 'odečtená pauza na oběd'}">− pauza ${h.pauzaMin} min${h.pauzaRucni ? ' ✏️' : ''}</span>` : ''}${h.incomplete ? ` · <b style="color:var(--red)">${h.incomplete}× neúplný den</b>` : ''}</span><br>${s ? (s.c ? `<span class="badge b-wait">hrubá ${s.h}</span> <span class="badge b-ok">čistá ${s.c}</span>` : `<span class="badge b-wait">${s.h} Kč/h</span>`) : '<span class="badge b-red">chybí sazba!</span>'}</td>`;
+      /* Penize den po dni, sazbou platnou ten den (#34 — historie sazeb).
+         Driv se cela bunka nasobila DNESNI sazbou, takze zvyseni sazby
+         zpetne prepsalo i uz vyplacene mesice. */
+      const p = penizeZaHodiny(udi, h);
+      rowKc += p.hruba; rowC += p.cista; rowH += h.h; rowBez += p.hodBezSazby;
+      if (p.maCistou) { rowCista = true; anyCista = true; }
+      if (p.sazby.length > 1) rowVice = true;
+      return `<td style="text-align:center"><b>${p.sazby.length ? kc(p.hruba) + ' Kč' : '⚠'}</b><br><span class="muted">${fmtH(h.h)} · ${h.dni} ${h.dni === 1 ? 'den' : h.dni < 5 ? 'dny' : 'dní'}${h.pauzaMin ? ` · <span title="${h.pauzaRucni ? 'Část pauzy zadalo ručně vedení — ta přebíjí časovač v mobilu.' : 'odečtená pauza na oběd'}">− pauza ${h.pauzaMin} min${h.pauzaRucni ? ' ✏️' : ''}</span>` : ''}${h.incomplete ? ` · <b style="color:var(--red)">${h.incomplete}× neúplný den</b>` : ''}</span><br>${sazbyPopisek(p)}</td>`;
     });
-    if (!s && rowH > 0) missing.push(fullName(u));
-    if (s && s.c && rowH > 0) anyCista = true;
-    totKc += rowKc; totC += (s && s.c) ? rowC : rowKc; totH += rowH;
-    const diff = (s && s.c) ? rowKc - rowC : 0;
-    return `<tr><td><span class="uav" style="margin-right:6px">${ini(u)}</span>${esc(fullName(u))}<br><span class="muted" style="margin-left:34px">${esc(u.role || '')}</span></td>${cells.join('')}<td style="text-align:center"><b>${s ? kc(rowKc) + ' Kč' : '⚠'}</b>${diff > 0 ? `<br><span class="muted">čistá: ${kc(rowC)} Kč</span><br><span class="badge b-wait">vedoucímu party: ${kc(diff)} Kč</span>` : ''}</td><td style="text-align:center"><b>${fmtH(rowH)}</b></td></tr>`;
+    if (rowBez > 0) missing.push(fullName(u));
+    totKc += rowKc; totC += rowC; totH += rowH;
+    const diff = rowCista ? rowKc - rowC : 0;
+    return `<tr><td><span class="uav" style="margin-right:6px">${ini(u)}</span>${esc(fullName(u))}<br><span class="muted" style="margin-left:34px">${esc(u.role || '')}</span>${rowVice ? '<br><span class="badge b-wait" style="margin-left:34px">sazba se v období měnila</span>' : ''}</td>${cells.join('')}<td style="text-align:center"><b>${kc(rowKc)} Kč${rowBez > 0 ? ' ⚠' : ''}</b>${diff > 0 ? `<br><span class="muted">čistá: ${kc(rowC)} Kč</span><br><span class="badge b-wait">vedoucímu party: ${kc(diff)} Kč</span>` : ''}</td><td style="text-align:center"><b>${fmtH(rowH)}</b></td></tr>`;
   });
   // křížová kontrola proti deníku (#25)
   /* Hodiny na stavbach, ktere NEJSOU zaskrtnute. Jedna zapomenuta stavba
@@ -4322,23 +4430,33 @@ function repCsvCislo(n) { return String(n).replace('.', ','); }
 function repExport() {
   if (!repObdobiOk()) { toast('Vyplň celé období.'); return; }
   const H = hoursFromAttendance(S.repFrom, S.repTo);
-  let csv = repCsvRadek(['Pracovnik', 'Projekt', 'Hodiny', 'Dny', 'Neuplne dny', 'Pauza (min)', 'Sazba hruba', 'Sazba cista', 'Kc hruba', 'Kc cista']);
+  let csv = repCsvRadek(['Pracovnik', 'Projekt', 'Hodiny', 'Dny', 'Neuplne dny', 'Pauza (min)', 'Sazba plati od', 'Sazba hruba', 'Sazba cista', 'Kc hruba', 'Kc cista']);
   let tH = 0, tDni = 0, tNeu = 0, tPauza = 0, tHruba = 0, tCista = 0;
   S.repWorkers.forEach(udi => {
     const u = userById(udi); if (!u) return;
-    const s = S.sazby[udi] || {};
     S.repProjects.forEach(pid => {
       const h = H[udi] && H[udi][pid]; if (!h) return;
-      /* Bez ciste sazby dostane clovek celou hrubou, takze „Kc cista" = hruba.
-         Stejne to pocita i souhrn v tabulce, aby cisla sedela. */
-      const hruba = s.h ? h.h * s.h : 0;
-      const cista = s.h ? h.h * (s.c || s.h) : 0;
-      csv += repCsvRadek([fullName(u), (proj(pid) || {}).name || 'smazaná stavba',
-        repCsvCislo(h.h.toFixed(2)), h.dni, h.incomplete || 0, h.pauzaMin || 0,
-        s.h ? repCsvCislo(s.h) : '', s.c ? repCsvCislo(s.c) : '',
-        s.h ? Math.round(hruba) : '', s.h ? Math.round(cista) : '']);
+      const p = penizeZaHodiny(udi, h);
+      const jmenoP = (proj(pid) || {}).name || 'smazaná stavba';
+      /* Kdyz se sazba behem obdobi menila, ma stavba VIC RADKU — jeden za
+         kazdou sazbu, at si to Katka umi prepocitat na papire. Dny, neuplne
+         dny a pauza patri celemu obdobi, ne jedne sazbe, proto jsou jen
+         na prvnim radku — soucet CELKEM pak vyjde stejne. */
+      const casti = p.sazby.slice();
+      if (p.hodBezSazby > 0) casti.push({ h: 0, c: 0, od: null, hod: p.hodBezSazby, dni: 0 });
+      if (!casti.length) casti.push({ h: 0, c: 0, od: null, hod: h.h, dni: 0 });
+      casti.forEach((cst, i) => {
+        /* Bez ciste sazby dostane clovek celou hrubou, takze „Kc cista" = hruba. */
+        const hruba = cst.h ? cst.hod * cst.h : 0;
+        const cista = cst.h ? cst.hod * (cst.c || cst.h) : 0;
+        csv += repCsvRadek([fullName(u), jmenoP,
+          repCsvCislo(cst.hod.toFixed(2)), i ? '' : h.dni, i ? '' : (h.incomplete || 0), i ? '' : (h.pauzaMin || 0),
+          (cst.od && cst.od !== SAZBA_ODJAKZIVA) ? cst.od : '',
+          cst.h ? repCsvCislo(cst.h) : '', cst.c ? repCsvCislo(cst.c) : '',
+          cst.h ? Math.round(hruba) : '', cst.h ? Math.round(cista) : '']);
+      });
       tH += h.h; tDni += h.dni; tNeu += h.incomplete || 0; tPauza += h.pauzaMin || 0;
-      tHruba += hruba; tCista += cista;
+      tHruba += p.hruba; tCista += p.cista;
     });
   });
   /* Souhrn se scita z nezaokrouhlenych castek a zaokrouhli se az tady —
@@ -4420,7 +4538,7 @@ function pgUzivatele() {
           <td style="text-align:center">${t.teren ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
           <td style="text-align:center">${t.inv ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
           <td style="text-align:center">${t.sub ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
-          <td>${s ? `<b>${s.h} Kč/h</b>${s.c ? ` / <span style="color:var(--ok);font-weight:700">${s.c} Kč/h</span>` : ''}` : (t.teren && !t.kanc ? '<b style="color:var(--red)">⚠ chybí</b>' : '<span class="muted">—</span>')}</td>
+          <td>${s && s.h ? `<b>${s.h} Kč/h</b>${s.c ? ` / <span style="color:var(--ok);font-weight:700">${s.c} Kč/h</span>` : ''}${sazbaHist(s).length > 1 ? `<br><span class="muted" style="font-size:11px">od ${fmtISO(sazbaHist(s)[sazbaHist(s).length - 1].od)} · ${sazbaHist(s).length}× měněno</span>` : ''}` : (t.teren && !t.kanc ? '<b style="color:var(--red)">⚠ chybí</b>' : '<span class="muted">—</span>')}</td>
           <td>${esc(u.role || '—')}</td>
           <td style="white-space:nowrap">${u.uid
             ? `<span class="badge b-ok">✓ má účet</span><br><button class="btn ghost sm" style="margin-top:4px" onclick="pinForm('${u.id}')">🔑 nový PIN</button>
@@ -4755,7 +4873,23 @@ function typeKeyOfUser(u) {
 }
 /* newUserActive = prepinac „Aktivni uzivatel" v pameti. Nuluje se pri kazdem
    otevreni formulare, jinak by se stav prenesl na dalsiho cloveka. */
-function editUser(udi) { S.editUserId = udi; S.newUserType = null; S.newUserActive = null; goPage('newuser'); }
+const POLE_UZIVATELE = ['nu-j', 'nu-p', 'nu-tel', 'nu-e', 'nu-sh', 'nu-sc', 'nu-sod', 'nu-r'];
+function editUser(udi) { zapomen(...POLE_UZIVATELE); S.editUserId = udi; S.newUserType = null; S.newUserActive = null; goPage('newuser'); }
+/* Smazani omylem zadane sazby. Dokument se prepisuje CELY (set bez merge),
+   protoze se meni pole i aktualni h/c — merge by stare h/c nechal viset. */
+async function smazSazbuOd(udi, od) {
+  const s = S.sazby[udi]; if (!s) return;
+  const hist = sazbaHist(s).filter(z => z.od !== od);
+  if (!await potvrd('Smazat záznam sazby platný od ' + (od === SAZBA_ODJAKZIVA ? 'nepaměti' : fmtISO(od)) + '?\n\n'
+    + 'Report za dny, které tahle sazba pokrývala, se přepočítá '
+    + (hist.length ? 'předchozí sazbou.' : 'aktuální sazbou.'), 'Smazat')) return;
+  const posl = hist.length ? hist[hist.length - 1] : null;
+  const nova = posl
+    ? (posl.c ? { h: posl.h, c: posl.c, hist } : { h: posl.h, hist })
+    : (s.c ? { h: s.h, c: s.c, hist: [] } : { h: s.h, hist: [] });
+  try { await db.collection('sazby').doc(udi).set(nova); toast('Záznam sazby smazán ✓'); }
+  catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+}
 function pgNewUser() {
   const edit = S.editUserId ? userById(S.editUserId) : null;
   const t = S.newUserType || (edit ? (edit.typ.kanc ? 'kanc' : edit.typ.inv ? 'inv' : edit.typ.sub ? 'sub' : 'teren') : null);
@@ -4784,10 +4918,28 @@ function pgNewUser() {
         <h4>⏱ Sazby (#34) — vidí jen Vedení</h4>
         <div class="note" style="margin-top:0">Subdodavatel sazbu nemá — hodiny nevykazuje, fakturuje práci.</div>
         <div class="frow">
-          <div><label>Hrubá sazba Kč/h *</label><input type="number" id="nu-sh" value="${s ? s.h : ''}" placeholder="co stojí hodina firmu"></div>
+          <div><label>Hrubá sazba Kč/h *</label><input type="number" id="nu-sh" value="${s && s.h ? s.h : ''}" placeholder="co stojí hodina firmu"></div>
           <div><label>Čistá sazba Kč/h (volitelná)</label><input type="number" id="nu-sc" value="${s && s.c ? s.c : ''}" placeholder="co pracovník reálně dostane"></div>
         </div>
+        <div class="frow">
+          <div><label>Platí od</label><input type="date" id="nu-sod" value="${isoToday()}"></div>
+          <div><div class="note" style="margin-top:22px">Sazba se zpětně nepřepisuje. Report za starší měsíce zůstane na staré sazbě.</div></div>
+        </div>
         <div class="note">Čistou vyplň u pracovníků, kterým vedoucí party sráží z hodinovky — report pak rozdíl ukáže automaticky.</div>
+        ${edit && sazbaHist(s).length ? `
+        <div class="formsec">
+          <h4>📜 Dosavadní sazby</h4>
+          ${sazbaHist(s).slice().reverse().map((z, i) => `
+          <div class="urow">
+            <span>${i === 0 ? '▶' : '·'}</span>
+            <b>${z.h ? z.h + ' Kč/h' : 'sazba ukončena'}</b>${z.c ? ` <span class="muted">(čistá ${z.c} Kč/h)</span>` : ''}
+            <span style="margin-left:8px">od <b>${z.od === SAZBA_ODJAKZIVA ? 'odjakživa' : fmtISO(z.od)}</b></span>
+            ${i === 0 ? '<span class="badge b-ok" style="margin-left:8px">platí teď</span>' : ''}
+            <span class="muted" style="margin-left:auto;font-size:11px">${esc(z.kdo || '')}${z.kdy ? ' · ' + fmtISO(z.kdy) : ''}</span>
+            <span class="lnk" style="margin-left:10px" title="Smazat záznam" onclick="smazSazbuOd('${edit.id}','${z.od}')">🗑</span>
+          </div>`).join('')}
+          <div class="note">Smazání záznamu přepočítá report za období, které tou sazbou pokrývalo. Maž jen překlepy.</div>
+        </div>` : ''}
       </div>` : ''}
       <div class="formsec">
         <h4>🏷 Popis</h4>
@@ -4840,8 +4992,11 @@ async function saveUser() {
   };
   // FIX: sazby přečíst z formuláře PŘED zápisem do users — await níže spustí onSnapshot render(),
   // který formulář překreslí a vyprázdní, takže se sazba nikdy neuložila (a existující se mazala).
-  const shEl = $('#nu-sh'), scEl = $('#nu-sc');
+  const shEl = $('#nu-sh'), scEl = $('#nu-sc'), sodEl = $('#nu-sod');
   const shVal = shEl ? parseFloat(shEl.value) : null, scVal = scEl ? parseFloat(scEl.value) : null;
+  /* „Plati od" ze stejneho duvodu a na stejnem miste jako sazby — po awaitu
+     nize uz formular neexistuje. Prazdne policko = ode dneska. */
+  const sodVal = (sodEl && sodEl.value) ? sodEl.value : isoToday();
   let docId;
   if (edit) { await db.collection('users').doc(edit.id).update(data); docId = edit.id; }
   else { const ref = await db.collection('users').add({ ...data, createdAt: FV() }); docId = ref.id; }
@@ -4854,11 +5009,24 @@ async function saveUser() {
      starou hodnotu je nutne smazat natvrdo: jinak by v seznamu uzivatelu
      dal svitilo treba „300 Kc/h", ktere uz nikdo neumi odstranit
      a v reportu se nikdy neobjevi. */
+  /* Dokument se uz NEMAZE: v hist jsou sazby, kterymi uz byly vyplaceny
+     minule mesice, a bez nich by report za cerven ukazal „chybi sazba".
+     Misto smazani se pripoji zaznam s h == 0 = „tady sazba skoncila":
+     minulost zustava ocenena, budoucnost uz sazbu nema. */
+  const staraS = S.sazby[docId] || null;
   if (typKey === 'sub' || typKey === 'inv' || typKey === 'kanc') {
-    await db.collection('sazby').doc(docId).delete().catch(() => {});
+    if (staraS && (staraS.h || sazbaHist(staraS).length)) {
+      const konec = sazbySloz(staraS, isoToday(), 0, 0);
+      if (konec) await db.collection('sazby').doc(docId).set(konec).catch(() => {});
+    }
   } else if (shEl) {
-    if (shVal) await db.collection('sazby').doc(docId).set(scVal ? { h: shVal, c: scVal } : { h: shVal });
-    else await db.collection('sazby').doc(docId).delete().catch(() => {});
+    if (shVal) {
+      const nova = sazbySloz(staraS, sodVal, shVal, scVal || 0);
+      if (nova) await db.collection('sazby').doc(docId).set(nova);
+    } else if (staraS && (staraS.h || sazbaHist(staraS).length)) {
+      const konec = sazbySloz(staraS, isoToday(), 0, 0);
+      if (konec) await db.collection('sazby').doc(docId).set(konec).catch(() => {});
+    }
   }
   // Ma uz clovek prihlaseni? Pak srovnat roli i jmeno i tam, jinak by mu
   // pri zmene typu zustala stara prava a na prihlasovaci obrazovce spatna sekce.
@@ -4924,6 +5092,9 @@ async function saveUser() {
     if (roleOfTypeKey(typKey) !== 'admin')
       await db.collection('roster').doc(docId).update({ jmeno: j, prijmeni: p }).catch(() => {});
   }
+  /* Policka formulare musi z pameti pryc. Jinak je vratitFormulare() nalije
+     do karty DALSIHO cloveka a v sazbe by svitilo cizi cislo. */
+  zapomen(...POLE_UZIVATELE);
   goPage('uzivatele');
   toast(edit
     ? (roleChanged ? 'Uživatel upraven ✓ Práva srovnána — musí se znovu přihlásit.'
@@ -5300,6 +5471,33 @@ async function prevedKontaktyInvestoru() {
     } catch (e) { cisto = false; }
   }
   if (cisto) await db.collection('config').doc('app').set({ kontaktyKlientuPrevedeny: true }, { merge: true }).catch(() => {});
+}
+
+/* Jednorazovy prevod sazeb na historii (#34). Kdo ma sazbu a nema historii,
+   dostane prvni zaznam s datem „odjakziva" — sazba v /sazby je jedina, jakou
+   aplikace kdy znala, a vsechny uz vytistene reporty jsou spocitane s ni.
+   Dnesni datum by tuhle pravdu prepsalo: v karte uzivatele by pak stalo
+   „300 Kc/h od 29. 8. 2026" u sazby, ktera platila od ledna. */
+async function prevedSazbyNaHistorii() {
+  try {
+    const cfg = await db.collection('config').doc('app').get();
+    if (cfg.exists && cfg.data().sazbyHistoriePrevedeny) return;
+  } catch (e) { return; }                   /* bez spojeni se prevod nezkousi */
+  const snap = await db.collection('sazby').get().catch(() => null);
+  if (!snap) return;
+  let cisto = true, zalozeno = 0;
+  for (const d of snap.docs) {
+    const v = d.data() || {};
+    if (Array.isArray(v.hist) && v.hist.length) continue;   /* uz ma historii */
+    if (!v.h) continue;                                     /* nema co prevadet */
+    const z = { od: SAZBA_ODJAKZIVA, h: v.h, kdo: 'převod dat', kdy: isoToday() };
+    if (v.c) z.c = v.c;
+    /* merge: h a c se nesahaji, pridava se jen pole hist */
+    try { await d.ref.set({ hist: [z] }, { merge: true }); zalozeno++; }
+    catch (e) { cisto = false; }
+  }
+  if (zalozeno) console.log('historie sazeb zalozena: ' + zalozeno);
+  if (cisto) await db.collection('config').doc('app').set({ sazbyHistoriePrevedeny: true }, { merge: true }).catch(() => {});
 }
 
 /* Jeden posluchac na kazdy klic viditelnosti; vysledky se skladaji. */
