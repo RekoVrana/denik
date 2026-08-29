@@ -34,7 +34,7 @@ function navodPata() {
 function navodWorker() {
   return `<div class="card">
     <h3 onclick="navodPrepni()" style="cursor:pointer;display:flex;align-items:center;gap:8px">
-      📖 Jak na to — každý den
+      📖 Návod — jak na to každý den (FAQ)
       <span class="muted" style="margin-left:auto;font-weight:400;font-size:13px">${navodOtevreny() ? 'skrýt ▲' : 'ukázat ▼'}</span></h3>
     <div style="${navodOtevreny() ? '' : 'display:none'}">
 
@@ -81,7 +81,7 @@ function navodWorker() {
 function navodSub() {
   return `<div class="card">
     <h3 onclick="navodPrepni()" style="cursor:pointer;display:flex;align-items:center;gap:8px">
-      📖 Jak na to — každý den
+      📖 Návod — jak na to každý den (FAQ)
       <span class="muted" style="margin-left:auto;font-weight:400;font-size:13px">${navodOtevreny() ? 'skrýt ▲' : 'ukázat ▼'}</span></h3>
     <div style="${navodOtevreny() ? '' : 'display:none'}">
 

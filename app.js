@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '29. 8. 2026 g';
+const VERZE = '29. 8. 2026 h';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -4337,6 +4337,7 @@ function viewSub() {
   return topbar() + `<div class="shell"><div class="content">
   <div class="strip"><h1>Můj den na stavbě</h1><span class="sp"></span><span class="muted">${fmtISOFull(isoToday())}</span></div>
   <main class="mobilewrap">
+    ${typeof navodHtml === "function" ? navodHtml('sub') : ""}
     <div class="card">
       <h3>🧰 ${otevrena ? 'Jsem na stavbě' : 'Příchod na stavbu'}</h3>
       ${otevrena ? `
@@ -4379,7 +4380,6 @@ function viewSub() {
       </div>` : ''}
     </div>
     ${kartaUkoly(p)}
-    ${typeof navodHtml === "function" ? navodHtml('sub') : ""}
     ${kartaKlice()}
     ${kartaPodklady(p)}
     ${kartaPoznamky(p)}
@@ -4460,6 +4460,7 @@ function viewWorker() {
   return topbar() + `<div class="shell"><div class="content">
   <div class="strip"><h1>Můj den na stavbě</h1><span class="sp"></span><span class="muted">${fmtISOFull(isoToday())}</span></div>
   <main class="mobilewrap">
+    ${typeof navodHtml === "function" ? navodHtml('worker') : ""}
     <div class="card">
       <label style="margin-top:0">Stavba</label>
       ${vPraciUI ? `
@@ -4526,7 +4527,6 @@ function viewWorker() {
       ${(p.stavbaDocs || []).map(d => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${esc(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('')}
     </div>` : ''}
     ${kartaUkoly(p)}
-    ${typeof navodHtml === "function" ? navodHtml('worker') : ""}
     ${kartaKlice()}
     ${kartaPodklady(p)}
     ${kartaPoznamky(p)}
