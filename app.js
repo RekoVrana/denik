@@ -206,6 +206,9 @@ const S = {
   authUser: null, meAuth: null, me: null, roster: [], appCfg: null,
   users: [], projects: [], entries: [], tasks: [], attendance: [], viceprace: [], sazby: {}, zadosti: [],
   portal: null, portalFeed: [], portalVp: [], portalDocs: [],
+  /* admin-only tajnosti (S2/S4/S5): tokeny portalu, kontakty lidi a interni
+     poznamky bydli v samostatnych kolekcich, ktere cte jen vedeni */
+  portaly: {}, kontakty: {}, entriesInterni: {},
   view: 'nastenka', nastenkaTab: 'prehled', tickety: [], adminFilter: null, detail: null,
   projDetailId: null, projDetailTab: 'info', newUserType: null, editUserId: null,
   ukolyView: 'seznam', orgFilter: 'vse', taskFormOpen: false, attFormOpen: false, vpFormOpen: false,
@@ -492,6 +495,9 @@ function startData() {
      a prihlaseni jineho uctu zustaly slozene zaznamy z minule seance. */
   S.archiv = { attendance: new Map(), entries: new Map() };
   S.zivyOkno = {}; S.pendingZive = [];
+  /* admin-only tajnosti zacinaji prazdne — po odhlaseni admina nesmi
+     zustat v pameti pro dalsi prihlaseni jine role */
+  S.portaly = {}; S.kontakty = {}; S.entriesInterni = {};
   S.dotazeno = []; S.dotazenoZapisy = []; S.dotazenoTisk = [];
   listen('projects', 'projects', { sort: (a, b) => (b.active - a.active) || String(a.cn || a.name).localeCompare(String(b.cn || b.name), 'cs') });
   /* razeni okennich kolekci drzi OKNO_SORT, at je stejne pro snapshot i archiv */
@@ -515,7 +521,7 @@ function startData() {
      Kazdy klic (vsichni / parta / ja) ma vlastni posluchac a vysledky
      se skladaji dohromady, stejne jako u ukolu. */
   const pzSort = (a, b) => (a.nadpis || '').localeCompare(b.nadpis || '', 'cs');
-  if (role === 'admin') { listen('poznamky', 'poznamky', { sort: pzSort }); prevedStarePoznamky(); uklidRosterAdminy(); }
+  if (role === 'admin') { listen('poznamky', 'poznamky', { sort: pzSort }); prevedStarePoznamky(); uklidRosterAdminy(); prevedTajnosti(); }
   else {
     const pzMid = (S.meAuth && S.meAuth.userDocId) || '__nikdo__';
     listenPoznamky(role === 'sub' ? ['vsichni', pzMid] : ['vsichni', 'parta', pzMid]);
@@ -543,6 +549,11 @@ function startData() {
     listen('viceprace', 'viceprace', {});
     listen('zadosti', 'zadosti', { sort: (a, b) => (b.date || '').localeCompare(a.date || '') });
     S.unsub.push(db.collection('sazby').onSnapshot(s => { S.sazby = {}; s.docs.forEach(d => S.sazby[d.id] = d.data()); render(); }, () => {}));
+    /* admin-only tajnosti (S2/S4/S5): presunuta pole z /projects, /users
+       a /entries — ctou se jen tady, v admin vetvi */
+    S.unsub.push(db.collection('portaly').onSnapshot(s => { S.portaly = {}; s.docs.forEach(d => S.portaly[d.id] = d.data()); render(); }, () => {}));
+    S.unsub.push(db.collection('kontakty').onSnapshot(s => { S.kontakty = {}; s.docs.forEach(d => S.kontakty[d.id] = d.data()); render(); }, () => {}));
+    S.unsub.push(db.collection('entries_interni').onSnapshot(s => { S.entriesInterni = {}; s.docs.forEach(d => S.entriesInterni[d.id] = d.data()); render(); }, () => {}));
     // akce investorů ze všech portálů
     S.unsub.push(db.collectionGroup('actions').where('handled', '==', false).onSnapshot(s => {
       s.docs.forEach(d => handlePortalAction(d));
@@ -562,6 +573,21 @@ function startPortal() {
 
 /* ---------- lookups ---------- */
 const proj = id => S.projects.find(p => p.id === id);
+/* ---- admin-only tajnosti (S2/S4/S5, audit 28. 8.) ----
+   Firestore vraci vzdy CELY dokument — citliva pole nejde skryt pravidlem.
+   Proto token portalu, kontakty lidi a interni poznamky bydli ve vlastnich
+   admin-only kolekcich (/portaly, /kontakty, /entries_interni) a saha se
+   k nim jen pres tyto pomocniky. Ne-adminum vraceji prazdno. */
+function tokenPortalu(pid) { return ((S.portaly || {})[pid] || {}).token || null; }
+async function tokenPortaluAsync(pid) {
+  /* Zavod snapshotu: akce muze prijit driv, nez se kolekce /portaly
+     nacte — pak se token docte primo z databaze (jen admin ho smi). */
+  const t = tokenPortalu(pid); if (t) return t;
+  const d = await db.collection('portaly').doc(pid).get().catch(() => null);
+  return d && d.exists ? (d.data().token || null) : null;
+}
+function interniPozn(eid) { return ((S.entriesInterni || {})[eid] || {}).text || ''; }
+function kontaktOsoby(udi) { return (S.kontakty || {})[udi] || {}; }
 /* Ukol si drzi ID osoby (respId). Drive se ukladalo jen jmeno jako text, takze
    po oprave preklepu v prijmeni ukol osirel a cloveku zmizel z mobilu.
    Jmeno se dal uklada taky — kvuli starym ukolum a kvuli exportu. */
@@ -1008,7 +1034,9 @@ async function addEntry(pid, author, txt, persons, date) {
        null a zobrazeni ho bere z dochazky. Drive tu bylo "|| 1" a kazdy
        zapis pracovnika pak v deniku i PDF lhal "1 os." (zadani 25. 8.). */
     persons: persons || null, works: works.length ? works : ['(jen fotodokumentace)'],
-    internal: '', client: txt || 'Fotodokumentace z průběhu prací.', status: 'pending', photos
+    /* interni poznamka uz na zapisu nebydli — zapisy ctou vsechny role,
+       poznamka vedeni je v admin-only /entries_interni (S5) */
+    client: txt || 'Fotodokumentace z průběhu prací.', status: 'pending', photos
   }).catch(e => {
     console.warn('zapis zaznamu', e);
     /* Online chyba znamena, ze zaznam OPRAVDU nevznikl (napr. prekroceny
@@ -1035,15 +1063,16 @@ async function keepInternalEntry(id) {
   const e = S.entries.find(x => x.id === id); if (!e) return;
   const photos = (e.photos || []).map(ph => ({ ...ph, status: 'internal' }));
   await db.collection('entries').doc(id).update({ status: 'internal', photos });
-  const p = proj(e.pid);
-  if (p && p.portalToken) await db.collection('portals').doc(p.portalToken).collection('feed').doc(id).delete().catch(() => {});
+  /* token portalu uz neni na projektu, ale v admin-only /portaly (S2) */
+  const tok = await tokenPortaluAsync(e.pid);
+  if (tok) await db.collection('portals').doc(tok).collection('feed').doc(id).delete().catch(() => {});
   toast('Označeno jako interní — investor neuvidí');
 }
 async function mirrorEntry(e) {
   // STRUKTURÁLNÍ ZÁRUKA #31: na portál se fyzicky kopíruje JEN klientský text a schválené fotky.
-  const p = proj(e.pid);
-  if (!p || !p.portalToken) return;
-  await db.collection('portals').doc(p.portalToken).collection('feed').doc(e.id).set({
+  const tok = await tokenPortaluAsync(e.pid); // token bydli v admin-only /portaly (S2)
+  if (!tok) return;
+  await db.collection('portals').doc(tok).collection('feed').doc(e.id).set({
     date: e.date, client: e.client,
     photos: (e.photos || []).filter(ph => ph.status === 'approved').map(ph => ({ thumb: ph.thumb, driveId: ph.driveId || null, label: ph.label || '' }))
   });
@@ -1059,7 +1088,8 @@ async function cyclePhoto(eid, phid) {
 function notifyMail(kind, pid, text) {
   if (!CFG.scriptUrl) return;
   const p = proj(pid); if (!p || !p.investorEmail) return;
-  driveCall({ action: 'notify', to: p.investorEmail, kind, project: p.name, client: p.client, text: (text || '').slice(0, 500), portalUrl: p.portalToken ? location.origin + location.pathname + '?p=' + p.portalToken : '' }).catch(() => {});
+  const tok = tokenPortalu(pid); // token bydli v admin-only /portaly (S2); posila jen vedeni, ma ho nactene
+  driveCall({ action: 'notify', to: p.investorEmail, kind, project: p.name, client: p.client, text: (text || '').slice(0, 500), portalUrl: tok ? location.origin + location.pathname + '?p=' + tok : '' }).catch(() => {});
 }
 
 /* ---------- portal akce (schválení vícepráce investorem) ---------- */
@@ -1083,8 +1113,9 @@ async function handlePortalAction(docSnap) {
         const stav = a.action === 'approve' ? 'schvaleno' : 'zamitnuto';
         const podpis = (vp.clientName || '') + (a.action === 'approve' ? ' — schváleno jedním klikem na portálu, ' : ' — zamítnuto na portálu, ') + fmtISO(isoToday());
         await ref.update({ stav, podpis, resolvedAt: FV() });
-        const p = proj(vp.pid);
-        if (p && p.portalToken) await db.collection('portals').doc(p.portalToken).collection('vp').doc(a.vpid).set({ title: vp.title, popis: vp.popis, cena: vp.cena, stav, podpis }, { merge: true });
+        /* token je v admin-only /portaly (S2); async docteni kryje zavod se snapshotem */
+        const tok = await tokenPortaluAsync(vp.pid);
+        if (tok) await db.collection('portals').doc(tok).collection('vp').doc(a.vpid).set({ title: vp.title, popis: vp.popis, cena: vp.cena, stav, podpis }, { merge: true });
         toast(a.action === 'approve' ? '📬 Investor schválil vícepráci: ' + vp.title : '📬 Investor zamítl vícepráci: ' + vp.title);
       }
     }
@@ -1294,17 +1325,21 @@ async function doSetup() {
     }
     const [jmeno, ...rest] = name.split(' ');
     // znovupoužij případný users doc z dřívějšího pokusu (a ukliď duplicity)
-    const dup = await db.collection('users').where('email', '==', email).get();
+    // hleda se podle authEmail — kontaktni email uz v /users neni (S4)
+    const dup = await db.collection('users').where('authEmail', '==', email).get();
     let udocId;
     if (dup.docs.length) {
       udocId = dup.docs[0].id;
       await db.collection('users').doc(udocId).update({ jmeno, prijmeni: rest.join(' '), authEmail: email, uid: cred.user.uid, active: true });
       for (const d of dup.docs.slice(1)) await d.ref.delete().catch(() => {});
     } else {
-      const udoc = await db.collection('users').add({ jmeno, prijmeni: rest.join(' '), email, kod: '001', typ: { kanc: 1, teren: 1, inv: 0, sub: 0 }, role: 'Admin · vedení', active: true, authEmail: email, uid: cred.user.uid, notU: 1, notD: 1 });
+      const udoc = await db.collection('users').add({ jmeno, prijmeni: rest.join(' '), kod: '001', typ: { kanc: 1, teren: 1, inv: 0, sub: 0 }, role: 'Admin · vedení', active: true, authEmail: email, uid: cred.user.uid, notU: 1, notD: 1 });
       udocId = udoc.id;
     }
     await db.collection('users_auth').doc(cred.user.uid).set({ role: 'admin', userDocId: udocId, name });
+    /* Kontaktni e-mail patri do admin-only /kontakty (S4) — /users ctou
+       vsechny role. Zapis az PO users_auth, aby uz platilo isAdmin(). */
+    await db.collection('kontakty').doc(udocId).set({ email, tel: '' }).catch(() => {});
     /* Vedeni se do /roster NEZAPISUJE (B6). Roster je verejne citelny —
        potrebuje ho prihlasovaci obrazovka party — a nesl by tak
        prihlasovaci e-mail vedeni i priznak, ktery ucet je admin.
@@ -1721,7 +1756,8 @@ function pgProjDetail() {
   const t = S.projDetailTab;
   let body = '';
   if (t === 'info') {
-    const portalUrl = p.portalToken ? location.origin + location.pathname + '?p=' + p.portalToken : null;
+    const _tok = tokenPortalu(p.id); // token bydli v admin-only /portaly (S2)
+    const portalUrl = _tok ? location.origin + location.pathname + '?p=' + _tok : null;
     body = `<main><div class="grid2">
       <div class="card">
         <h3>ℹ️ Základní informace</h3>
@@ -1878,7 +1914,8 @@ async function addPortalDoc(pid) {
   if (!title || !m) { toast('Vyplň název a Drive ID/odkaz'); return; }
   const docs = [...(p.portalDocs || []), { title, driveId: m[0], mime: '' }];
   await db.collection('projects').doc(pid).update({ portalDocs: docs });
-  if (p.portalToken) await db.collection('portals').doc(p.portalToken).collection('docs').add({ title, driveId: m[0] });
+  const tok = await tokenPortaluAsync(pid); // token je v admin-only /portaly (S2)
+  if (tok) await db.collection('portals').doc(tok).collection('docs').add({ title, driveId: m[0] });
   $('#pd-title').value = ''; $('#pd-id').value = ''; zapomen('pd-title', 'pd-id');
   toast('Dokument přidán na portál ✓');
 }
@@ -1886,16 +1923,23 @@ async function delPortalDoc(pid, i) {
   const p = proj(pid);
   const docs = (p.portalDocs || []).slice(); const rm = docs.splice(i, 1)[0];
   await db.collection('projects').doc(pid).update({ portalDocs: docs });
-  if (p.portalToken && rm) {
-    const s = await db.collection('portals').doc(p.portalToken).collection('docs').where('driveId', '==', rm.driveId).get();
+  const tok = await tokenPortaluAsync(pid); // token je v admin-only /portaly (S2)
+  if (tok && rm) {
+    const s = await db.collection('portals').doc(tok).collection('docs').where('driveId', '==', rm.driveId).get();
     s.docs.forEach(d => d.ref.delete());
   }
 }
 async function createPortal(pid) {
   const p = proj(pid);
+  /* Dvojklik / druhy admin: novy token by investorovi zneplatnil uz
+     poslany odkaz. Kdyz portal existuje, nic se nezaklada. */
+  if (await tokenPortaluAsync(pid)) { toast('Portál už existuje — odkaz je v detailu projektu'); render(); return; }
   const token = uid8() + uid8().slice(0, 10);
   await db.collection('portals').doc(token).set({ pid, client: p.client || '', name: p.name, createdAt: FV() });
-  await db.collection('projects').doc(pid).update({ portalToken: token });
+  /* Token bydli v admin-only /portaly, NE na projektu (S2) — projekt ctou
+     vsechny role vcetne externiho suba a kdo zna token, umi podvrhnout
+     schvaleni viceprace investorem. */
+  await db.collection('portaly').doc(pid).set({ token });
   // zrcadli už schválené záznamy
   for (const e of entriesOf(pid).filter(x => x.status === 'approved')) {
     await db.collection('portals').doc(token).collection('feed').doc(e.id).set({
@@ -2194,10 +2238,10 @@ function pgDetail() {
           <div style="display:flex;justify-content:space-between;align-items:center"><h3>Provedené práce</h3>${sBadge(e.status)}</div>
           <ul class="worklist">${(e.works || []).map(w => `<li>${esc(w)}</li>`).join('')}</ul>
           <div class="inote">🔒 <b>Interní poznámka</b> <span style="font-weight:400">— investor ji nikdy neuvidí</span>
-            <textarea id="int-${e.id}" style="min-height:56px;margin-top:6px" placeholder="Co nechceš, aby viděl klient…">${esc(e.internal || '')}</textarea>
+            <textarea id="int-${e.id}" style="min-height:56px;margin-top:6px" placeholder="Co nechceš, aby viděl klient…">${esc(interniPozn(e.id))}</textarea>
             <div class="aprv" style="margin-top:8px">
               <button class="btn ghost sm" onclick="saveInternal('${e.id}')">💾 Uložit</button>
-              ${e.internal ? `<button class="btn ghost sm" onclick="delInternal('${e.id}')">🗑 Smazat</button>
+              ${interniPozn(e.id) ? `<button class="btn ghost sm" onclick="delInternal('${e.id}')">🗑 Smazat</button>
               <button class="btn ghost sm" onclick="noteToTask('${e.id}')">📌 Převést na úkol</button>` : ''}
             </div>
           </div>
@@ -2250,19 +2294,24 @@ function pgDetail() {
    a nesla ani opravit, ani smazat. Ted je to normalni editovatelne pole. */
 async function saveInternal(eid) {
   const t = $('#int-' + eid).value.trim();
-  await db.collection('entries').doc(eid).update({ internal: t });
+  /* Poznamka bydli v admin-only /entries_interni (S5) — zapis samotny
+     ctou vsechny role a Firestore neumi skryt jedno pole. */
+  if (t) await db.collection('entries_interni').doc(eid).set({ text: t });
+  else await db.collection('entries_interni').doc(eid).delete().catch(() => {});
   zapomen('int-' + eid);
   toast(t ? 'Interní poznámka uložena ✓' : 'Interní poznámka smazána');
 }
 async function delInternal(eid) {
   if (!await potvrd('Smazat interní poznámku?')) return;
-  await db.collection('entries').doc(eid).update({ internal: '' });
+  await db.collection('entries_interni').doc(eid).delete().catch(() => {});
   zapomen('int-' + eid);
   toast('Interní poznámka smazána');
 }
 async function noteToTask(eid) {
   const e = S.entries.find(x => x.id === eid);
-  await db.collection('tasks').add({ title: e.internal.split('—')[0].trim().slice(0, 120), zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}), pid: e.pid, respId: S.me ? S.me.id : '', resp: fullName(S.me || {}), created: isoToday(), term: shiftISO(isoToday(), 2), stav: 'nove', res: [fullName(S.me || {})], src: 'z deníku ' + fmtISO(e.date), createdAt: FV() });
+  const pozn = interniPozn(eid);
+  if (!pozn) { toast('Zápis nemá interní poznámku'); return; }
+  await db.collection('tasks').add({ title: pozn.split('—')[0].trim().slice(0, 120), zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}), pid: e.pid, respId: S.me ? S.me.id : '', resp: fullName(S.me || {}), created: isoToday(), term: shiftISO(isoToday(), 2), stav: 'nove', res: [fullName(S.me || {})], src: 'z deníku ' + fmtISO(e.date), createdAt: FV() });
   toast('Interní poznámka převedena na úkol ✓');
 }
 
@@ -2279,7 +2328,7 @@ function pgSchvaleni() {
         </div>
         <div class="muted">Zapsal: ${esc(e.author)} · ${fmtTs(e.createdAt)}</div>
         <ul class="worklist">${(e.works || []).map(w => `<li>${esc(w)}</li>`).join('')}</ul>
-        ${e.internal ? `<div class="inote">🔒 ${esc(e.internal)}</div>` : ''}
+        ${interniPozn(e.id) ? `<div class="inote">🔒 ${esc(interniPozn(e.id))}</div>` : ''}
         ${(e.photos || []).length ? `<div class="photos">${e.photos.map(ph => phTile(ph, false, e.id)).join('')}</div>` : ''}
         <label>Znění pro investora</label>
         <textarea id="ct-${e.id}">${esc(e.client)}</textarea>
@@ -2343,7 +2392,7 @@ async function printDenik() {
       <ul>${(e.works || []).map(w => `<li>${esc(w)}</li>`).join('')}</ul>
       ${(e.attachments || []).length ? `<div class="meta">Přílohy: ${e.attachments.map(a => esc(a.name)).join(', ')}</div>` : ''}
       ${e.podpis ? `<div class="zpodpis"><img src="${e.podpis.img}">podepsáno: ${esc(e.podpis.jmeno)} · ${fmtISO(e.podpis.at)}</div>` : ''}
-      ${verze === 'komplet' && e.internal ? `<div class="interni">Interní poznámka: ${esc(e.internal)}</div>` : ''}
+      ${verze === 'komplet' && interniPozn(e.id) ? `<div class="interni">Interní poznámka: ${esc(interniPozn(e.id))}</div>` : ''}
       ${(e.photos || []).filter(ph => verze === 'komplet' || ph.status === 'approved').length ? `<div class="fotky">${(e.photos || []).filter(ph => verze === 'komplet' || ph.status === 'approved').map(ph => `<img src="${ph.thumb}">`).join('')}</div>` : ''}
     </div>`).join('');
   const html = `<!DOCTYPE html><html lang="cs"><head><meta charset="utf-8"><title>Stavební deník — ${esc(p.name)}</title>
@@ -2824,8 +2873,9 @@ async function vpNacenit(id) {
   const p = proj(v.pid);
   zapomen('vpc-' + id);
   await db.collection('viceprace').doc(id).update({ cena: c, stav: 'u_investora', clientName: (p || {}).client || '' });
-  if (p && p.portalToken) {
-    await db.collection('portals').doc(p.portalToken).collection('vp').doc(id).set({ title: v.title, popis: v.popis || '', cena: c, stav: 'u_investora' });
+  const tok = await tokenPortaluAsync(v.pid); // token je v admin-only /portaly (S2)
+  if (tok) {
+    await db.collection('portals').doc(tok).collection('vp').doc(id).set({ title: v.title, popis: v.popis || '', cena: c, stav: 'u_investora' });
     notifyMail('vp', v.pid, v.title + ' — ' + kc(c) + ' Kč');
     toast('Posláno investorovi ke schválení + notifikace 📬');
   } else toast('Naceněno ✓ — projekt nemá portál, schválení vyřiď papírově');
@@ -2834,8 +2884,8 @@ async function vpNacenit(id) {
 async function vpPapir(id) {
   const v = S.viceprace.find(x => x.id === id);
   await db.collection('viceprace').doc(id).update({ stav: 'papir', podpis: 'podepsáno papírově na stavbě ' + fmtISO(isoToday()) + ' (sken na Drive)' });
-  const p = proj(v.pid);
-  if (p && p.portalToken) await db.collection('portals').doc(p.portalToken).collection('vp').doc(id).set({ title: v.title, popis: v.popis || '', cena: v.cena, stav: 'schvaleno', podpis: 'schváleno papírově na stavbě' }, { merge: true });
+  const tok = await tokenPortaluAsync(v.pid); // token je v admin-only /portaly (S2)
+  if (tok) await db.collection('portals').doc(tok).collection('vp').doc(id).set({ title: v.title, popis: v.popis || '', cena: v.cena, stav: 'schvaleno', podpis: 'schváleno papírově na stavbě' }, { merge: true });
   toast('Označeno jako schválené papírově ✓');
 }
 
@@ -3025,7 +3075,7 @@ function pgUzivatele() {
         <tr style="${u.active === false ? 'opacity:.5' : ''}">
           <td><span class="uav">${ini(u)}</span></td>
           <td><b>${esc(fullName(u))}</b></td>
-          <td class="muted">${esc(u.email || '—')}</td>
+          <td class="muted">${esc(kontaktOsoby(u.id).email || '—')}</td>
           <td style="text-align:center">${t.kanc ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
           <td style="text-align:center">${t.teren ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
           <td style="text-align:center">${t.inv ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
@@ -3195,10 +3245,13 @@ async function delEntry(id) {
   if (!await potvrd('Smazat denní záznam?\n\n' + fmtISOFull(e.date) + ' · ' + (p.name || '') + '\nZapsal: ' + (e.author || '') +
     '\n\nZmizí i z portálu investora. Smazání nejde vrátit zpět.')) return;
   try {
-    if (p.portalToken) await db.collection('portals').doc(p.portalToken).collection('feed').doc(id).delete().catch(() => {});
+    const tok = await tokenPortaluAsync(e.pid); // token je v admin-only /portaly (S2)
+    if (tok) await db.collection('portals').doc(tok).collection('feed').doc(id).delete().catch(() => {});
     for (const ph of (e.photos || [])) {
       if (ph.id) db.collection('fotonahledy').doc(ph.id).delete().catch(() => {});
     }
+    /* interni poznamka bydli v /entries_interni (S5) — uklidit s ni */
+    db.collection('entries_interni').doc(id).delete().catch(() => {});
     await db.collection('entries').doc(id).delete();
     S.detail = null; toast('Záznam smazán ✓'); render();
   } catch (err) { toast('Nepovedlo se: ' + (err.code || err.message)); }
@@ -3241,7 +3294,12 @@ async function delProject(pid) {
   if (zapisu + ukolu + vp > 0 && !await potvrd('Ještě jednou pro jistotu — smazat ' + (zapisu + ukolu + vp) + ' navázaných záznamů?')) return;
   try {
     /* maze se PRESNE to, co nasly dotazy vyse — vsechno vazane na pid */
-    for (const d of ent.docs) await d.ref.delete().catch(() => {});
+    for (const d of ent.docs) {
+      /* interni poznamky zapisu bydli v /entries_interni (S5) — bez
+         tohohle by po smazani stavby zustaly sirotci poznamky */
+      db.collection('entries_interni').doc(d.id).delete().catch(() => {});
+      await d.ref.delete().catch(() => {});
+    }
     for (const d of tsk.docs) await d.ref.delete().catch(() => {});
     for (const d of vpr.docs) await d.ref.delete().catch(() => {});
     for (const d of kli.docs) await d.ref.delete().catch(() => {});
@@ -3250,13 +3308,15 @@ async function delProject(pid) {
     /* zapisy stavby pryc i z archivu slevani, at v Deniku nestrasi duchove */
     S.archiv.entries.forEach((d, id) => { if (d.pid === pid) S.archiv.entries.delete(id); });
     slozOkno('entries');
-    if (p.portalToken) {
+    const tok = await tokenPortaluAsync(pid); // token je v admin-only /portaly (S2)
+    if (tok) {
       for (const kol of ['feed', 'vp', 'docs']) {
-        const sn = await db.collection('portals').doc(p.portalToken).collection(kol).get().catch(() => null);
+        const sn = await db.collection('portals').doc(tok).collection(kol).get().catch(() => null);
         if (sn) for (const d of sn.docs) await d.ref.delete().catch(() => {});
       }
-      await db.collection('portals').doc(p.portalToken).delete().catch(() => {});
+      await db.collection('portals').doc(tok).delete().catch(() => {});
     }
+    await db.collection('portaly').doc(pid).delete().catch(() => {}); // i zaznam s tokenem
     await db.collection('projects').doc(pid).delete();
     S.projDetailId = null; goPage('projekty'); toast('Stavba smazána ✓');
   } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
@@ -3299,6 +3359,7 @@ async function delUser(udi) {
     if (u.uid) await db.collection('users_auth').doc(u.uid).delete().catch(() => {});
     await db.collection('roster').doc(udi).delete().catch(() => {});
     await db.collection('sazby').doc(udi).delete().catch(() => {});
+    await db.collection('kontakty').doc(udi).delete().catch(() => {}); // kontakty bydli zvlast (S4)
     for (const t of S.tasks.filter(x => x.respId === udi)) await db.collection('tasks').doc(t.id).update({ respId: '' }).catch(() => {});
     await db.collection('users').doc(udi).delete();
     goPage('uzivatele'); toast('Uživatel smazán ✓');
@@ -3333,8 +3394,8 @@ function pgNewUser() {
           <div><label>Příjmení *</label><input type="text" id="nu-p" value="${esc(edit ? edit.prijmeni : '')}"></div>
         </div>
         <div class="frow">
-          <div><label>Telefon</label><input type="text" id="nu-tel" value="${esc(edit ? edit.tel || '' : '')}" placeholder="+420"></div>
-          <div><label>Email</label><input type="text" id="nu-e" value="${esc(edit ? edit.email || '' : '')}"></div>
+          <div><label>Telefon</label><input type="text" id="nu-tel" value="${esc(edit ? kontaktOsoby(edit.id).tel || '' : '')}" placeholder="+420"></div>
+          <div><label>Email</label><input type="text" id="nu-e" value="${esc(edit ? kontaktOsoby(edit.id).email || '' : '')}"></div>
         </div>
       </div>
       ${(t === 'teren' || t === 'sub') ? `
@@ -3363,8 +3424,12 @@ async function saveUser() {
   if (!typKey) { toast('Vyber typ přístupu'); return; }
   const j = $('#nu-j').value.trim(), p = $('#nu-p').value.trim();
   if (!j || !p) { toast('Vyplň jméno a příjmení'); return; }
+  /* Kontakty (email, telefon) NEJDOU do /users — ten ctou vsechny role
+     vcetne externiho suba. Bydli v admin-only /kontakty (S4). Precist je
+     nutne HNED, ze stejneho duvodu jako sazby nize (render maze formular). */
+  const kEmail = $('#nu-e').value.trim(), kTel = $('#nu-tel') ? $('#nu-tel').value.trim() : '';
   const data = {
-    jmeno: j, prijmeni: p, email: $('#nu-e').value.trim(), tel: $('#nu-tel') ? $('#nu-tel').value.trim() : '',
+    jmeno: j, prijmeni: p,
     typ: { kanc: typKey === 'kanc' ? 1 : 0, teren: (typKey === 'kanc' || typKey === 'teren' || typKey === 'sub') ? 1 : 0, inv: typKey === 'inv' ? 1 : 0, sub: typKey === 'sub' ? 1 : 0 },
     role: $('#nu-r').value.trim(), active: edit ? edit.active !== false : true
   };
@@ -3375,6 +3440,9 @@ async function saveUser() {
   let docId;
   if (edit) { await db.collection('users').doc(edit.id).update(data); docId = edit.id; }
   else { const ref = await db.collection('users').add({ ...data, createdAt: FV() }); docId = ref.id; }
+  /* kontakty do admin-only /kontakty (S4); prazdny formular = uklidit zaznam */
+  if (kEmail || kTel) await db.collection('kontakty').doc(docId).set({ email: kEmail, tel: kTel });
+  else await db.collection('kontakty').doc(docId).delete().catch(() => {});
   if (shEl) {
     if (shVal) await db.collection('sazby').doc(docId).set(scVal ? { h: shVal, c: scVal } : { h: shVal });
     else await db.collection('sazby').doc(docId).delete().catch(() => {});
@@ -3688,6 +3756,65 @@ async function uklidRosterAdminy() {
   // S.roster se pouziva jen na prihlasovaci obrazovce a ta si ho po
   // odhlaseni nacita znovu (loadRoster) — prekreslovat tady netreba.
   if (smazano) console.log('roster: odstraněno ' + smazano + ' záznamů vedení (veřejný seznam už nenese e-mail admina)');
+}
+
+/* Jednorazovy prevod citlivych poli (S2/S4/S5, audit 28. 8.) — bezi pri
+   prihlaseni vedeni, po vzoru prevodu starych poznamek. Firestore vraci
+   vzdy cely dokument, takze portalToken (/projects), kontakty (/users)
+   a interni poznamky (/entries) cetl i externi subdodavatel. Presouva se
+   do admin-only kolekci /portaly, /kontakty a /entries_interni.
+   Bezpecnost prevodu:
+   - stare pole se maze AZ po uspesnem zapisu na nove misto (pri chybe
+     site se nic neztrati, pristi prihlaseni to dokonci),
+   - novy dokument se zaklada jen kdyz jeste neexistuje — soubeh dvou
+     adminu ani opakovany beh nic neprepise (idempotence),
+   - po ciste dokoncenem prubehu se do config/app zapise priznak,
+     aby se pri kazdem prihlaseni necetly cele kolekce znovu. */
+async function prevedTajnosti() {
+  const FVD = firebase.firestore.FieldValue;
+  try {
+    const cfg = await db.collection('config').doc('app').get();
+    if (cfg.exists && cfg.data().tajnostiPrevedeny) return;
+  } catch (e) { return; } // bez spojeni se prevod nezkousi
+  let cisto = true;
+  /* zapis na nove misto (jen neni-li), pak smaz stara pole; pri chybe nic nemazat */
+  const presun = async (novyRef, data, staryRef, smazPole) => {
+    try {
+      const ex = await novyRef.get();
+      if (!ex.exists) await novyRef.set(data);
+      await staryRef.update(smazPole);
+    } catch (e) { cisto = false; }
+  };
+  const uklid = async (staryRef, smazPole) => {
+    try { await staryRef.update(smazPole); } catch (e) { cisto = false; }
+  };
+  // S2: portalToken z /projects -> /portaly/{pid}
+  const ps = await db.collection('projects').get().catch(() => null);
+  if (!ps) cisto = false;
+  if (ps) for (const d of ps.docs.filter(x => x.data().portalToken !== undefined)) {
+    const tok = d.data().portalToken;
+    if (tok) await presun(db.collection('portaly').doc(d.id), { token: tok }, d.ref, { portalToken: FVD.delete() });
+    else await uklid(d.ref, { portalToken: FVD.delete() });
+  }
+  // S4: email a telefon z /users -> /kontakty/{userDocId}
+  const us = await db.collection('users').get().catch(() => null);
+  if (!us) cisto = false;
+  if (us) for (const d of us.docs.filter(x => x.data().email !== undefined || x.data().tel !== undefined)) {
+    const v = d.data();
+    const smaz = { email: FVD.delete(), tel: FVD.delete() };
+    if ((v.email || '').trim() || (v.tel || '').trim())
+      await presun(db.collection('kontakty').doc(d.id), { email: v.email || '', tel: v.tel || '' }, d.ref, smaz);
+    else await uklid(d.ref, smaz);
+  }
+  // S5: interni poznamka z /entries -> /entries_interni/{entryId}
+  const es = await db.collection('entries').get().catch(() => null);
+  if (!es) cisto = false;
+  if (es) for (const d of es.docs.filter(x => x.data().internal !== undefined)) {
+    const t = (d.data().internal || '').trim();
+    if (t) await presun(db.collection('entries_interni').doc(d.id), { text: t }, d.ref, { internal: FVD.delete() });
+    else await uklid(d.ref, { internal: FVD.delete() });
+  }
+  if (cisto) await db.collection('config').doc('app').set({ tajnostiPrevedeny: true }, { merge: true }).catch(() => {});
 }
 
 /* Jeden posluchac na kazdy klic viditelnosti; vysledky se skladaji. */
@@ -4706,8 +4833,9 @@ async function portalVpAction(vpid, action) {
 
 /* ---- sync portal hlavičky při změně projektu ---- */
 async function syncPortalHeader(p) {
-  if (!p.portalToken) return;
-  await db.collection('portals').doc(p.portalToken).set({
+  const tok = tokenPortalu(p.id); // token je v admin-only /portaly (S2); bezi jen u admina s nactenym seznamem
+  if (!tok) return;
+  await db.collection('portals').doc(tok).set({
     pid: p.id, client: p.client || '', name: p.name, address: p.address || '', type: p.type || '',
     progress: p.progress || 0, phase: p.phase || '', handover: p.handover || '', milestones: p.milestones || []
   }, { merge: true }).catch(() => {});
@@ -4718,7 +4846,7 @@ setInterval(() => {
   if (!S.meAuth || S.meAuth.role !== 'admin' || !S.online) return;
   if (Date.now() - _lastPortalSync < 60000) return;
   _lastPortalSync = Date.now();
-  S.projects.filter(p => p.portalToken).forEach(p => syncPortalHeader(p));
+  S.projects.filter(p => tokenPortalu(p.id)).forEach(p => syncPortalHeader(p));
 }, 65000);
 
 /* ============ VÝCHOZÍ DATA (pilot Pecka + Šaarová) ============ */
@@ -4774,9 +4902,11 @@ async function seedData() {
     { jmeno: 'Šárka', prijmeni: 'Šaarová', email: 'saarovas@seznam.cz', typ: { kanc: 0, teren: 0, inv: 1, sub: 0 }, role: 'Investor (V Předpolí)' }
   ];
   for (const u of U) {
-    const { sazba, ...rest } = u;
+    /* email jde do admin-only /kontakty, ne do /users (S4) */
+    const { sazba, email, ...rest } = u;
     const id = await batchAdd('users', { ...rest, active: true, createdAt: FV() });
     if (sazba) await db.collection('sazby').doc(id).set(sazba);
+    if (email) await db.collection('kontakty').doc(id).set({ email, tel: '' });
   }
   await batchAdd('tasks', { title: 'Krytka tlačítka WC — dovézt a domontovat', pid: pecka, resp: 'Marek Valečko', created: isoToday(), term: shiftISO(isoToday(), 1), stav: 'nove', res: ['Marek Valečko'], src: 'z deníku', createdAt: FV() });
   await batchAdd('tasks', { title: 'Fotodokumentace pro předání (Pecka)', pid: pecka, resp: 'David Falat', created: isoToday(), term: shiftISO(isoToday(), 4), stav: 'nove', res: ['David Falat'], createdAt: FV() });

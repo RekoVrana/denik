@@ -113,13 +113,32 @@ service cloud.firestore {
     }
 
     match /users/{id} {
-      // ZNAMY NALEZ (S4, audit 28. 8.): dokument nese i email a telefon,
-      // takze kontakty vsech cte i sub. Zuzit tady NEJDE — parta i sub
-      // potrebuji jmena lidi (vyber odpovedneho ukolu, predani klice,
-      // jmena v poznamkach) a Firestore neumi skryt jednotliva pole.
-      // Oprava vyzaduje app.js: kontakty presunout do admin-only dokumentu.
+      // VYRESENO 29. 8.: e-mail a telefon uz tady nejsou — presunuty do
+      // /kontakty (jen vedeni). Tady zustava jmeno, typ, role a authEmail,
+      // ktere parta i sub potrebuji (vyber odpovedneho, klice, prihlaseni).
       allow read: if hasRole();
       allow write: if bootstrap() || isAdmin();
+    }
+
+    // ---- Citliva pole presunuta z verejneji citelnych dokumentu (audit 28. 8.) ----
+    // Firestore vraci vzdy CELY dokument, jednotliva pole skryt nejde. Proto
+    // musela fyzicky odejit do kolekci, ktere ne-admin vubec necte.
+
+    // S2: token portalu investora (byl v /projects, ktere cte i sub — kdo token
+    // zna, muze na portalu podvrhnout schvaleni viceprace investorem).
+    match /portaly/{pid} {
+      allow read, write: if isAdmin();
+    }
+
+    // S4: kontaktni udaje lidi — e-mail a telefon (byly v /users, ktere cte
+    // i externi sub; jmena tam zustavaji, ta parta potrebuje).
+    match /kontakty/{id} {
+      allow read, write: if isAdmin();
+    }
+
+    // S5: interni poznamky zapisu (byly v /entries, ktere cte cela parta).
+    match /entries_interni/{id} {
+      allow read, write: if isAdmin();
     }
 
     match /sazby/{id} {
@@ -127,20 +146,16 @@ service cloud.firestore {
     }
 
     match /projects/{id} {
-      // ZNAMY NALEZ (S2, audit 28. 8.): dokument nese portalToken, ktery
-      // tak cte i sub — a kdo zna token, muze do /portals/.../actions
-      // podvrhnout schvaleni viceprace. Zuzit tady NEJDE — parta i sub
-      // potrebuji seznam staveb. Oprava vyzaduje app.js: portalToken
-      // presunout do admin-only dokumentu.
+      // VYRESENO 29. 8.: portalToken uz tady neni — presunuty do /portaly
+      // (jen vedeni). Sub uz se k tokenu nedostane, takze nemuze podvrhnout
+      // schvaleni viceprace investorem.
       allow read: if hasRole();
       allow write: if isAdmin();
     }
 
     match /entries/{id} {
-      // ZNAMY NALEZ (S5, audit 28. 8.): zapis nese pole internal (interni
-      // poznamka jen pro vedeni), ale dokument se cte cely — vidi ho tedy
-      // i parta a sub. Zuzit tady NEJDE — denik cist potrebuji vsichni.
-      // Oprava vyzaduje app.js: internal presunout do admin-only dokumentu.
+      // VYRESENO 29. 8.: interni poznamka uz tady neni — presunuta do
+      // /entries_interni (jen vedeni). Denik cte cela parta, poznamka ne.
       allow read: if hasRole();
       allow create: if hasRole() && request.resource.data.authorUid == request.auth.uid
                     && request.resource.data.status == 'pending';
@@ -313,6 +328,15 @@ service cloud.firestore {
     }
     match /dashboard/notes {
       allow read, write: if isAdmin();
+    }
+
+    // Vedeni vyzveda schvaleni/zamitnuti viceprace ze VSECH portalu naraz
+    // (collectionGroup dotaz). Ten se NEridi vnorenym pravidlem nize —
+    // potrebuje vlastni pravidlo s rekurzivnim zastupnym znakem, jinak ho
+    // databaze odmitne. Bez nej se souhlas investora k vedeni nikdy
+    // nedostal (nalezeno 29. 8. pri testu, stara vada). Jen cteni.
+    match /{path=**}/actions/{id} {
+      allow read: if isAdmin();
     }
 
     match /portals/{token} {
