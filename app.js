@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '29. 8. 2026 h';
+const VERZE = '29. 8. 2026 i';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -48,7 +48,7 @@ function attCmp(a, b) { return (attKey(a) - attKey(b)) || (attZapsano(a) - attZa
 function daysBetween(isoA, isoB) { return Math.round((new Date(isoB) - new Date(isoA)) / 86400000); }
 function shiftISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
 function kc(n) { return (Math.round(n) || 0).toLocaleString('cs-CZ'); }
-function fmtH(h) { return Math.floor(h) + ':' + String(Math.round((h % 1) * 60)).padStart(2, '0') + ' h'; }
+function fmtH(h) { const m = Math.round((h || 0) * 60); return Math.floor(m / 60) + ':' + String(m % 60).padStart(2, '0') + ' h'; }
 function uid8() { const a = 'abcdefghjkmnpqrstuvwxyz23456789'; let s = ''; for (let i = 0; i < 22; i++) s += a[Math.floor(Math.random() * a.length)]; return s; }
 function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2800); }
 function ini(u) { return ((u.jmeno || '?')[0] + ((u.prijmeni || '')[0] || '')).toUpperCase(); }
@@ -220,7 +220,7 @@ const S = {
   workerProject: null, draftPhotos: [], draftAtts: [], uploading: 0, signFor: null, tplOpen: false,
   loginMode: 'teren', loginWorker: null, loginHledani: null,
   online: navigator.onLine, unsub: [],
-  denikTab: 'zaznamy', searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false, checking: null, installPrompt: null, swReg: null, updateReady: false, updating: false,
+  searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false, checking: null, installPrompt: null, swReg: null, updateReady: false, updating: false,
   frontaPocet: 0
 };
 window.addEventListener('online', () => { S.online = true; render(); });
@@ -659,10 +659,9 @@ function jeMuj(t) {
   return t.resp === fullName(S.me) || (t.res || []).includes(fullName(S.me));
 }
 const userById = id => S.users.find(u => u.id === id);
-/* Komu se da zadat ukol: jen lide z firmy. Investor je klient — ukol mu
-   nikdo zadavat nema. Subdodavatel zatim nema kam chodit (nema vlastni
-   vchod do aplikace), takze by ukol spadl do prazdna; az vchod vznikne,
-   pridat sem 'sub'. */
+/* Komu se da zadat ukol (a predat klic): jen lide z firmy — kancelar,
+   parta a subdodavatele (ti maji vlastni vchod, viewSub). Investor je
+   klient — ukol mu nikdo zadavat nema. */
 function lideProUkoly() {
   return S.users.filter(u => u.active !== false && u.typ && (u.typ.kanc || u.typ.teren || u.typ.sub) && !u.typ.inv)
     .sort((a, b) => (a.prijmeni || '').localeCompare(b.prijmeni || '', 'cs'));
@@ -760,10 +759,6 @@ async function driveCall(payload) {
   const j = await res.json();
   if (j.error) throw new Error(j.error);
   return j;
-}
-async function uploadPhotoToDrive(p, dataUrl, name) {
-  const j = await driveCall({ action: 'upload', folderId: p.driveFolderId || '', rootId: CFG.driveRootFolderId, cn: p.cn, client: p.client, date: isoToday(), name, data: dataUrl.split(',')[1], mime: 'image/jpeg' });
-  return j.fileId;
 }
 function driveViewUrl(id) { return 'https://drive.google.com/file/d/' + id + '/view'; }
 /* Nazev pro ulozeni souboru z mostu. Odkaz na blob: nejde otevrit do noveho
@@ -1413,7 +1408,7 @@ async function doSetup() {
       await db.collection('users').doc(udocId).update({ jmeno, prijmeni: rest.join(' '), authEmail: email, uid: cred.user.uid, active: true });
       for (const d of dup.docs.slice(1)) await d.ref.delete().catch(() => {});
     } else {
-      const udoc = await db.collection('users').add({ jmeno, prijmeni: rest.join(' '), kod: '001', typ: { kanc: 1, teren: 1, inv: 0, sub: 0 }, role: 'Admin · vedení', active: true, authEmail: email, uid: cred.user.uid, notU: 1, notD: 1 });
+      const udoc = await db.collection('users').add({ jmeno, prijmeni: rest.join(' '), kod: '001', typ: { kanc: 1, teren: 1, inv: 0, sub: 0 }, role: 'Admin · vedení', active: true, authEmail: email, uid: cred.user.uid });
       udocId = udoc.id;
     }
     await db.collection('users_auth').doc(cred.user.uid).set({ role: 'admin', userDocId: udocId, name });
@@ -1521,7 +1516,7 @@ function nastenkaPrehled() {
   return `<main>
     <div class="stats">
       <div class="stat" onclick="goPage('schvaleni')"><span class="sic">⏳</span><span class="st2">Čeká na schválení</span><span class="sn ${n ? 'warn' : ''}">${n}</span></div>
-      <div class="stat" onclick="goPage('denik')"><span class="sic">📓</span><span class="st2">Denní záznamy celkem</span><span class="sn">${S.entries.length}</span></div>
+      <div class="stat" onclick="goPage('denik')"><span class="sic">📓</span><span class="st2">Denní záznamy za 30 dní</span><span class="sn">${S.entries.length}</span></div>
       <div class="stat" onclick="goPage('projekty')"><span class="sic">🛠️</span><span class="st2">Aktivní projekty</span><span class="sn">${act.length}</span></div>
       <div class="stat"><span class="sic">⚠️</span><span class="st2">Dnes bez zápisu</span><span class="sn ${noToday.length ? 'warn' : ''}">${noToday.length}</span></div>
     </div>
@@ -1645,8 +1640,6 @@ function projectForm(id) {
       </div>
       <div class="note" id="pf-cnstav" style="display:none"></div></div>
     <label>Název stavby *</label><input type="text" id="pf-name" value="${esc(p.name || '')}" placeholder="Novodvorská - Pecka">
-    <div class="frow">
-    </div>
     <label>Investor</label><input type="text" id="pf-client" value="${esc(p.client || '')}">
     <div class="frow">
       <div><label>E-mail investora</label><input type="email" id="pf-cmail" value="${esc(p.investorEmail || '')}"></div>
@@ -1919,7 +1912,7 @@ function pgProjDetail() {
     const byDate = {};
     phs.forEach(ph => (byDate[ph.date] = byDate[ph.date] || []).push(ph));
     body = `<main><div class="card">
-      <h3>🖼 Všechna média na stavbě (${phs.length})</h3>
+      <h3>🖼 Média na stavbě za 30 dní (${phs.length})</h3>
       ${Object.entries(byDate).map(([d, list]) => `
         <label>${fmtISO(d)} · ${esc(list[0].author || '')}</label>
         <div class="photos">${list.map(ph => phTile(ph, false, ph.eid)).join('')}</div>`).join('') || '<div class="empty">Zatím žádná média.</div>'}
@@ -2054,7 +2047,8 @@ async function createPortal(pid) {
 function gpsFromHere(pid) {
   if (!navigator.geolocation) { toast('Zařízení nedává polohu'); return; }
   navigator.geolocation.getCurrentPosition(async pos => {
-    await db.collection('projects').doc(pid).update({ gps: { lat: +pos.coords.latitude.toFixed(7), lng: +pos.coords.longitude.toFixed(7), tol: CFG.gpsTolerance || 100 } });
+    const prevGps = (proj(pid) || {}).gps || null;
+    await db.collection('projects').doc(pid).update({ gps: { lat: +pos.coords.latitude.toFixed(7), lng: +pos.coords.longitude.toFixed(7), tol: CFG.gpsTolerance || 100, label: (prevGps && prevGps.label) || '' } });
     toast('GPS nastavena podle aktuální polohy ✓');
   }, () => toast('Polohu se nepodařilo zjistit'), { enableHighAccuracy: true, timeout: 10000 });
 }
@@ -2660,7 +2654,7 @@ function pgOrganizace() {
         <td style="text-align:center"><b>${h.pocet || 1}</b></td>
         <td>${esc(h.cinnost || '')}${h.zaznam ? `<br><span class="muted" title="${esc(h.zaznam)}">📝 ${esc(h.zaznam.slice(0, 60))}${h.zaznam.length > 60 ? '…' : ''}</span>` : ''}</td>
         <td><span class="lnk" onclick="subSmazatHlaseni('${h.id}')">✕</span></td>
-      </tr>`).join('') || '<tr><td colspan="7"><div class="empty">Zatím žádná hlášení. Subdodavatelé je zapisují ve svém vchodu.</div></td></tr>'}
+      </tr>`).join('') || '<tr><td colspan="9"><div class="empty">Zatím žádná hlášení. Subdodavatelé je zapisují ve svém vchodu.</div></td></tr>'}
     </table></div>
     <div class="note">Hlášení přítomnosti od subdodavatelů — kdo, kde, s kolika lidmi a co dělali. Podklad pro měsíční kontrolu fakturace. Hodiny se z nich nepočítají.</div>
   </main>` : `<main>
@@ -3108,7 +3102,6 @@ async function dotahniZapisy() {
     const mam = new Set(S.entries.map(e => e.id));
     const pribylo = snap.docs.filter(d => !mam.has(d.id)).length;
     archivujDotazene('entries', snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    S.starsiOd = od;
     toast(pribylo ? 'Načteno ' + pribylo + ' starších zápisů ✓' : 'Starší zápisy už nejsou');
   } catch (e) { toast('Nepovedlo se načíst: ' + (e.code || e.message)); }
   S.dotahuji = false; render();
@@ -3578,7 +3571,6 @@ function pgNewUser() {
   </main>`;
 }
 async function saveUser() {
-  const t = S.newUserType || (S.editUserId ? null : null);
   const edit = S.editUserId ? userById(S.editUserId) : null;
   const typKey = S.newUserType || (edit ? (edit.typ.kanc ? 'kanc' : edit.typ.inv ? 'inv' : edit.typ.sub ? 'sub' : 'teren') : null);
   if (!typKey) { toast('Vyber typ přístupu'); return; }
@@ -3862,8 +3854,10 @@ function kartaPodklady(p) {
   if (!p) return '';
   const st = S.podkladyStav;
   const cesta = S.podkladyCesta;
+  const docs = p.stavbaDocs || [];
   return `<div class="card">
     <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— z Drive</span></h3>
+    ${docs.length ? docs.map(d => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${esc(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('') : ''}
     ${!st ? `<div class="aprv"><button class="btn dark sm" onclick="S.podkladyCesta=[];nactiPodklady(proj('${p.id}'))">📂 Zobrazit podklady</button></div>`
       : st.nacita ? '<div class="loading"><span class="spin"></span>Načítám z Drive…</div>'
       : st.chyba ? `<div class="note">${esc(st.chyba)}</div><div class="aprv"><button class="btn ghost sm" onclick="S.podkladyStav=null;render()">Zpět</button>${S.meAuth && S.meAuth.role === 'admin' ? `<button class="btn dark sm" onclick="napojPodklady('${p.id}')">🔗 Napojit složku odkazem</button>` : ''}</div>`
@@ -4269,7 +4263,7 @@ function kartaUkoly(p) {
   return `    <div class="card">
       <div class="ukhead">
         <h3 style="margin:0;flex:1">📌 Úkoly</h3>
-        <button class="btn ${S.wtaskOpen ? 'ghost' : 'dark'} sm" onclick="S.wtaskOpen=!S.wtaskOpen;render()">${S.wtaskOpen ? '✕ Zavřít' : '＋ Zadat'}</button>
+        <button class="btn ${S.wtaskOpen ? 'ghost' : 'dark'} sm" onclick="S.wtaskOpen=!S.wtaskOpen;if(!S.wtaskOpen)S.taskFoto=[];render()">${S.wtaskOpen ? '✕ Zavřít' : '＋ Zadat'}</button>
       </div>
       ${S.wtaskOpen ? `
       <div class="ukform">
@@ -4333,6 +4327,10 @@ function kartaUkoly(p) {
 function viewSub() {
   const otevrena = S.hlaseni.find(h => h.date === isoToday() && !h.odchod);
   const hotoveDnesNav = S.hlaseni.filter(h => h.date === isoToday() && h.odchod);
+  if (!S.subProject && S.projects.length) {
+    const list = S.projects.filter(x => x.active !== false);
+    S.subProject = list.length ? list[0].id : S.projects[0].id;
+  }
   const p = proj(otevrena ? otevrena.pid : S.subProject);
   return topbar() + `<div class="shell"><div class="content">
   <div class="strip"><h1>Můj den na stavbě</h1><span class="sp"></span><span class="muted">${fmtISOFull(isoToday())}</span></div>
@@ -4394,7 +4392,7 @@ function dobaText(od, do_) {
   if (do_) { [kh, km] = do_.split(':').map(Number); }
   else { const d = new Date(); kh = d.getHours(); km = d.getMinutes(); }
   let min = (kh * 60 + km) - (oh * 60 + om);
-  if (min < 0) min = 0;
+  if (min < 0) min += 24 * 60;                       // smena pres pulnoc — konec je "driv" jen v ramci HH:MM
   return Math.floor(min / 60) + ' h ' + String(min % 60).padStart(2, '0') + ' min';
 }
 
@@ -4408,6 +4406,7 @@ async function subPrichod() {
       userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid,
       pid, date: isoToday(), prichod: nowTime(), odchod: null, pocet: n, cinnost: c, createdAt: FV()
     });
+    zapomen('sh-c');
     toast('Příchod zapsán ✓'); render();
   } catch (e) { toast('Nepovedlo se zapsat: ' + (e.code || e.message)); }
 }
@@ -4426,6 +4425,7 @@ async function subOdchod() {
     await addEntry(otevrena.pid, fullName(S.me || {}), text, otevrena.pocet);
     await db.collection('hlaseni').doc(otevrena.id).update({ odchod: nowTime(), zaznam: text });
     S.subOdchodOpen = false; S.subZaznam = '';
+    zapomen('so-z');
     toast('Odchod zapsán — záznam šel vedení ke schválení ✓'); render();
   } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
 }
@@ -4522,10 +4522,6 @@ function viewWorker() {
       `}
       <div class="note">Po ťuknutí se otevře foťák — vyfoť se na stavbě. Fotka se uloží do složky zakázky na Drive. Zároveň se ověří poloha proti GPS stavby (±${CFG.gpsTolerance || 100} m).</div>
     </div>
-    ${p && (p.stavbaDocs || []).length ? `<div class="card">
-      <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— půdorysy, vizualizace</span></h3>
-      ${(p.stavbaDocs || []).map(d => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${esc(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('')}
-    </div>` : ''}
     ${kartaUkoly(p)}
     ${kartaKlice()}
     ${kartaPodklady(p)}
