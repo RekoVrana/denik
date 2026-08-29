@@ -121,11 +121,17 @@ function navodSub() {
    někdy přejmenovala, dostane člověk radši návod party než prázdno. */
 /* Návod si každý zavře, až ho nepotřebuje — a telefon si to zapamatuje.
    Poprvé je otevřený, ať ho člověk vůbec uvidí. */
+/* Stav se drží i v paměti. Na starším iPhonu v soukromém režimu localStorage
+   zápis odmítne — bez téhle pojistky by šipka pořád hlásila „skrýt" a ťuknutí
+   by nedělalo nic. */
+let _navodOtevren = null;
 function navodOtevreny() {
+  if (_navodOtevren !== null) return _navodOtevren;
   try { return localStorage.getItem('denik_navod') !== 'zavreno'; } catch (e) { return true; }
 }
 function navodPrepni() {
-  try { localStorage.setItem('denik_navod', navodOtevreny() ? 'zavreno' : 'otevreno'); } catch (e) {}
+  _navodOtevren = !navodOtevreny();
+  try { localStorage.setItem('denik_navod', _navodOtevren ? 'otevreno' : 'zavreno'); } catch (e) {}
   if (typeof render === 'function') render();
 }
 function navodHtml(role) {

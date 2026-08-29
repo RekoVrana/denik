@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '29. 8. 2026 l';
+const VERZE = '29. 8. 2026 m';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -813,11 +813,25 @@ async function frontaSpocitat() {
 }
 /* Odesle vsechno, co ceka. Bezi po jedne polozce, aby se dva zapisy do stejneho
    deniku neprepsaly navzajem. Co se nepovede, zustane ve fronte na priste. */
+const FRONTA_POKUSU = 5;   // po kolika marnych pokusech (mimo vypadku site) polozku vzdame
+/* Vypadek site vypada jinak nez odmitnuti mostem: fetch spadne na TypeError
+   („Failed to fetch" / „Load failed"), zadna odpoved nedorazi. Takovy pokus
+   se nesmi pocitat, jinak by pulden bez signalu smazal partě fotky. */
+function jeVypadekSite(e) {
+  if (!navigator.onLine || !S.online) return true;
+  if (e instanceof TypeError) return true;
+  return /failed to fetch|load failed|network|timed? ?out/i.test(String((e && e.message) || ''));
+}
 async function frontaOdeslat() {
   if (_frontaBezi || !S.online || !CFG.scriptUrl) return;
+  /* Zamek MUSI byt driv nez prvni await — jinak dve soucasna volani
+     (navrat signalu, casovac po 90 s, odeslani zapisu) projdou obe
+     a tataz fotka se na Drive nahraje dvakrat. */
+  _frontaBezi = true;
   const cekaji = await frontaVse();
-  if (!cekaji.length) return;
-  _frontaBezi = true; S.uploading++; render();
+  if (!cekaji.length) { _frontaBezi = false; return; }
+  S.uploading++; render();
+  let zmeskano = 0;
   try {
     for (const it of cekaji) {
       if (!S.online) break;
@@ -831,13 +845,20 @@ async function frontaOdeslat() {
             data: String(it.data).split(',')[1], mime: it.mime || 'application/octet-stream'
           });
           fileId = j.fileId;
+          /* Most odpovedel, ale soubor nezalozil. Opakovani nepomuze a zapis
+             `undefined` by Firestore odmitl — polozku proto rovnou vzdame,
+             at nedrzi frontu (za ni cekaji dalsi fotky i selfie z dochazky). */
+          if (!fileId) {
+            console.warn('fronta: most nevratil fileId — polozka vyrazena', it.name || '');
+            await frontaSmazat(it.id);
+            zmeskano++;
+            continue;
+          }
           /* fileId si ulozime do polozky HNED: kdyz zapis do zaznamu nevyjde,
              pristi pokus uz fotku NEnahrava na Drive znovu (zadne duplikaty),
              jen dopise driveId. Data fotky uz nejsou potreba. */
-          if (fileId) {
-            it.fileId = fileId; delete it.data;
-            try { await frontaTx('readwrite', st => st.put(it)); } catch (e2) { console.warn('fronta put', e2); }
-          }
+          it.fileId = fileId; delete it.data;
+          try { await frontaTx('readwrite', st => st.put(it)); } catch (e2) { console.warn('fronta put', e2); }
         }
         await frontaZapsatDoZaznamu(it, fileId);
         await frontaSmazat(it.id);
@@ -851,10 +872,30 @@ async function frontaOdeslat() {
           await frontaSmazat(it.id);
           continue;
         }
-        console.warn('fronta', e); break;   // prechodna chyba (nejspis vypadl signal) — zkusime priste
+        /* Vypadl signal? Nic nepocitame a zkusime priste — parta foti
+           v suterenech, kde je bez signalu klidne cely den. */
+        if (jeVypadekSite(e)) { console.warn('fronta: bez signalu, zkusim priste', e); break; }
+        /* Most odpovedel, ale polozku odmitl (moc velky soubor, chyba v
+           zaznamu). Opakovani nejspis nepomuze — po par pokusech ji vzdame,
+           jinak by zablokovala celou frontu navzdy a za ni by uz neproslo
+           nic: dalsi fotky, prilohy ani selfie z dochazky. */
+        it.pokusy = (it.pokusy || 0) + 1;
+        if (it.pokusy >= FRONTA_POKUSU) {
+          console.warn('fronta: polozka vzdana po ' + it.pokusy + ' pokusech', it.name || '', e);
+          await frontaSmazat(it.id);
+          zmeskano++;
+          continue;
+        }
+        try { await frontaTx('readwrite', st => st.put(it)); } catch (e3) {}
+        console.warn('fronta', e);
+        continue;   /* dalsi polozky nedrzime — jedna vadna nesmi zastavit vsechny */
       }
     }
-  } finally { _frontaBezi = false; S.uploading--; await frontaSpocitat(); }
+  } finally {
+    _frontaBezi = false; S.uploading--;
+    if (zmeskano) toast('⚠ ' + zmeskano + (zmeskano === 1 ? ' soubor se nepodařilo odeslat' : ' souborů se nepodařilo odeslat') + ' — zkus je přidat znovu.');
+    await frontaSpocitat();
+  }
 }
 async function frontaZapsatDoZaznamu(it, fileId) {
   if (it.druh === 'selfie') {
@@ -948,19 +989,20 @@ async function processPhotos(files, label) {
     try {
       const img = await fileToImage(f);
       const thumb = scaleJpeg(img, 360, 0.62);
-      /* stredni verze zustava jen v pameti — do databaze se uz NEUKLADA
-         (~220 kB na fotku by pri tisicich fotek vycerpalo 1GB limit
-         Firestoru). Prohlizeni si velkou verzi vyzvedne pres most z Drive. */
-      const mid = scaleJpeg(img, 1100, 0.72);
+      /* Stredni verze (1100 px) se u zapisu uz nikam neuklada — do databaze
+         nejde (~220 kB na fotku by pri tisicich fotek vycerpalo 1GB limit)
+         a na Drive jde verze 1600 px. Nepocitame ji tedy vubec: osm fotek
+         by jinak drzelo v pameti telefonu megabajty navic zbytecne.
+         Fotky UKOLU maji svou vlastni cestu a stredni verzi si dal delaji. */
       const full = scaleJpeg(img, 1600, 0.82);
-      S.draftPhotos.push({ tmp: uid8(), thumb, mid, full, orig, label: label || f.name.replace(/\.[^.]+$/, ''), status: 'pending', driveId: null });
+      S.draftPhotos.push({ tmp: uid8(), thumb, full, orig, label: label || f.name.replace(/\.[^.]+$/, ''), status: 'pending', driveId: null });
       URL.revokeObjectURL(img.src);
     } catch (e) {
       /* Prohlizec fotku nedokazal dekodovat (napr. HEIC na pocitaci).
          Kdyz mame aspon original, fotka NESMI propadnout: nahraje se on,
          jen dlazdice zustane bez nahledu a clovek dostane hlasku. */
       if (orig) {
-        S.draftPhotos.push({ tmp: uid8(), thumb: NAHLED_NEDOSTUPNY, mid: null, full: null, orig, label: label || (f.name || '').replace(/\.[^.]+$/, ''), status: 'pending', driveId: null });
+        S.draftPhotos.push({ tmp: uid8(), thumb: NAHLED_NEDOSTUPNY, full: null, orig, label: label || (f.name || '').replace(/\.[^.]+$/, ''), status: 'pending', driveId: null });
         toast('⚠ Náhled fotky ' + (f.name || '') + ' se nepodařilo vyrobit — originál se ale na Drive nahraje.');
       } else toast('Fotku se nepodařilo načíst: ' + f.name);
     }
@@ -992,19 +1034,39 @@ async function zaraditFotky(p, entryId) {
        coz na Drive nic nerika; datum a cas prida most na zacatek */
     const jmeno = (S.me && S.me.prijmeni) || fullName(S.me || {}) || 'foto';
     const spol = { entryId, photoId: id, folderId: (p && p.driveFolderId) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', date: isoToday() };
+    /* Kazda polozka ma svuj try. Kdyby byly spolecne a selhala prvni
+       (typicky plna pamet telefonu), druha by se uz ani nezkusila. */
+    let mamNahled = false;
     try {
       /* PROHLIZECI KOPIE (1600 px JPEG) — druh 'nahled', at ji most odlisi
          od originalu. Jeji fileId se zapise do driveId, takze prohlizeni,
          galerie i portal jedou beze zmeny. */
-      if (ph.full) await frontaPridat({ druh: 'nahled', name: jmeno + '.jpg', mime: 'image/jpeg', data: ph.full, ...spol });
+      if (ph.full) { await frontaPridat({ druh: 'nahled', name: jmeno + '.jpg', mime: 'image/jpeg', data: ph.full, ...spol }); mamNahled = true; }
+    } catch (e) { console.warn('fronta nahled', e); }
+    try {
       /* ORIGINAL tak, jak prisel z telefonu — vcetne data porizeni a GPS.
          Skutecny mime i pripona (klidne HEIC); priznak original rika
          fronte, ze jeho fileId patri do origId, ne do driveId. */
       if (ph.orig) await frontaPridat({ druh: 'foto', original: true, name: jmeno + priponaSouboru(ph.orig.name, ph.orig.mime), mime: ph.orig.mime, data: ph.orig.data, ...spol });
-    } catch (e) { console.warn('fronta foto', e); toast('⚠ Fotku se nepodařilo uložit do fronty — zůstal jen náhled'); }
+    } catch (e) {
+      /* Original se nevesel, ale prohlizeci kopie ano — to je porad dobra
+         fotka, jen bez data a GPS. Hlasit se musi jen skutecny problem. */
+      console.warn('fronta original', e);
+      if (!mamNahled) toast('⚠ Fotku se nepodařilo uložit do fronty — zkus ji přidat znovu.');
+      else toast('⚠ Fotka se uloží, ale bez původních dat (datum, poloha) — v telefonu došlo místo.');
+    }
+    if (!mamNahled && !ph.orig) toast('⚠ Fotku se nepodařilo uložit do fronty — zkus ji přidat znovu.');
   }
   S.draftPhotos = [];
   return out;
+}
+/* Zruseni rozepsaneho zapisu. Fotky se musi zahodit spolu s textem —
+   kdyby zustaly v pameti, splnily by o den pozdeji podminku „aspon jedna
+   fotka" a pripnuly by se k uplne jinemu zapisu, klidne na jine stavbe. */
+function zrusitRozepsanyZapis() {
+  S.subOdchodOpen = false; S.subZaznam = '';
+  S.draftPhotos = []; S.draftAtts = [];
+  render();
 }
 async function zaraditPrilohy(p, entryId) {
   for (const at of (S.draftAtts || [])) {
@@ -1116,11 +1178,24 @@ async function addEntry(pid, author, txt, persons, date) {
   frontaOdeslat();
   fetchWeather(p, d).then(w => { if (w) ref.update({ weather: w }).catch(() => {}); });
 }
+/* Fotky v zaznamu dopisuje i fronta na telefonu (driveId, origId), a to
+   kdykoli — treba prave ted. Kdo mení stav fotek, musi proto vyjit z CERSTVE
+   verze dokumentu, ne z kopie z posluchace; jinak by odkazy na Drive prepsal
+   starsi verzi a fotka by uz navzdy zustala jen jako mala dlazdice.
+   Kdyz se cerstva verze precist neda (offline), pouzije se kopie — to je
+   porad lepsi nez akci vedeni odmitnout. */
+async function cerstveFotky(id, zaloha) {
+  try {
+    const snap = await db.collection('entries').doc(id).get();
+    if (snap.exists && Array.isArray(snap.data().photos)) return snap.data().photos;
+  } catch (e) { console.warn('cerstve fotky', e); }
+  return zaloha || [];
+}
 async function approveEntry(id) {
   const e = S.entries.find(x => x.id === id); if (!e) return;
   const ta = document.getElementById('ct-' + id);
   const clientTxt = ta ? (ta.value.trim() || e.client) : e.client;
-  const photos = (e.photos || []).map(ph => ph.status === 'pending' ? { ...ph, status: 'approved' } : ph);
+  const photos = (await cerstveFotky(id, e.photos)).map(ph => ph.status === 'pending' ? { ...ph, status: 'approved' } : ph);
   await db.collection('entries').doc(id).update({ status: 'approved', client: clientTxt, photos, approvedAt: FV(), approvedBy: fullName(S.me || {}) });
   zapomen('ct-' + id);
   await mirrorEntry({ ...e, status: 'approved', client: clientTxt, photos });
@@ -1129,7 +1204,7 @@ async function approveEntry(id) {
 }
 async function keepInternalEntry(id) {
   const e = S.entries.find(x => x.id === id); if (!e) return;
-  const photos = (e.photos || []).map(ph => ({ ...ph, status: 'internal' }));
+  const photos = (await cerstveFotky(id, e.photos)).map(ph => ({ ...ph, status: 'internal' }));
   await db.collection('entries').doc(id).update({ status: 'internal', photos });
   /* token portalu uz neni na projektu, ale v admin-only /portaly (S2) */
   const tok = await tokenPortaluAsync(e.pid);
@@ -1241,7 +1316,7 @@ async function dorovnejPortaly() {
 }
 async function cyclePhoto(eid, phid) {
   const e = S.entries.find(x => x.id === eid); if (!e) return;
-  const photos = e.photos.map(ph => ph.id === phid ? { ...ph, status: ph.status === 'pending' ? 'approved' : ph.status === 'approved' ? 'internal' : 'pending' } : ph);
+  const photos = (await cerstveFotky(eid, e.photos)).map(ph => ph.id === phid ? { ...ph, status: ph.status === 'pending' ? 'approved' : ph.status === 'approved' ? 'internal' : 'pending' } : ph);
   await db.collection('entries').doc(eid).update({ photos });
   if (e.status === 'approved') await mirrorEntry({ ...e, photos });
 }
@@ -2174,6 +2249,10 @@ async function ulozMilniky(pid, ms) {
   if (r.progress !== (typeof p.progress === 'number' ? p.progress : null)) upd.progress = r.progress;
   if (r.phase !== (p.phase || '')) upd.phase = r.phase;
   await db.collection('projects').doc(pid).update(upd);
+  /* Portal investora dorovnat HNED. Casovac to jinak stihne az za minutu
+     a jen dokud ma vedeni appku otevrenou — kdo posune milnik a zavre ji,
+     nechal by investora koukat na stare procento klidne do dalsiho dne. */
+  syncPortalHeader({ ...p, milestones: ms, progress: r.progress, phase: r.phase }).catch(() => {});
 }
 // Nastavi postup milniku (tlacitka 0/25/75/… i odskrtnuti kolecka = 100 %).
 async function setMilePct(pid, i, pct) {
@@ -2588,7 +2667,7 @@ async function fgUkaz() {
   const img = $('#fv-img');
   if (!f || !img) return;
   const moje = ++_fgNacitam;
-  img.src = _fgCache.get(f.id) || f.thumb;
+  img.src = (f.id && _fgCache.get(f.id)) || f.thumb;
   const p = proj(f.pid) || {};
   $('#fv-count').textContent = (window._fgIdx + 1) + ' / ' + window._fgSeznam.length;
   $('#fv-cap').innerHTML = `<b>${fmtISOFull(f.date)}</b>
@@ -2600,14 +2679,14 @@ async function fgUkaz() {
   const prev = $('#fv-prev'), next = $('#fv-next');
   if (prev) prev.disabled = window._fgIdx === 0;
   if (next) next.disabled = window._fgIdx === window._fgSeznam.length - 1;
-  if (_fgCache.has(f.id)) return;
+  if (f.id && _fgCache.has(f.id)) return;
   const hint = $('#fv-hint');
   if (hint && (f.driveId || f.id)) hint.style.display = '';
   const velka = await fgVelka(f);
   if (moje !== _fgNacitam) return;   // uzivatel uz mezitim odlistoval jinam
   if (hint) hint.style.display = 'none';
   if (velka) {
-    _fgCache.set(f.id, velka);
+    if (f.id) _fgCache.set(f.id, velka);
     if (_fgCache.size > 25) _fgCache.delete(_fgCache.keys().next().value);   // strop pameti
     if (img.isConnected) img.src = velka;
   }
@@ -3577,6 +3656,37 @@ function repExport() {
 }
 
 /* ---- Uživatelé ---- */
+
+/* Filtr skupin je VICENASOBNY — Marco chce vidět třeba vedení a suby naráz.
+   S.uzivateleFiltr je pole klíčů typu ('kanc','teren','sub','inv').
+   Prázdné pole = všichni. Starší uložený stav byl jeden řetězec, proto
+   se tu pro jistotu srovnává na pole. */
+function uzFiltrPole() {
+  const f = S.uzivateleFiltr;
+  if (Array.isArray(f)) return f;
+  S.uzivateleFiltr = f ? [f] : [];
+  return S.uzivateleFiltr;
+}
+function uzFiltrZapnuty(k) {
+  const f = uzFiltrPole();
+  return k ? f.indexOf(k) >= 0 : f.length === 0;
+}
+function uzFiltrPrepni(k) {
+  const f = uzFiltrPole();
+  if (!k) S.uzivateleFiltr = [];                 /* „Všichni" filtr zruší */
+  else {
+    const i = f.indexOf(k);
+    S.uzivateleFiltr = i >= 0 ? f.filter(x => x !== k) : f.concat([k]);
+  }
+  render();
+}
+/* Člověk se ukáže, když patří aspoň do jedné vybrané skupiny. */
+function uzFiltrovani() {
+  const f = uzFiltrPole();
+  if (!f.length) return S.users;
+  return S.users.filter(u => f.some(k => (u.typ || {})[k]));
+}
+
 function pgUzivatele() {
   return `
   <div class="strip"><h1>Uživatelé</h1><span class="sp"></span><button class="btn amber" onclick="S.newUserType=null;S.editUserId=null;goPage('newuser')">➕ PŘIDAT</button></div>
@@ -3591,11 +3701,11 @@ function pgUzivatele() {
     <div class="tablecard">
       <div class="uktabs" style="padding:10px 12px 0;flex-wrap:wrap">
         ${[['', '👥 Všichni'], ['kanc', '🗂 Vedení'], ['teren', '👷 Parta'], ['sub', '🔧 Subdodavatelé'], ['inv', '🏠 Investoři']].map(([k, t]) => `
-          <div class="t ${(S.uzivateleFiltr || '') === k ? 'active' : ''}" onclick="S.uzivateleFiltr='${k}';render()">${t} · ${k ? S.users.filter(u => (u.typ || {})[k]).length : S.users.length}</div>`).join('')}
+          <div class="t ${uzFiltrZapnuty(k) ? 'active' : ''}" onclick="uzFiltrPrepni('${k}')">${t} · ${k ? S.users.filter(u => (u.typ || {})[k]).length : S.users.length}</div>`).join('')}
       </div>
       <div style="overflow-x:auto"><table>
         <tr><th></th><th>Jméno</th><th>Email</th><th>Kancelářský</th><th>Terénní</th><th>Investor</th><th>Sub</th><th>Sazba hrubá / čistá</th><th>Popis</th><th>Přihlášení</th><th></th></tr>
-        ${S.users.filter(u => !S.uzivateleFiltr || (u.typ || {})[S.uzivateleFiltr]).map(u => { const t = u.typ || {}; const s = S.sazby[u.id]; return `
+        ${uzFiltrovani().map(u => { const t = u.typ || {}; const s = S.sazby[u.id]; return `
         <tr style="${u.active === false ? 'opacity:.5' : ''}">
           <td><span class="uav">${ini(u)}</span></td>
           <td><b>${esc(fullName(u))}</b></td>
@@ -3614,7 +3724,7 @@ function pgUzivatele() {
             <span class="lnk" style="margin-left:8px" title="Smazat uživatele" onclick="delUser('${u.id}')">🗑</span></td>
         </tr>`; }).join('')}
       </table></div>
-      <div class="pagefoot"><span>${S.users.filter(u => !S.uzivateleFiltr || (u.typ || {})[S.uzivateleFiltr]).length} z ${S.users.length} uživatelů</span></div>
+      <div class="pagefoot"><span>${uzFiltrovani().length} z ${S.users.length} uživatelů</span></div>
     </div>
     <div class="note">Čistá sazba (#34) je citlivý údaj — vidí ji jen Vedení. „Vytvořit přihlášení" založí pracovníkovi PIN pro mobilní přihlášení.</div>
   </main>`;
@@ -3961,7 +4071,7 @@ async function saveUser() {
        i 'teren', aby prosel filtrem "komu jde zadat ukol" — obezlicka, ktera
        delala ze suba pracovnika i tam, kam nepatri (rucni doplneni dochazky,
        seznam dochazky). Seznamy se ted ptaji na suba rovnou. */
-    typ: { kanc: typKey === 'kanc' ? 1 : 0, teren: typKey === 'teren' ? 1 : 0, inv: typKey === 'inv' ? 1 : 0, sub: typKey === 'sub' ? 1 : 0 },
+    typ: { kanc: typKey === 'kanc' ? 1 : 0, teren: (typKey === 'kanc' || typKey === 'teren') ? 1 : 0, inv: typKey === 'inv' ? 1 : 0, sub: typKey === 'sub' ? 1 : 0 },
     role: $('#nu-r').value.trim(), active: edit ? edit.active !== false : true
   };
   // FIX: sazby přečíst z formuláře PŘED zápisem do users — await níže spustí onSnapshot render(),
@@ -3974,7 +4084,13 @@ async function saveUser() {
   /* kontakty do admin-only /kontakty (S4); prazdny formular = uklidit zaznam */
   if (kEmail || kTel) await db.collection('kontakty').doc(docId).set({ email: kEmail, tel: kTel });
   else await db.collection('kontakty').doc(docId).delete().catch(() => {});
-  if (shEl) {
+  /* Sazbu maji jen lide, kteri vykazuji hodiny (parta a vedeni). Kdyz vedeni
+     prepne cloveka na subdodavatele nebo investora, formular pole se sazbou
+     vubec nevykresli — proto se stara hodnota musi smazat natvrdo, jinak by
+     subovi v seznamu uzivatelu dal svitilo treba „300 Kc/h". */
+  if (typKey === 'sub' || typKey === 'inv') {
+    await db.collection('sazby').doc(docId).delete().catch(() => {});
+  } else if (shEl) {
     if (shVal) await db.collection('sazby').doc(docId).set(scVal ? { h: shVal, c: scVal } : { h: shVal });
     else await db.collection('sazby').doc(docId).delete().catch(() => {});
   }
@@ -4021,8 +4137,11 @@ async function saveUser() {
       }
     } catch (e) { toast('⚠ Jméno jsem změnil, ale ne všude se to propsalo: ' + (e.code || e.message)); }
     // jmeno srovnat i v rosteru — ale jen u party a subu, vedeni v rosteru byt nema (B6)
-    if (!edit.uid && roleOfTypeKey(typKey) !== 'admin')
-      await db.collection('roster').doc(docId).set({ jmeno: j, prijmeni: p }, { merge: true }).catch(() => {});
+    /* update, ne set(merge): kdo v rosteru zaznam nema (nema prihlaseni),
+       tomu ho prejmenovani nesmi zalozit — na prihlasovaci obrazovce by se
+       ukazalo jeho jmeno a po zadani PINu by narazil na „ucet nema adresu". */
+    if (roleOfTypeKey(typKey) !== 'admin')
+      await db.collection('roster').doc(docId).update({ jmeno: j, prijmeni: p }).catch(() => {});
   }
   goPage('uzivatele');
   toast(edit
@@ -4727,7 +4846,7 @@ function viewSub() {
           <div class="photos">${S.draftPhotos.map((ph, i) => `<div class="ph"><img src="${ph.thumb}"><span class="del" onclick="S.draftPhotos.splice(${i},1);render()">✕</span></div>`).join('')}</div>
           <div class="aprv">
             <button class="btn amber velke" onclick="subOdchod()">🏁 ODESLAT A ZAPSAT ODCHOD</button>
-            <button class="btn ghost" onclick="S.subOdchodOpen=false;render()">Zpět</button>
+            <button class="btn ghost" onclick="zrusitRozepsanyZapis()">Zpět</button>
           </div>
           <div class="note">Záznam s fotkami jde vedení ke schválení — jako zápis do deníku.</div>
         </div>` : `
@@ -4842,7 +4961,7 @@ function viewWorker() {
         <div class="zamcena"><span class="zam">🔒</span>${esc((proj(sm.pid) || {}).name || 'neznámá stavba')}</div>
         <div class="muted" style="margin-top:6px;font-size:12px">Stavbu jde změnit až po odchodu — nebo tlačítkem „Přejít na jinou stavbu".</div>
       ` : `
-        <select id="w-proj" style="font-size:16px" onchange="S.workerProject=this.value;render()">
+        <select id="w-proj" style="font-size:16px" onchange="S.workerProject=this.value;S.draftPhotos=[];S.draftAtts=[];render()">
           ${workerProjectList().map(it => `<option value="${it.p.id}" ${it.p.id === S.workerProject ? 'selected' : ''}>${esc(it.p.name)}${
             it.last ? ' · naposledy' : ''}${it.dist != null ? ' · ' + fmtDist(it.dist) : it.p.gps ? '' : ' · bez GPS'}</option>`).join('')}
         </select>
@@ -5355,9 +5474,9 @@ function viewPortal() {
       <div class="hm">${esc(P.type || '')}</div>
       ${/* Prubeh na portalu se pocita z milniku v mirroru — kdyz harmonogram neni,
           radek s procenty vubec neukazujeme (radsi nic nez lzive „Hotovo 0 %"). */''}
-      ${(() => { const pr = projProgress(P); return pr != null
-        ? `<div class="prog"><i style="width:${pr}%"></i></div><div class="hm">Hotovo ${pr} % ${P.phase ? '· fáze: ' + esc(P.phase) : ''} ${P.handover ? '· ' + esc(P.handover) : ''}</div>`
-        : ((P.phase || P.handover) ? `<div class="hm">${P.phase ? 'fáze: ' + esc(P.phase) : ''}${P.phase && P.handover ? ' · ' : ''}${esc(P.handover || '')}</div>` : ''); })()}
+      ${(() => { const pr = projProgress(P), fz = projPhase(P); return pr != null
+        ? `<div class="prog"><i style="width:${pr}%"></i></div><div class="hm">Hotovo ${pr} % ${fz ? '· fáze: ' + esc(fz) : ''} ${P.handover ? '· ' + esc(P.handover) : ''}</div>`
+        : ((fz || P.handover) ? `<div class="hm">${fz ? 'fáze: ' + esc(fz) : ''}${fz && P.handover ? ' · ' : ''}${esc(P.handover || '')}</div>` : ''); })()}
     </div>
     ${(vps.length || done.length) ? `
     <div class="card" ${vps.length ? 'style="border:2px solid var(--amber)"' : ''}>
@@ -5475,9 +5594,9 @@ async function seedData() {
     { jmeno: 'Ruslan', prijmeni: 'Gorbunov', email: 'gorbunovruslan430@gmail.com', typ: { kanc: 0, teren: 1, inv: 0, sub: 0 }, role: 'Vedoucí party Ruslan', sazba: { h: 300 } },
     { jmeno: 'Vasyl', prijmeni: 'Fedorin', email: 'vasilfedorin0@gmail.com', typ: { kanc: 0, teren: 1, inv: 0, sub: 0 }, role: '', sazba: { h: 275, c: 230 } },
     { jmeno: 'Oleg', prijmeni: 'Starostag', email: 'olegstarostak570@gmail.com', typ: { kanc: 0, teren: 1, inv: 0, sub: 0 }, role: '' },
-    { jmeno: 'Lukáš', prijmeni: 'Poštolka', email: 'postolin@gmail.com', typ: { kanc: 0, teren: 1, inv: 0, sub: 1 }, role: 'Subdodavatel — elektro' },
-    { jmeno: 'Marek', prijmeni: 'Valečko', email: 'marekvalecko@seznam.cz', typ: { kanc: 0, teren: 1, inv: 0, sub: 1 }, role: 'Subdodavatel — voda / topení' },
-    { jmeno: 'DS', prijmeni: 'Podlahy', email: 'dspodlahy@email.cz', typ: { kanc: 0, teren: 1, inv: 0, sub: 1 }, role: 'Subdodavatel — podlahy' },
+    { jmeno: 'Lukáš', prijmeni: 'Poštolka', email: 'postolin@gmail.com', typ: { kanc: 0, teren: 0, inv: 0, sub: 1 }, role: 'Subdodavatel — elektro' },
+    { jmeno: 'Marek', prijmeni: 'Valečko', email: 'marekvalecko@seznam.cz', typ: { kanc: 0, teren: 0, inv: 0, sub: 1 }, role: 'Subdodavatel — voda / topení' },
+    { jmeno: 'DS', prijmeni: 'Podlahy', email: 'dspodlahy@email.cz', typ: { kanc: 0, teren: 0, inv: 0, sub: 1 }, role: 'Subdodavatel — podlahy' },
     { jmeno: 'David', prijmeni: 'Falat', email: 'falyn.ji@seznam.cz', typ: { kanc: 1, teren: 1, inv: 0, sub: 0 }, role: 'Vedoucí projektu' },
     { jmeno: 'Štěpán', prijmeni: 'Pecka', email: 'stepan.pecka@seznam.cz', typ: { kanc: 0, teren: 0, inv: 1, sub: 0 }, role: 'Investor (Novodvorská)' },
     { jmeno: 'Šárka', prijmeni: 'Šaarová', email: 'saarovas@seznam.cz', typ: { kanc: 0, teren: 0, inv: 1, sub: 0 }, role: 'Investor (V Předpolí)' }
