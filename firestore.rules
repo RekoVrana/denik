@@ -7,6 +7,13 @@
 //  Živá verze: Firebase konzole → Firestore → Rules
 //  Když se změní tam, změň i tady, ať kopie nezastará.
 //
+//  Poslední změna 29. 8. 2026 (S4b):
+//  15) /projects: e-mail a telefon INVESTORA odešly do /kontakty pod klíčem
+//      "projekt_<id>" (jen vedení). Stavby čte celá parta i externí sub
+//      a Firestore vydává vždy celý dokument — kontakty klientů tak chodily
+//      subovi do telefonu. Zápis stavby, který ta pole nese, se odmítne,
+//      aby je stará verze aplikace v mobilu nevrátila zpátky.
+//
 //  Poslední změny 28. 8. 2026 (utažení po bezpečnostním auditu):
 //  10) /tasks update: ne-admin smí měnit jen stav, hotovoDne a odpovedi —
 //      odpovědný si už nepřepíše zadání (respId/title/termín) a nezbaví
@@ -149,8 +156,21 @@ service cloud.firestore {
       // VYRESENO 29. 8.: portalToken uz tady neni — presunuty do /portaly
       // (jen vedeni). Sub uz se k tokenu nedostane, takze nemuze podvrhnout
       // schvaleni viceprace investorem.
+      //
+      // S4b (29. 8.): mail a telefon INVESTORA tady taky uz nejsou — bydli
+      // v admin-only /kontakty pod klicem "projekt_<id>". Stavby cte cela
+      // parta i externi subdodavatele a Firestore vydava vzdy CELY dokument,
+      // takze spolu s nazvem stavby chodily subovi do telefonu i kontakty
+      // klienta. Nasledujici podminka je pojistka: kdyby nekdo jel na stare
+      // verzi aplikace ulozene v mobilu, jeho ulozeni stavby SELZE misto
+      // toho, aby ta pole potichu vratil zpatky.
+      // Pozor: podminka smi platit jen pro zakladani a upravu. U mazani
+      // zadny "novy dokument" neexistuje a cteni jeho poli by pravidlo
+      // shodilo — smazani stavby by prestalo fungovat.
       allow read: if hasRole();
-      allow write: if isAdmin();
+      allow create, update: if isAdmin()
+        && !request.resource.data.keys().hasAny(['investorEmail', 'investorPhone']);
+      allow delete: if isAdmin();
     }
 
     match /entries/{id} {

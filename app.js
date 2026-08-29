@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '29. 8. 2026 m';
+const VERZE = '29. 8. 2026 n';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -523,7 +523,7 @@ function startData() {
      Kazdy klic (vsichni / parta / ja) ma vlastni posluchac a vysledky
      se skladaji dohromady, stejne jako u ukolu. */
   const pzSort = (a, b) => (a.nadpis || '').localeCompare(b.nadpis || '', 'cs');
-  if (role === 'admin') { listen('poznamky', 'poznamky', { sort: pzSort }); prevedStarePoznamky(); uklidRosterAdminy(); prevedTajnosti(); uklidTypySubu(); setTimeout(dorovnejPortaly, 6000); }
+  if (role === 'admin') { listen('poznamky', 'poznamky', { sort: pzSort }); prevedStarePoznamky(); uklidRosterAdminy(); prevedTajnosti(); prevedKontaktyInvestoru(); uklidTypySubu(); setTimeout(dorovnejPortaly, 6000); }
   else {
     const pzMid = (S.meAuth && S.meAuth.userDocId) || '__nikdo__';
     listenPoznamky(role === 'sub' ? ['vsichni', pzMid] : ['vsichni', 'parta', pzMid]);
@@ -590,6 +590,13 @@ async function tokenPortaluAsync(pid) {
 }
 function interniPozn(eid) { return ((S.entriesInterni || {})[eid] || {}).text || ''; }
 function kontaktOsoby(udi) { return (S.kontakty || {})[udi] || {}; }
+/* Kontakt na INVESTORA (S4b). Byval ulozeny primo na stavbe — jenze /projects
+   cte kazdy prihlaseny vcetne externiho subdodavatele a databaze vydava vzdy
+   CELY dokument, takze spolu s nazvem stavby chodil subovi do telefonu i mail
+   a telefon klienta. Ted bydli v admin-only /kontakty pod klicem
+   „projekt_<id>" — u stavby uz ta pole vubec nejsou. */
+function kontaktKlicStavby(pid) { return 'projekt_' + pid; }
+function kontaktStavby(pid) { return (S.kontakty || {})[kontaktKlicStavby(pid)] || {}; }
 /* Ukol si drzi ID osoby (respId). Drive se ukladalo jen jmeno jako text, takze
    po oprave preklepu v prijmeni ukol osirel a cloveku zmizel z mobilu.
    Jmeno se dal uklada taky — kvuli starym ukolum a kvuli exportu. */
@@ -1324,9 +1331,11 @@ async function cyclePhoto(eid, phid) {
 /* ---------- e-mail notifikace přes Apps Script (volitelné) ---------- */
 function notifyMail(kind, pid, text) {
   if (!CFG.scriptUrl) return;
-  const p = proj(pid); if (!p || !p.investorEmail) return;
+  const p = proj(pid); if (!p) return;
+  const mail = kontaktStavby(pid).email || '';   // S4b: kontakt uz neni na stavbe
+  if (!mail) return;
   const tok = tokenPortalu(pid); // token bydli v admin-only /portaly (S2); posila jen vedeni, ma ho nactene
-  driveCall({ action: 'notify', to: p.investorEmail, kind, project: p.name, client: p.client, text: (text || '').slice(0, 500), portalUrl: tok ? location.origin + location.pathname + '?p=' + tok : '' }).catch(() => {});
+  driveCall({ action: 'notify', to: mail, kind, project: p.name, client: p.client, text: (text || '').slice(0, 500), portalUrl: tok ? location.origin + location.pathname + '?p=' + tok : '' }).catch(() => {});
 }
 
 /* ---------- portal akce (schválení vícepráce investorem) ---------- */
@@ -1806,8 +1815,9 @@ function projectForm(id) {
     <label>Název stavby *</label><input type="text" id="pf-name" value="${esc(p.name || '')}" placeholder="Novodvorská - Pecka">
     <label>Investor</label><input type="text" id="pf-client" value="${esc(p.client || '')}">
     <div class="frow">
-      <div><label>E-mail investora</label><input type="email" id="pf-cmail" value="${esc(p.investorEmail || '')}"></div>
-      <div><label>Telefon investora</label><input type="tel" id="pf-cphone" value="${esc(p.investorPhone || '')}" placeholder="602 285 581"></div>
+      ${/* S4b: kontakty klienta se ctou z admin-only /kontakty, ne ze stavby */''}
+      <div><label>E-mail investora</label><input type="email" id="pf-cmail" value="${esc(kontaktStavby(p.id || '').email || '')}"></div>
+      <div><label>Telefon investora</label><input type="tel" id="pf-cphone" value="${esc(kontaktStavby(p.id || '').tel || '')}" placeholder="602 285 581"></div>
     </div>
     <label>Adresa realizace</label>
     <div style="display:flex;gap:8px;align-items:stretch">
@@ -1976,7 +1986,6 @@ async function saveProject(id) {
   const prevGps = id ? ((proj(id) || {}).gps || null) : null;
   const data = {
     name, cn: $('#pf-cn').value.trim(), client: $('#pf-client').value.trim(),
-    investorEmail: $('#pf-cmail').value.trim(), investorPhone: $('#pf-cphone').value.trim(),
     address: $('#pf-addr').value.trim(), type: $('#pf-type').value.trim(),
     resp: $('#pf-resp').value.trim(), stav: $('#pf-stav').value,
     /* Faze se pri zalozeni nezadava — u stavby, ktera jeste nezacala, nema co
@@ -1992,8 +2001,23 @@ async function saveProject(id) {
     const prev = proj(id) || {};
     if ((prev.milestones || []).length) data.phase = msRecalc(prev.milestones, prev).phase;
   }
+  /* S4b: kontakt na klienta se cte z formulare DRIV nez se ulozi stavba —
+     zapis spusti posluchace a ten formular prekresli, takze by se hodnoty
+     ztratily. (Stejna past uz jednou sebrala sazby v karte uzivatele.) */
+  const kMail = ($('#pf-cmail') ? $('#pf-cmail').value : '').trim();
+  const kTel = ($('#pf-cphone') ? $('#pf-cphone').value : '').trim();
+
+  let pid = id;
   if (id) await db.collection('projects').doc(id).update(data);
-  else await db.collection('projects').add({ ...data, active: true, milestones: [], createdAt: FV() });
+  else { const ref = await db.collection('projects').add({ ...data, active: true, milestones: [], createdAt: FV() }); pid = ref.id; }
+
+  /* Kontakt na klienta NEPATRI na stavbu — /projects cte cela parta i externi
+     subdodavatele a databaze vydava vzdy cely dokument. Uklada se proto do
+     admin-only /kontakty; prazdny formular zaznam uklidi. */
+  if (pid) {
+    if (kMail || kTel) await db.collection('kontakty').doc(kontaktKlicStavby(pid)).set({ email: kMail, tel: kTel }).catch(() => {});
+    else await db.collection('kontakty').doc(kontaktKlicStavby(pid)).delete().catch(() => {});
+  }
   closeModal(); toast('Projekt uložen ✓');
 }
 
@@ -2011,7 +2035,8 @@ function pgProjDetail() {
         <h3>ℹ️ Základní informace</h3>
         <div class="kv"><span>Název</span><b>${esc(p.name)}</b></div>
         <div class="kv"><span>Zakázka</span><b>${esc(p.cn)}</b></div>
-        <div class="kv"><span>Investor</span><span>${esc(p.client)}${p.investorEmail ? ' · ' + esc(p.investorEmail) : ''}${p.investorPhone ? ' · <a href="tel:' + esc(p.investorPhone.replace(/\s/g, '')) + '">' + esc(p.investorPhone) + '</a>' : ''}</span></div>
+        ${(() => { const k = kontaktStavby(p.id); return `
+        <div class="kv"><span>Investor</span><span>${esc(p.client)}${k.email ? ' · ' + esc(k.email) : ''}${k.tel ? ' · <a href="tel:' + esc(String(k.tel).replace(/\s/g, '')) + '">' + esc(k.tel) + '</a>' : ''}</span></div>`; })()}
         <div class="kv"><span>Adresa</span><span>${esc(p.address)}</span></div>
         <div class="kv"><span>Typ</span><span>${esc(p.type || '—')}</span></div>
         <div class="kv"><span>Stav</span><span>${esc(p.stav)}${projPhase(p) ? ' · ' + esc(projPhase(p)) : ''} · ${projProgress(p) != null ? projProgress(p) + ' %' : 'harmonogram nezadán'}</span></div>
@@ -4490,6 +4515,38 @@ async function prevedTajnosti() {
   if (cisto) await db.collection('config').doc('app').set({ tajnostiPrevedeny: true }, { merge: true }).catch(() => {});
 }
 
+/* S4b — kontakty klienta ze stavby do admin-only /kontakty.
+   Vlastni priznak, protoze prevedTajnosti uz ma svuj nastaveny a znovu
+   by se nespustil. Stejny postup: nejdriv zapsat na nove misto, teprve pak
+   smazat stare pole; kdyz cokoli selze, priznak se nenastavi a priste se to
+   dozene. Pozor: stara data uz nekomu v telefonu byt mohou — timhle se
+   zavrou dvere do budoucna, minulost to nevrati. */
+async function prevedKontaktyInvestoru() {
+  const FVD = firebase.firestore.FieldValue;
+  try {
+    const cfg = await db.collection('config').doc('app').get();
+    if (cfg.exists && cfg.data().kontaktyKlientuPrevedeny) return;
+  } catch (e) { return; }              // bez spojeni se prevod nezkousi
+  let cisto = true;
+  const ps = await db.collection('projects').get().catch(() => null);
+  if (!ps) return;
+  for (const d of ps.docs) {
+    const v = d.data();
+    if (v.investorEmail === undefined && v.investorPhone === undefined) continue;
+    const smaz = { investorEmail: FVD.delete(), investorPhone: FVD.delete() };
+    const mail = (v.investorEmail || '').trim(), tel = (v.investorPhone || '').trim();
+    try {
+      if (mail || tel) {
+        const ref = db.collection('kontakty').doc(kontaktKlicStavby(d.id));
+        const ex = await ref.get();
+        if (!ex.exists) await ref.set({ email: mail, tel });
+      }
+      await d.ref.update(smaz);
+    } catch (e) { cisto = false; }
+  }
+  if (cisto) await db.collection('config').doc('app').set({ kontaktyKlientuPrevedeny: true }, { merge: true }).catch(() => {});
+}
+
 /* Jeden posluchac na kazdy klic viditelnosti; vysledky se skladaji. */
 function listenPoznamky(klice) {
   const casti = {};
@@ -5581,13 +5638,13 @@ async function seedData() {
   const pecka = await batchAdd('projects', {
     kod: '020', cn: 'CN20260055', client: 'Štěpán Pecka', name: 'Novodvorská - Pecka', address: 'Novodvorská 413/135, Praha 4',
     type: 'Kompletní rekonstrukce · 3+kk panelák, 70 m²', resp: 'Zdeno Balúch', stav: 'Realizace', phase: 'Kompletace a montáže zařízení', progress: 79, // = prumer milniku niz
-    active: true, gps: { lat: 50.0236914, lng: 14.4368684, tol: 100 }, handover: 'plán předání 24. 7. 2026', driveFolderId: '', investorEmail: '',
+    active: true, gps: { lat: 50.0236914, lng: 14.4368684, tol: 100 }, handover: 'plán předání 24. 7. 2026', driveFolderId: '',
     milestones: [{ t: 'Přípravné práce, demontáže', s: 'done', p: 100 }, { t: 'SDK konstrukce, elektro, ZTI, VZT', s: 'done', p: 100 }, { t: 'Obklady, dlažba, hydroizolace', s: 'done', p: 100 }, { t: 'Nivelace a pokládka vinylu', s: 'done', p: 100 }, { t: 'Malování', s: 'done', p: 100 }, { t: 'Kompletace a montáže zařízení', s: 'now', p: 50 }, { t: 'Úklid a předání', s: 'next', p: 0 }], createdAt: FV()
   });
   const saarova = await batchAdd('projects', {
     kod: '028', cn: 'CN20260060', client: 'Šárka Šaarová', name: 'V Předpolí - Šaarová', address: 'V Předpolí 1472/27, Praha 10',
     type: 'Komplet reko · činžovní dům', resp: 'Zdeno Balúch', stav: 'Realizace', phase: 'Elektro a ZTI — hrubé rozvody', progress: 30, // = prumer milniku niz
-    active: true, gps: { lat: 50.0712, lng: 14.4990, tol: 100 }, handover: 'dle harmonogramu', driveFolderId: '', investorEmail: '',
+    active: true, gps: { lat: 50.0712, lng: 14.4990, tol: 100 }, handover: 'dle harmonogramu', driveFolderId: '',
     milestones: [{ t: 'Přípravné práce, demontáže', s: 'done', p: 100 }, { t: 'Elektro a ZTI — hrubé rozvody', s: 'now', p: 50 }, { t: 'SDK konstrukce', s: 'next', p: 0 }, { t: 'Obklady, dlažba', s: 'next', p: 0 }, { t: 'Podlahy, malování, kompletace', s: 'next', p: 0 }], createdAt: FV()
   });
   const U = [
