@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '29. 8. 2026 i';
+const VERZE = '29. 8. 2026 j';
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -892,6 +892,19 @@ function scaleJpeg(img, maxPx, q) {
   c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
   return c.toDataURL('image/jpeg', q);
 }
+/* Zmensi hotovou data-URL fotku v prohlizeci. Most vraci rovnou 1600px
+   verzi (Google zmensovani na serveru odmita) — na portal ale staci
+   1100 px jako driv, at ma dokument ~220 kB a ne pres pul mega.
+   Kdyz se zmenseni nepovede, vrati se original — je pod limitem 1 MB,
+   takze fotku neni duvod zahazovat. */
+function zmensitDataUrl(dataUrl, maxPx, q) {
+  return new Promise(ok => {
+    const img = new Image();
+    img.onload = () => { try { ok(scaleJpeg(img, maxPx, q)); } catch (e) { ok(dataUrl); } };
+    img.onerror = () => ok(dataUrl);
+    img.src = dataUrl;
+  });
+}
 /* Strop poctu fotek na jeden zaznam: dokument ma limit 1 MB a kazdy nahled
    nese ~25-60 kB — bez stropu by se zaznam s 20+ fotkami tise neulozil,
    ale uzivatel by videl "ulozeno". Osm sedi na kalkulaci u fotonahledu. */
@@ -905,8 +918,9 @@ async function processPhotos(files, label) {
     try {
       const img = await fileToImage(f);
       const thumb = scaleJpeg(img, 360, 0.62);
-      /* stredni verze jde do databaze — parta si fotku prohledne primo
-         v aplikaci, bez Drive a bez prihlaseni ke Googlu */
+      /* stredni verze zustava jen v pameti — do databaze se uz NEUKLADA
+         (~220 kB na fotku by pri tisicich fotek vycerpalo 1GB limit
+         Firestoru). Prohlizeni si velkou verzi vyzvedne pres most z Drive. */
       const mid = scaleJpeg(img, 1100, 0.72);
       const full = scaleJpeg(img, 1600, 0.82);
       S.draftPhotos.push({ tmp: uid8(), thumb, mid, full, label: label || f.name.replace(/\.[^.]+$/, ''), status: 'pending', driveId: null });
@@ -922,13 +936,10 @@ async function zaraditFotky(p, entryId) {
   for (const ph of S.draftPhotos) {
     const id = uid8();
     out.push({ id, thumb: ph.thumb, label: ph.label, status: 'pending', driveId: null });
-    /* Stredni nahled do vlastni kolekce, ne do zaznamu: zaznam ma limit
-       1 MB a osm fotek by ho prestrelilo. Cte se az po tuknuti na fotku,
-       takze bezne listovani nic nestoji. Offline: Firestore si zapis
-       podrzi a odesle sam. */
-    if (ph.mid) db.collection('fotonahledy').doc(id).set({
-      data: ph.mid, pid: (p && p.id) || '', entryId, date: isoToday(), autorUid: S.authUser.uid, createdAt: FV()
-    }).catch(e => console.warn('fotonahled', e));
+    /* Stredni verze se do /fotonahledy UZ NEUKLADA: velka verze lezi na
+       Drive a most ji umi vydat (getPhoto), takze by tu jen zabirala
+       ~220 kB na fotku a tisice fotek by vycerpaly 1GB limit databaze.
+       Stare fotky svuj nahled v /fotonahledy maji dal — slouzi jako zaloha. */
     try {
       await frontaPridat({
         druh: 'foto', entryId, photoId: id,
@@ -1085,15 +1096,20 @@ async function mirrorEntry(e) {
      Proto se pripadna chyba hlasi a dorovnaPortaly() to pak dozene. */
   if (!tok) return;
   const feedRef = db.collection('portals').doc(tok).collection('feed').doc(e.id);
-  /* Velka fotka pro investora: stredni verze z /fotonahledy se kopiruje do
-     /portals/{token}/fotky/{id} — investor neni prihlaseny, takze na
-     /fotonahledy (jen role) ani na Drive (soukromy) nedosahne. KAZDA fotka
-     ma VLASTNI dokument (~200 kB, limit dokumentu je 1 MB). Co uz je
-     zkopirovane, se pozna z markeru fotoId v minulem feed dokumentu — NE
-     vypisem /fotky, ten by stahoval vsechny velke dokumenty najednou.
-     fotoId: id = velka verze na portalu je; '' = stredni verze neexistuje
-     (starsi fotka) a znovu se nezkousi; null = kopie se nepovedla,
-     dorovnejPortaly() ji pri pristim prihlaseni vedeni zkusi znovu. */
+  /* Velka fotka pro investora se kopiruje do /portals/{token}/fotky/{id} —
+     investor neni prihlaseny, takze na most (potrebuje klic) ani na Drive
+     (soukromy) nedosahne, a svoji verejnou kopii proto POTREBUJE. Zdroj:
+     nove fotky uz stredni verzi v /fotonahledy nemaji, takze se velka verze
+     bere z mostu (getPhoto z Drive — zrcadli vedeni, to je prihlasene a klic
+     ma) a v prohlizeci se zmensi na 1100 px jako driv; /fotonahledy zustava
+     jako zaloha pro stare fotky. KAZDA fotka ma VLASTNI dokument (~200 kB,
+     limit dokumentu je 1 MB). Co uz je zkopirovane, se pozna z markeru
+     fotoId v minulem feed dokumentu — NE vypisem /fotky, ten by stahoval
+     vsechny velke dokumenty najednou.
+     fotoId: id = velka verze na portalu je; '' = zadny zdroj neexistuje
+     a uz ani nevznikne (stara fotka bez nahledu i bez Drive) — znovu se
+     nezkousi; null = kopie se zatim nepovedla (napr. fotka jeste ceka ve
+     fronte na Drive), dorovnejPortaly() ji zkusi znovu. */
   const stary = await feedRef.get().catch(() => null);
   const uzMa = {};
   if (stary && stary.exists) for (const ph of (stary.data().photos || [])) {
@@ -1104,11 +1120,29 @@ async function mirrorEntry(e) {
     let fotoId = (ph.id && uzMa[ph.id] != null) ? uzMa[ph.id] : null;
     if (fotoId === null && ph.id) {
       try {
-        const d = await db.collection('fotonahledy').doc(ph.id).get();
-        if (d.exists && d.data().data) {
-          await db.collection('portals').doc(tok).collection('fotky').doc(ph.id).set({ data: d.data().data, entryId: e.id, date: e.date || '' });
+        let data = null;
+        /* (a) most: velka verze z Drive — jediny zdroj pro nove fotky */
+        const klic = S.tajne && S.tajne.mostKlic;
+        if (ph.driveId && klic && CFG.scriptUrl && S.online) {
+          try {
+            const j = await driveCall({ action: 'getPhoto', fileId: ph.driveId, sirka: 1100, klic });
+            if (j.ok && j.data) data = await zmensitDataUrl('data:' + (j.mime || 'image/jpeg') + ';base64,' + j.data, 1100, 0.72);
+            else console.warn('most getPhoto pro portal', j.error);
+          } catch (err2) { console.warn('most getPhoto pro portal', err2); }
+        }
+        /* (b) zaloha: stredni verze z /fotonahledy — stare fotky ji tam maji */
+        if (!data) {
+          const d = await db.collection('fotonahledy').doc(ph.id).get();
+          if (d.exists && d.data().data) data = d.data().data;
+        }
+        if (data) {
+          await db.collection('portals').doc(tok).collection('fotky').doc(ph.id).set({ data, entryId: e.id, date: e.date || '' });
           fotoId = ph.id;
-        } else fotoId = '';   // stara fotka bez stredni verze — investor uvidi aspon nahled
+        }
+        /* zadny zdroj: kdyz fotka NEMA driveId, mohla by ho jeste dostat
+           z fronty — fotoId zustava null a dorovnejPortaly to dozene.
+           '' (definitivne vzdat) se uz nastavovat nesmi, protoze by nove
+           fotce cekajici ve fronte navzdy uprel velkou verzi na portalu. */
       } catch (err) { console.warn('kopie velke fotky na portal', err); }  // fotoId zustava null → dorovna se
     }
     photos.push({ id: ph.id || '', thumb: ph.thumb, driveId: ph.driveId || null, label: ph.label || '', fotoId: ph.id ? fotoId : '' });
@@ -2134,19 +2168,46 @@ function openPhoto(driveId, label, el) {
     <div class="vbody" style="padding:0;align-items:center"><img src="${src}" style="width:100%;max-height:80vh"></div></div></div>`;
 }
 function closeDoc() { $('#viewer').innerHTML = ''; }
-/* Fotka se otevre hned z maleho nahledu a lepsi kvalita se doplni, jakmile
-   dorazi z databaze. Parta tak nepotrebuje Drive ani ucet Google — ten
-   zustava jen jako tlacitko pro plne rozliseni (vedeni). Stare fotky
-   stredni verzi nemaji; u nich zustane maly nahled a Drive. */
+/* Fotka se otevre hned z maleho nahledu a lepsi kvalita se doplni vzapeti.
+   Poradi zdroju: (a) most vyda velkou verzi z Drive (getPhoto) — nove fotky
+   uz stredni verzi v databazi nemaji; (b) /fotonahledy jako zaloha pro stare
+   fotky, ktere tam nahled jeste maji; (c) kdyz nic z toho, zustane maly
+   nahled a nic nespadne (typicky offline). Parta nepotrebuje ucet Google —
+   klic k mostu ma z databaze kazdy prihlaseny. */
 async function otevritFoto(photoId, driveId, label, el) {
   openPhoto(driveId, label, el);
-  if (!photoId) return;
+  const v = $('#viewer');
+  const img = v && v.querySelector('.vbody img');
+  if (!img || (!photoId && !driveId)) return;
+  /* kratky naznak nacitani pres nahledem — at clovek vidi, ze se neco deje */
+  const body = img.parentElement;
+  body.style.position = 'relative';
+  const hint = document.createElement('div');
+  hint.style.cssText = 'position:absolute;top:10px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.55);color:#fff;padding:4px 12px;border-radius:99px;font-size:12px;white-space:nowrap';
+  hint.innerHTML = '<span class="spin"></span> Načítám lepší kvalitu…';
+  body.appendChild(hint);
   try {
+    /* (a) most: velka verze primo z Drive. Vola se az PO tuknuti na fotku,
+       takze bezne listovani mrizkou most nezatezuje. */
+    const klic = S.tajne && S.tajne.mostKlic;
+    if (driveId && klic && CFG.scriptUrl && S.online) {
+      try {
+        const j = await driveCall({ action: 'getPhoto', fileId: driveId, sirka: 1600, klic });
+        if (j.ok && j.data) {
+          /* uzivatel mohl mezitim otevrit jinou fotku nebo prohlizec zavrit */
+          if (img.isConnected) img.src = 'data:' + (j.mime || 'image/jpeg') + ';base64,' + j.data;
+          return;   // uspech — /fotonahledy uz necist, at se nestahuje dvakrat
+        }
+        console.warn('most getPhoto', j.error);
+      } catch (e) { console.warn('most getPhoto', e); }
+    }
+    /* (b) zaloha: stredni verze z /fotonahledy — maji ji jen STARE fotky
+       (nove se tam uz neukladaji), a hodi se i kdyz most zrovna selze */
+    if (!photoId || !img.isConnected) return;
     const d = await db.collection('fotonahledy').doc(photoId).get();
-    if (!d.exists) return;
-    const img = $('#viewer') && $('#viewer').querySelector('.vbody img');
-    if (img) img.src = d.data().data;
-  } catch (e) { /* nahled nedorazil — zustava maly, to neni chyba */ }
+    if (d.exists && d.data().data && img.isConnected) img.src = d.data().data;
+  } catch (e) { /* (c) nic nedorazilo — zustava maly nahled, to neni chyba */ }
+  finally { hint.remove(); }
 }
 /* Totez pro portal investora: velka verze se cte z verejne kopie
    /portals/{token}/fotky (na /fotonahledy ani na Drive neprihlaseny
@@ -4689,10 +4750,12 @@ async function smazatMujUkol(id) {
   catch (e) { toast('Nepovedlo se zrušit: ' + (e.code || e.message)); }
 }
 
-/* Fotky k ukolu: maly nahled primo v ukolu (at je videt, o co jde),
-   stredni verze ve fotonahledy pro prohlizeni. Na Drive nejdou — ukol
-   je provozni vec, ne dokumentace stavby. Nejvyse 6, at se zaznam
-   ukolu vejde do limitu databaze. */
+/* Fotky k ukolu: maly nahled primo v ukolu (at je videt, o co jde) a
+   stredni verze v /fotonahledy, aby sla fotka po tuknuti otevrit ostre.
+   U zapisu do deniku se stredni verze zrusila (velka lezi na Drive a
+   vyda ji most), ale fotky ukolu na Drive NEJDOU — bez nahledu by po
+   nich zbyla jen rozmazana dlazdice. Misto to neohrozi: po vyrizeni
+   ukolu je uklidFotekUkolu smaze. Nejvyse 6 fotek na ukol. */
 async function ukolFotoPridat(files) {
   for (const f of files) {
     if ((S.taskFoto || []).length >= 6) { toast('Nejvýš 6 fotek k úkolu'); break; }
@@ -4714,9 +4777,15 @@ async function workerAddTask() {
   if (!respId) { toast('Vyber, komu úkol patří'); return; }
   try {
     const fotky = (S.taskFoto || []).map(f => ({ id: f.id, thumb: f.thumb }));
+    /* VYJIMKA: fotky UKOLU si stredni verzi v /fotonahledy nechavaji.
+       U zapisu do deniku se zrusila, protoze velka verze lezi na Drive
+       a most ji vyda. Fotky ukolu ale na Drive VUBEC nejdou — bez nahledu
+       v databazi by po nich zbyla jen rozmazana dlazdice 360 px.
+       Misto to neohrozi: po vyrizeni ukolu je uklidFotekUkolu smaze. */
     for (const f of (S.taskFoto || [])) {
-      db.collection('fotonahledy').doc(f.id).set({ data: f.mid, pid: $('#wtk-p').value, entryId: '', date: isoToday(), autorUid: S.authUser.uid, createdAt: FV() })
-        .catch(e => console.warn('fotonahled ukolu', e));
+      if (f.mid) db.collection('fotonahledy').doc(f.id)
+        .set({ data: f.mid, pid: $('#wtk-p').value, entryId: '', date: isoToday(), autorUid: S.authUser.uid, createdAt: FV() })
+        .catch(() => {});
     }
     await db.collection('tasks').add({
       title, zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}),
