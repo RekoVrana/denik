@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '30. 8. 2026 y';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '30. 8. 2026 z';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -5277,7 +5277,7 @@ function osobaHodiny(u) {
     radky.push(`<tr style="${vikend ? 'background:var(--int-soft)' : ''}${v ? ';opacity:.72' : ''}">
       <td style="text-align:center">${d && d.h
         ? `<input type="checkbox" class="vypl" ${v ? 'checked' : ''} title="${v ? 'Označil(a) ' + esc(v.kdo || '') + ' ' + fmtISO(v.kdy) : 'Označit den jako vyplacený'}" onclick="vyplatuPrepni('${u.id}','${m}','${den}')">` : ''}</td>
-      <td style="white-space:nowrap"><b>${i}.</b></td>
+      <td style="white-space:nowrap"><b>${i}.</b><span class="denkratky"> ${DAYS[dt.getDay()].slice(0, 2)}</span></td>
       <td class="muted">${DAYS[dt.getDay()]}</td>
       <td>${d && d.h ? `<b>${fmtH(d.h)}</b>${d.pauzaMin ? `<br><span class="muted" style="font-size:11px">− pauza ${d.pauzaMin} min</span>` : ''}${d.nedokonceno ? '<br><span class="badge b-red">neúplný den</span>' : ''}` : '<span class="muted">—</span>'}</td>
       <td>${!d || !d.h ? ''
