@@ -205,6 +205,18 @@
   /* Zaskrtavatko vyplaty: hlavni akce obrazovky, musi se do nej trefit prst */
   input[type=checkbox].vypl{width:22px;height:22px;accent-color:var(--ok);cursor:pointer}
   @media(max-width:700px){ input[type=checkbox].vypl{width:26px;height:26px} }
+  /* Posuvnik postupu etapy. Zamerne vysoky terc (28 px palec) — nastavuje
+     se prstem na stavbe, ne mysi u stolu. */
+  .pctrow{display:flex;align-items:center;gap:14px}
+  .pctslider{flex:1;-webkit-appearance:none;appearance:none;height:8px;border-radius:99px;
+             background:linear-gradient(to right,var(--ok) 0%,var(--ok) var(--f,0%),var(--int-soft) var(--f,0%),var(--int-soft) 100%);
+             outline:none;margin:6px 0}
+  .pctslider::-webkit-slider-thumb{-webkit-appearance:none;width:28px;height:28px;border-radius:50%;
+             background:#fff;border:3px solid var(--ok);cursor:pointer;box-shadow:0 1px 4px rgba(16,32,48,.25)}
+  .pctslider::-moz-range-thumb{width:28px;height:28px;border-radius:50%;background:#fff;
+             border:3px solid var(--ok);cursor:pointer}
+  .pctcislo{font-size:19px;font-weight:800;color:var(--ok);min-width:62px;text-align:right;
+            font-variant-numeric:tabular-nums}
   .chipselect{display:flex;gap:6px;flex-wrap:wrap}
   .chipselect button{border:1px solid var(--line);background:#fff;border-radius:99px;padding:7px 14px;font-size:12.5px;cursor:pointer;font-weight:600}
   .chipselect button.active{background:var(--navy);color:#fff;border-color:var(--navy)}
@@ -417,9 +429,9 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js" integrity="sha384-ZaR6mWzmJtrRibZ1Vm7SoHFr8OXjyAuGAXalGDKqbxFT18oi/z+oZLIRFkpeNor1" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" integrity="sha384-I1LYojsZ5RM1cOda44Z2h42Qa6YfsQ1XkXxREnhp4ueYBR/4d1pG1K+NZM537Vsj" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" integrity="sha384-Ke0FJhH7LyRqDxZ0wt+/OXV38yfQVu7g9VPEEGjYmB4RVOY/ta04uecRhsMwT7V3" crossorigin="anonymous"></script>
-<script src="vypocty.js?v=20260830aa"></script>
-<script src="navod.js?v=20260830aa"></script>
-<script src="config.js?v=20260830aa"></script>
-<script src="app.js?v=20260830aa"></script>
+<script src="vypocty.js?v=20260830ab"></script>
+<script src="navod.js?v=20260830ab"></script>
+<script src="config.js?v=20260830ab"></script>
+<script src="app.js?v=20260830ab"></script>
 </body>
 </html>

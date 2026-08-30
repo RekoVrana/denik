@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '30. 8. 2026 aa';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '30. 8. 2026 ab';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -20,6 +20,11 @@ const esc = t => String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g,
    na ' a uzavre retezec: jmeno fotky jako x');alert(1);// pak spusti kod
    u vedeni i u investora na portalu. Tady se apostrof zpetlomitkuje (a NECHA
    jako '), navic se escapuji jen &"<> pro bezpecnost atributu. */
+/* Hledani bez ohledu na diakritiku a velikost pismen: nikdo nepise
+   "Postolka" s hackem a "Valecko" s carkou, kdyz neco rychle hleda. */
+function bezDiakritiky(t) {
+  return String(t == null ? '' : t).normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
+}
 function jsAttr(t) {
   return String(t == null ? '' : t)
     .replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r?\n/g, '\\n')
@@ -2985,7 +2990,6 @@ function etapaPanel(pid, i) {
 
   modal(`<h3>${nova ? '➕ Nová etapa' : '📅 Etapa'} — ${esc(p.name || '')}</h3>
     <input type="hidden" id="et-puvodni" value="${esc(nova ? '' : (m.t || ''))}">
-    <input type="hidden" id="et-pct" value="${pct}">
     <label>Název etapy *</label>
     <input type="text" id="et-t" value="${esc(m.t || '')}" placeholder="Omítky a štuky" maxlength="80">
     <div class="frow">
@@ -2993,14 +2997,19 @@ function etapaPanel(pid, i) {
       <div><label>Do</label><input type="date" id="et-do" value="${esc(doVych)}"></div>
     </div>
     <label>Hotovo</label>
-    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap" id="et-pctbtn">
-      ${[0, 25, 50, 75, 100].map(v => `<button type="button" class="btn ${v === pct ? 'amber' : 'ghost'} sm"
-        style="min-width:52px" data-v="${v}" onclick="etapaPct(${v})">${v} %</button>`).join('')}
+    <div class="pctrow">
+      <input type="range" id="et-pct" class="pctslider" min="0" max="100" step="1" value="${pct}"
+             oninput="etapaPct(this.value)">
+      <b id="et-pctcis" class="pctcislo">${pct} %</b>
     </div>
-    <label>Kdo na tom bude</label>
+    <label>Co etapa obnáší <span class="muted" style="text-transform:none;font-weight:400">— každý řádek je jedna odrážka</span></label>
+    <textarea id="et-popis" placeholder="stržení obkladů v koupelně&#10;odvoz suti do kontejneru&#10;zakrytí oken fólií" style="min-height:76px">${esc(m.popis || '')}</textarea>
+    <label>Kdo na tom bude <span class="muted" id="et-pocet" style="text-transform:none;font-weight:400">— vybráno ${vybrani.length}</span></label>
+    <input type="text" id="et-hledat" placeholder="🔍 Hledat člověka nebo firmu…" autocomplete="off"
+           oninput="etapaHledejLidi(this.value)" style="margin-bottom:8px">
     <div class="chipselect" id="et-lide">
       ${lide.map(u => `<button type="button" class="${vybrani.indexOf(u.id) >= 0 ? 'active' : ''}"
-        onclick="this.classList.toggle('active')" data-id="${u.id}">${esc(fullName(u))}</button>`).join('')
+        onclick="this.classList.toggle('active');etapaPocetLidi()" data-id="${u.id}">${esc(fullName(u))}</button>`).join('')
         || '<span class="muted">Žádní lidé v partě ani subdodavatelé.</span>'}
     </div>
     <div class="note">Vyber i víc lidí — omítky bývají celá parta. Kdo je vybraný, uvidí etapu
@@ -3014,20 +3023,34 @@ function etapaPanel(pid, i) {
       <span class="sp" style="margin-left:auto"></span>
       <button class="btn dark sm" onclick="closeModal();otevriEtapu('${pid}')">🏗 Otevřít stavbu</button>
     </div>`);
+  etapaPct(pct);            /* obarvi vyplnenou cast posuvniku hned po otevreni */
 }
-/* Postup se v okenku drzi ve skrytem policku — az Ulozit ho zapise spolu
-   se zbytkem, aby se do databaze slo jednou, ne trikrat. */
-function etapaPct(v) {
-  const h = $('#et-pct'); if (h) h.value = v;
-  document.querySelectorAll('#et-pctbtn button').forEach(b => {
-    const on = Number(b.dataset.v) === v;
-    b.className = 'btn ' + (on ? 'amber' : 'ghost') + ' sm';
+/* Postup drzi primo posuvnik — az Ulozit ho zapise spolu se zbytkem,
+   aby se do databaze slo jednou, ne trikrat. Tahle funkce jen prekresluje
+   cislo vedle nej, at clovek pri tahani vidi, kde je. */
+/* Hledani v seznamu lidi. Filtruje se primo v DOM, ne prekreslenim —
+   prekresleni by zahodilo uz naklikany vyber. Kdo je vybrany, zustava
+   videt i kdyz hledanemu textu neodpovida, at clovek neztrati prehled. */
+function etapaHledejLidi(q) {
+  const h = bezDiakritiky(q);
+  document.querySelectorAll('#et-lide button').forEach(b => {
+    const sedi = !h || bezDiakritiky(b.textContent).indexOf(h) >= 0;
+    b.style.display = (sedi || b.classList.contains('active')) ? '' : 'none';
   });
+}
+function etapaPocetLidi() {
+  const n = document.querySelectorAll('#et-lide button.active').length;
+  const el = $('#et-pocet'); if (el) el.textContent = '— vybráno ' + n;
+}
+function etapaPct(v) {
+  const c = $('#et-pctcis'); if (c) c.textContent = Math.round(v) + ' %';
+  const sl = $('#et-pct'); if (sl) sl.style.setProperty('--f', Math.round(v) + '%');
 }
 async function etapaUloz(pid, i) {
   const t = (($('#et-t') || {}).value || '').trim();
   const od = ($('#et-od') || {}).value || '', doo = ($('#et-do') || {}).value || '';
   const pct = Math.min(100, Math.max(0, parseInt(($('#et-pct') || {}).value, 10) || 0));
+  const popis = (($('#et-popis') || {}).value || '').trim();
   const kdo = [...document.querySelectorAll('#et-lide button.active')].map(b => b.dataset.id);
   if (!t) { toast('Napiš název etapy.'); return; }
   if (!od || !doo) { toast('Vyplň obě data.'); return; }
@@ -3035,7 +3058,7 @@ async function etapaUloz(pid, i) {
   const p = proj(pid); if (!p) return;
   const ms = (p.milestones || []).map(x => ({ ...x }));
   if (i < 0) {
-    ms.push({ t, p: pct, s: pct === 100 ? 'done' : pct > 0 ? 'now' : 'next', od, do: doo, kdo });
+    ms.push({ t, popis, p: pct, s: pct === 100 ? 'done' : pct > 0 ? 'now' : 'next', od, do: doo, kdo });
   } else {
     if (!ms[i]) { closeModal(); toast('Etapa už neexistuje — někdo ji mezitím smazal.'); render(); return; }
     /* Index je z okamziku otevreni okenka. Kdyz mezitim nekdo etapu smazal
@@ -3047,7 +3070,7 @@ async function etapaUloz(pid, i) {
       await oznam('Etapy se mezitím změnily (nejspíš je upravoval někdo další).\n\nNic jsem neuložil — otevři etapu znovu.');
       render(); return;
     }
-    ms[i].t = t; ms[i].od = od; ms[i].do = doo; ms[i].kdo = kdo;
+    ms[i].t = t; ms[i].popis = popis; ms[i].od = od; ms[i].do = doo; ms[i].kdo = kdo;
     ms[i].p = pct; ms[i].s = pct === 100 ? 'done' : pct > 0 ? 'now' : 'next';
   }
   await ulozMilniky(pid, ms).then(() => { closeModal(); toast(i < 0 ? 'Etapa přidána ✓' : 'Uloženo ✓'); })
@@ -3063,54 +3086,6 @@ async function etapaSmaz(pid, i) {
     .catch(e => toast('Nejde smazat: ' + (e.code || e.message)));
 }
 
-/* ---- plánovací okénko u etapy ---- */
-function mileTerminForm(pid, i) {
-  const p = proj(pid); const m = ((p || {}).milestones || [])[i]; if (!m) return;
-  /* Nabizi se parta i subdodavatele — obojí na stavbe fyzicky je. Vedeni
-     a investori ne. Neaktivni clovek se nabidne jen tehdy, kdyz uz na
-     etape je, at ho z ni jde odebrat. */
-  const vybrani = etapaLide(m);
-  const lide = S.users.filter(u => {
-    const ty = u.typ || {};
-    if (!ty.teren && !ty.sub) return false;
-    return u.active !== false || vybrani.indexOf(u.id) >= 0;
-  }).sort((a, b) => fullName(a).localeCompare(fullName(b), 'cs'));
-  modal(`<h3>📅 Naplánovat etapu „${esc(m.t || '')}"</h3>
-    <input type="hidden" id="et-nazev" value="${esc(m.t || '')}">
-    <div class="frow">
-      <div><label>Od</label><input type="date" id="et-od" value="${esc(m.od || isoToday())}"></div>
-      <div><label>Do</label><input type="date" id="et-do" value="${esc(m.do || shiftISO(isoToday(), 6))}"></div>
-    </div>
-    <label>Kdo na tom bude</label>
-    <div class="chipselect" id="et-lide">
-      ${lide.map(u => `<button type="button" class="${vybrani.indexOf(u.id) >= 0 ? 'active' : ''}"
-        onclick="this.classList.toggle('active')" data-id="${u.id}">${esc(fullName(u))}</button>`).join('')
-        || '<span class="muted">Žádní lidé v partě ani subdodavatelé.</span>'}
-    </div>
-    <div class="note">Vyber i víc lidí — omítky bývají celá parta. Kdo je vybraný, uvidí tuhle etapu ve svém řádku harmonogramu a aplikace hlídá, ať není ve stejný termín na dvou stavbách.</div>
-    <div class="aprv"><button class="btn amber" onclick="ulozMileTermin('${pid}',${i})">💾 Uložit</button>
-      ${etapaNaplanovana(m) ? `<button class="btn ghost" onclick="zrusMileTermin('${pid}',${i})">✕ Zrušit naplánování</button>` : ''}
-      <button class="btn ghost" onclick="closeModal()">Zavřít</button></div>`);
-}
-async function ulozMileTermin(pid, i) {
-  const od = ($('#et-od') || {}).value || '', doo = ($('#et-do') || {}).value || '';
-  if (!od || !doo) { toast('Vyplň obě data.'); return; }
-  if (od > doo) { toast('„Do" nesmí být dřív než „od".'); return; }
-  const kdo = [...document.querySelectorAll('#et-lide button.active')].map(b => b.dataset.id);
-  const p = proj(pid); const ms = (p.milestones || []).map(x => ({ ...x }));
-  if (!ms[i]) return;
-  /* Index je z okamziku otevreni okenka. Kdyz mezitim jiny clovek etapu
-     smazal nebo pridal, ukazuje uz jinam — termin by se ulozil cizi etape. */
-  const ocekavany = ($('#et-nazev') || {}).value || '';
-  if (ocekavany && ms[i].t !== ocekavany) {
-    closeModal();
-    await oznam('Etapy se mezitím změnily (nejspíš je upravoval někdo další).\n\nNic jsem neuložil — otevři plánování znovu.');
-    render(); return;
-  }
-  ms[i].od = od; ms[i].do = doo; ms[i].kdo = kdo;
-  await ulozMilniky(pid, ms).then(() => { closeModal(); toast('Naplánováno ✓'); })
-    .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
-}
 async function zrusMileTermin(pid, i) {
   const p = proj(pid); const ms = (p.milestones || []).map(x => ({ ...x }));
   if (!ms[i]) return;
@@ -3123,12 +3098,12 @@ async function zrusMileTermin(pid, i) {
 /* Radek pod milnikem v detailu projektu — bud termin s lidmi, nebo vyzva. */
 function mileTerminRadek(p, m, i) {
   if (!etapaNaplanovana(m)) {
-    return `<span class="lnk" style="font-size:11.5px" onclick="mileTerminForm('${p.id}',${i})">📅 naplánovat</span>`;
+    return `<span class="lnk" style="font-size:11.5px" onclick="etapaPanel('${p.id}',${i})">📅 naplánovat</span>`;
   }
   const jmena = etapaLide(m).map(id => fullName(userById(id) || {})).filter(s => s.trim());
   const skluz = etapaStav(m) === 'late';
   return `<span class="lnk" style="font-size:11.5px${skluz ? ';color:var(--red);font-weight:700' : ''}"
-    onclick="mileTerminForm('${p.id}',${i})" title="Upravit termín a lidi">📅 ${fmtISO(m.od)} – ${fmtISO(m.do)}${skluz ? ' ⚠ skluz' : ''}</span>
+    onclick="etapaPanel('${p.id}',${i})" title="Upravit etapu">📅 ${fmtISO(m.od)} – ${fmtISO(m.do)}${skluz ? ' ⚠ skluz' : ''}</span>
     ${jmena.length ? `<span class="muted" style="font-size:11.5px"> · ${esc(jmena.join(', '))}</span>`
       : '<span class="muted" style="font-size:11.5px"> · nikdo nepřiřazen</span>'}`;
 }
@@ -3194,9 +3169,13 @@ function harmoPruhHtml(e, tridaNavic, popis) {
   /* Uzky pruh popisek stejne neuveze a orezane slovo mate vic, nez pomuze. */
   const text = g.width < 54 ? '' : esc(popis);
   const jmena = etapaLide(e).map(id => fullName(userById(id) || {}).trim()).filter(Boolean).join(', ');
+  /* Prvni tri odrazky popisu do bubliny — zbytek je v okenku etapy. */
+  const body = String(e.popis || '').split(/\n+/).map(x => x.trim()).filter(Boolean);
+  const bodyText = body.length ? '&#10;' + body.slice(0, 3).map(x => '· ' + esc(x)).join('&#10;')
+    + (body.length > 3 ? '&#10;· … a další ' + (body.length - 3) : '') : '';
   return `<div class="hbar ${tr} ${tridaNavic || ''}"
       style="left:${g.left}px;width:${g.width}px;top:${5 + (e.patro || 0) * HARMO_PATRO}px;height:${HARMO_PATRO - 5}px"
-      title="${esc(e.projekt ? e.projekt + ' — ' : '')}${esc(e.t || '')}&#10;${fmtISO(e.od)} – ${fmtISO(e.do)} · hotovo ${pct} %${stav === 'late' ? '&#10;⚠ SKLUZ — mělo skončit a hotové to není' : ''}${jmena ? '&#10;' + esc(jmena) : ''}"
+      title="${esc(e.projekt ? e.projekt + ' — ' : '')}${esc(e.t || '')}&#10;${fmtISO(e.od)} – ${fmtISO(e.do)} · hotovo ${pct} %${stav === 'late' ? '&#10;⚠ SKLUZ — mělo skončit a hotové to není' : ''}${jmena ? '&#10;' + esc(jmena) : ''}${bodyText}"
       onclick="etapaPanel('${e.pid}',${e.i})">
       ${pct > 0 && pct < 100 ? `<div class="hfill" style="width:${pct}%"></div>` : ''}
       <span>${text}</span></div>`;
