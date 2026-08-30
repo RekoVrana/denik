@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '30. 8. 2026 z';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '30. 8. 2026 aa';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -2956,6 +2956,113 @@ function kolizeCloveka(udi) {
   return kolidujici;
 }
 
+/* ---- okénko etapy: PLNÉ NASTAVENÍ přímo z harmonogramu ----
+   Doted tuknuti na cihlicku odskocilo do detailu stavby a clovek musel
+   hledat, ktery milnik to vlastne byl. Harmonogram byl jen obrazek.
+   Ted se otevre tohle okenko a da se v nem etapa cela nastavit: nazev,
+   termin, postup i lide — jednim zapisem, bez odskakovani.
+   i === -1 znamena NOVOU etapu (prida se na konec seznamu stavby). */
+function etapaPanel(pid, i) {
+  const p = proj(pid); if (!p) return;
+  const nova = i < 0;
+  const m = nova ? { t: '', p: 0 } : ((p.milestones || [])[i] || null);
+  if (!m) return;
+  const vybrani = etapaLide(m);
+  /* Nabizi se parta i subdodavatele — obojí na stavbe fyzicky je. Vedeni
+     a investori ne. Neaktivni clovek se nabidne jen tehdy, kdyz uz na
+     etape je, at ho z ni jde odebrat. */
+  const lide = S.users.filter(u => {
+    const ty = u.typ || {};
+    if (!ty.teren && !ty.sub) return false;
+    return u.active !== false || vybrani.indexOf(u.id) >= 0;
+  }).sort((a, b) => fullName(a).localeCompare(fullName(b), 'cs'));
+  const pct = nova ? 0 : milePct(m);
+  /* Novou etapu zaciname tam, kde predchozi skoncila — navazuje to na sebe
+     a je to devet z deseti pripadu. */
+  const posl = (p.milestones || []).filter(etapaNaplanovana).sort((a, b) => a.do < b.do ? -1 : 1).slice(-1)[0];
+  const odVych = m.od || (posl ? shiftISO(posl.do, 1) : isoToday());
+  const doVych = m.do || shiftISO(odVych, 4);
+
+  modal(`<h3>${nova ? '➕ Nová etapa' : '📅 Etapa'} — ${esc(p.name || '')}</h3>
+    <input type="hidden" id="et-puvodni" value="${esc(nova ? '' : (m.t || ''))}">
+    <input type="hidden" id="et-pct" value="${pct}">
+    <label>Název etapy *</label>
+    <input type="text" id="et-t" value="${esc(m.t || '')}" placeholder="Omítky a štuky" maxlength="80">
+    <div class="frow">
+      <div><label>Od</label><input type="date" id="et-od" value="${esc(odVych)}"></div>
+      <div><label>Do</label><input type="date" id="et-do" value="${esc(doVych)}"></div>
+    </div>
+    <label>Hotovo</label>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap" id="et-pctbtn">
+      ${[0, 25, 50, 75, 100].map(v => `<button type="button" class="btn ${v === pct ? 'amber' : 'ghost'} sm"
+        style="min-width:52px" data-v="${v}" onclick="etapaPct(${v})">${v} %</button>`).join('')}
+    </div>
+    <label>Kdo na tom bude</label>
+    <div class="chipselect" id="et-lide">
+      ${lide.map(u => `<button type="button" class="${vybrani.indexOf(u.id) >= 0 ? 'active' : ''}"
+        onclick="this.classList.toggle('active')" data-id="${u.id}">${esc(fullName(u))}</button>`).join('')
+        || '<span class="muted">Žádní lidé v partě ani subdodavatelé.</span>'}
+    </div>
+    <div class="note">Vyber i víc lidí — omítky bývají celá parta. Kdo je vybraný, uvidí etapu
+      ve svém řádku a aplikace hlídá, ať není ve stejný termín na dvou stavbách.
+      Název i postup vidí investor na portálu.</div>
+    <div class="aprv">
+      <button class="btn amber" onclick="etapaUloz('${pid}',${i})">💾 Uložit</button>
+      ${!nova && etapaNaplanovana(m) ? `<button class="btn ghost" onclick="zrusMileTermin('${pid}',${i})">✕ Zrušit termín</button>` : ''}
+      ${!nova ? `<button class="btn ghost" onclick="etapaSmaz('${pid}',${i})">🗑 Smazat etapu</button>` : ''}
+      <button class="btn ghost" onclick="closeModal()">Zavřít</button>
+      <span class="sp" style="margin-left:auto"></span>
+      <button class="btn dark sm" onclick="closeModal();otevriEtapu('${pid}')">🏗 Otevřít stavbu</button>
+    </div>`);
+}
+/* Postup se v okenku drzi ve skrytem policku — az Ulozit ho zapise spolu
+   se zbytkem, aby se do databaze slo jednou, ne trikrat. */
+function etapaPct(v) {
+  const h = $('#et-pct'); if (h) h.value = v;
+  document.querySelectorAll('#et-pctbtn button').forEach(b => {
+    const on = Number(b.dataset.v) === v;
+    b.className = 'btn ' + (on ? 'amber' : 'ghost') + ' sm';
+  });
+}
+async function etapaUloz(pid, i) {
+  const t = (($('#et-t') || {}).value || '').trim();
+  const od = ($('#et-od') || {}).value || '', doo = ($('#et-do') || {}).value || '';
+  const pct = Math.min(100, Math.max(0, parseInt(($('#et-pct') || {}).value, 10) || 0));
+  const kdo = [...document.querySelectorAll('#et-lide button.active')].map(b => b.dataset.id);
+  if (!t) { toast('Napiš název etapy.'); return; }
+  if (!od || !doo) { toast('Vyplň obě data.'); return; }
+  if (od > doo) { toast('„Do" nesmí být dřív než „od".'); return; }
+  const p = proj(pid); if (!p) return;
+  const ms = (p.milestones || []).map(x => ({ ...x }));
+  if (i < 0) {
+    ms.push({ t, p: pct, s: pct === 100 ? 'done' : pct > 0 ? 'now' : 'next', od, do: doo, kdo });
+  } else {
+    if (!ms[i]) { closeModal(); toast('Etapa už neexistuje — někdo ji mezitím smazal.'); render(); return; }
+    /* Index je z okamziku otevreni okenka. Kdyz mezitim nekdo etapu smazal
+       nebo pridal, ukazuje uz jinam — nastaveni by se ulozilo cizi etape.
+       Proto se porovnava PUVODNI nazev, ne ten prave prepsany. */
+    const puv = ($('#et-puvodni') || {}).value || '';
+    if (puv && ms[i].t !== puv) {
+      closeModal();
+      await oznam('Etapy se mezitím změnily (nejspíš je upravoval někdo další).\n\nNic jsem neuložil — otevři etapu znovu.');
+      render(); return;
+    }
+    ms[i].t = t; ms[i].od = od; ms[i].do = doo; ms[i].kdo = kdo;
+    ms[i].p = pct; ms[i].s = pct === 100 ? 'done' : pct > 0 ? 'now' : 'next';
+  }
+  await ulozMilniky(pid, ms).then(() => { closeModal(); toast(i < 0 ? 'Etapa přidána ✓' : 'Uloženo ✓'); })
+    .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
+}
+async function etapaSmaz(pid, i) {
+  const p = proj(pid); const ms = (p.milestones || []).map(x => ({ ...x }));
+  if (!ms[i]) return;
+  if (!await potvrd('Smazat etapu „' + (ms[i].t || '') + '"?\n\n'
+    + 'Zmizí i investorovi na portálu a přepočítá se průběh stavby. Vrátit to nejde.', 'Ano, smazat')) return;
+  ms.splice(i, 1);
+  await ulozMilniky(pid, ms).then(() => { closeModal(); toast('Etapa smazána'); })
+    .catch(e => toast('Nejde smazat: ' + (e.code || e.message)));
+}
+
 /* ---- plánovací okénko u etapy ---- */
 function mileTerminForm(pid, i) {
   const p = proj(pid); const m = ((p || {}).milestones || [])[i]; if (!m) return;
@@ -3049,10 +3156,12 @@ function pgHarmonogram() {
         <span>🏗</span><b>${esc(e.projekt)}</b>
         <span class="muted">${esc(e.t || '')} — mělo skončit ${fmtISO(e.do)}, je na ${milePct(e)} %</span>
       </div>`).join('')}</div>` : ''}
-    ${!etapy.length ? `<div class="card"><div class="empty">📅 Zatím není naplánovaná žádná etapa.
-      <br><span class="muted">Otevři stavbu → záložka Základní informace → u milníku ťukni <b>📅 naplánovat</b> a zadej od, do a kdo na tom bude.</span></div></div>`
+    ${!etapy.length && t === 'lide' ? `<div class="card"><div class="empty">📅 Zatím není naplánovaná žádná etapa.
+      <br><span class="muted">Přepni na <b>🏗 Podle staveb</b> a u stavby ťukni <b>➕</b>.</span></div></div>`
       : t === 'stavby' ? harmoPodleStaveb() : harmoPodleLidi()}
-    <div class="note">Osa je po dnech a je širší než obrazovka — <b>posouvej ji do stran</b>, tlačítka nahoře skáčou po měsících.
+    <div class="note"><b>Ťukni na etapu</b> a rovnou ji nastavíš — název, termín, hotovo i lidi.
+      <b>➕</b> u stavby přidá novou etapu. Osa je po dnech a je širší než obrazovka —
+      <b>posouvej ji do stran</b>, tlačítka nahoře skáčou po měsících.
       Etapa bez termínu se nekreslí. Barva pruhu se počítá sama: <b>zelená</b> hotovo, <b>oranžová</b> probíhá,
       <b>šedá</b> čeká, <b>červená</b> mělo skončit a hotové to není.</div>
   </main>`;
@@ -3088,7 +3197,7 @@ function harmoPruhHtml(e, tridaNavic, popis) {
   return `<div class="hbar ${tr} ${tridaNavic || ''}"
       style="left:${g.left}px;width:${g.width}px;top:${5 + (e.patro || 0) * HARMO_PATRO}px;height:${HARMO_PATRO - 5}px"
       title="${esc(e.projekt ? e.projekt + ' — ' : '')}${esc(e.t || '')}&#10;${fmtISO(e.od)} – ${fmtISO(e.do)} · hotovo ${pct} %${stav === 'late' ? '&#10;⚠ SKLUZ — mělo skončit a hotové to není' : ''}${jmena ? '&#10;' + esc(jmena) : ''}"
-      onclick="otevriEtapu('${e.pid}')">
+      onclick="etapaPanel('${e.pid}',${e.i})">
       ${pct > 0 && pct < 100 ? `<div class="hfill" style="width:${pct}%"></div>` : ''}
       <span>${text}</span></div>`;
 }
@@ -3132,13 +3241,22 @@ function harmoObal(hlavicka, radky, legenda) {
 }
 
 function harmoPodleStaveb() {
-  const stavby = S.projects.filter(p => (p.milestones || []).some(etapaNaplanovana));
+  /* Ukazuji se i stavby BEZ naplanovanych etap — jinak by se v harmonogramu
+     nedalo zacit planovat u stavby, ktera jeste zadnou etapu nema, a clovek
+     by musel odskocit do detailu projektu. Prazdny radek je vyzva. */
+  const stavby = S.projects.filter(p => p.active || (p.milestones || []).some(etapaNaplanovana));
   const radky = stavby.map(p => {
     const etapy = (p.milestones || []).map((m, i) => ({ ...m, i, pid: p.id, projekt: p.name || '' }))
       .filter(etapaNaplanovana)
       .map(e => ({ ...e, __popis: e.t + (milePct(e) === 100 ? ' ✓' : milePct(e) ? ' ' + milePct(e) + ' %' : '') }));
-    const lab = `<b class="lnk" style="color:inherit" onclick="otevriEtapu('${p.id}')">${esc(p.name || '')}</b>
-      <small>${esc(p.cn || '')}${projProgress(p) != null ? ' · ' + projProgress(p) + ' %' : ''}</small>`;
+    const lab = `<div style="display:flex;align-items:flex-start;gap:6px">
+        <div style="flex:1;min-width:0">
+          <b class="lnk" style="color:inherit" onclick="otevriEtapu('${p.id}')">${esc(p.name || '')}</b>
+          <small>${esc(p.cn || '')}${projProgress(p) != null ? ' · ' + projProgress(p) + ' %' : ''}</small>
+        </div>
+        <button class="btn ghost sm" style="padding:3px 8px;flex:none" title="Přidat etapu k této stavbě"
+          onclick="etapaPanel('${p.id}',-1)">➕</button>
+      </div>`;
     return harmoRadek(lab, etapy);
   }).join('');
   return harmoObal(harmoHlavicka('Stavba'), radky,
