@@ -161,6 +161,27 @@
   .hlegend{display:flex;gap:8px 16px;flex-wrap:wrap;padding:10px 14px;border-top:1px solid var(--line);
            font-size:12px;color:var(--ink2)}
   .hlegend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-2px}
+  /* Bublina u cihlicky harmonogramu — vlastni misto nativniho title,
+     ktery je pomaly a oreze popis. pointer-events:none, aby neprekazela
+     mysi pri prejizdeni po ose. */
+  .etbub{position:fixed;display:none;z-index:200;max-width:330px;min-width:210px;
+         background:#fff;border:1px solid var(--line);border-radius:11px;
+         box-shadow:0 8px 24px rgba(16,32,48,.18);padding:0;pointer-events:none;
+         font-size:13px;line-height:1.45;color:var(--ink)}
+  .etbub-h{padding:10px 13px;border-left:4px solid var(--ink2);border-radius:11px 11px 0 0;
+           background:var(--int-soft)}
+  .etbub-h small{display:block;font-size:11px;color:var(--ink2)}
+  .etbub-h b{display:block;font-size:14px;margin:1px 0 2px}
+  .etbub-h span{font-size:12px;color:var(--ink2)}
+  .etbub-skluz{padding:7px 13px;background:#fdeceb;color:var(--red);font-size:12.5px;font-weight:600}
+  .etbub-body{margin:0;padding:10px 13px 10px 30px}
+  .etbub-body li{margin-bottom:3px}
+  .etbub-body li:last-child{margin-bottom:0}
+  .etbub-nic{padding:10px 13px;color:var(--ink2);font-style:italic;font-size:12.5px}
+  .etbub-lide{padding:8px 13px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink2)}
+  /* Na dotykovem zarizeni hover neexistuje — bublina by po tuknuti zustala
+     viset. Tam se rovnou otevira okenko etapy. */
+  @media(hover:none){ .etbub{display:none !important} }
   /* Na telefonu ukrajoval sloupec se jmenem pulku obrazovky a na osu
      zbylo par dni — jmeno se zuzi a zalomi. */
   @media(max-width:700px){
@@ -429,9 +450,9 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js" integrity="sha384-ZaR6mWzmJtrRibZ1Vm7SoHFr8OXjyAuGAXalGDKqbxFT18oi/z+oZLIRFkpeNor1" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" integrity="sha384-I1LYojsZ5RM1cOda44Z2h42Qa6YfsQ1XkXxREnhp4ueYBR/4d1pG1K+NZM537Vsj" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" integrity="sha384-Ke0FJhH7LyRqDxZ0wt+/OXV38yfQVu7g9VPEEGjYmB4RVOY/ta04uecRhsMwT7V3" crossorigin="anonymous"></script>
-<script src="vypocty.js?v=20260830ab"></script>
-<script src="navod.js?v=20260830ab"></script>
-<script src="config.js?v=20260830ab"></script>
-<script src="app.js?v=20260830ab"></script>
+<script src="vypocty.js?v=20260830ac"></script>
+<script src="navod.js?v=20260830ac"></script>
+<script src="config.js?v=20260830ac"></script>
+<script src="app.js?v=20260830ac"></script>
 </body>
 </html>

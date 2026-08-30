@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '30. 8. 2026 ab';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '30. 8. 2026 ac';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -1667,6 +1667,7 @@ function render() {
   else root.innerHTML = (S.meAuth.role === 'admin') ? viewAdmin() : (S.meAuth.role === 'sub' ? viewSub() : viewWorker());
   vratitFormulare();
   setTimeout(srovnejLepeni, 0);      /* kam se ma prilepit hlavicka tabulky */
+  etapaBublinaPryc();                /* bublina u cihlicky nesmi prezit prekresleni */
   if (S.signFor) setTimeout(sigInit, 0);
   setTimeout(mountMaps, 0);
   if (typeof zkontrolovatPauzu === 'function') setTimeout(zkontrolovatPauzu, 0);
@@ -3168,17 +3169,63 @@ function harmoPruhHtml(e, tridaNavic, popis) {
   const tr = { done: 'hb-done', now: 'hb-now', next: 'hb-next', late: 'hb-late' }[stav];
   /* Uzky pruh popisek stejne neuveze a orezane slovo mate vic, nez pomuze. */
   const text = g.width < 54 ? '' : esc(popis);
-  const jmena = etapaLide(e).map(id => fullName(userById(id) || {}).trim()).filter(Boolean).join(', ');
-  /* Prvni tri odrazky popisu do bubliny — zbytek je v okenku etapy. */
-  const body = String(e.popis || '').split(/\n+/).map(x => x.trim()).filter(Boolean);
-  const bodyText = body.length ? '&#10;' + body.slice(0, 3).map(x => '· ' + esc(x)).join('&#10;')
-    + (body.length > 3 ? '&#10;· … a další ' + (body.length - 3) : '') : '';
+  /* Nativni title je pomaly, oreze text a neumi odrazky. Misto nej vlastni
+     bublina (viz etapaBublina) — vyskoci hned a unese cely popis.
+     aria-label zustava kvuli ctecce obrazovky. */
   return `<div class="hbar ${tr} ${tridaNavic || ''}"
       style="left:${g.left}px;width:${g.width}px;top:${5 + (e.patro || 0) * HARMO_PATRO}px;height:${HARMO_PATRO - 5}px"
-      title="${esc(e.projekt ? e.projekt + ' — ' : '')}${esc(e.t || '')}&#10;${fmtISO(e.od)} – ${fmtISO(e.do)} · hotovo ${pct} %${stav === 'late' ? '&#10;⚠ SKLUZ — mělo skončit a hotové to není' : ''}${jmena ? '&#10;' + esc(jmena) : ''}${bodyText}"
-      onclick="etapaPanel('${e.pid}',${e.i})">
+      aria-label="${esc(e.t || '')} ${fmtISO(e.od)} – ${fmtISO(e.do)}, hotovo ${pct} %"
+      data-pid="${e.pid}" data-i="${e.i}"
+      onmouseenter="etapaBublina(this)" onmouseleave="etapaBublinaPryc()"
+      onclick="etapaBublinaPryc();etapaPanel('${e.pid}',${e.i})">
       ${pct > 0 && pct < 100 ? `<div class="hfill" style="width:${pct}%"></div>` : ''}
       <span>${text}</span></div>`;
+}
+
+/* ---- bublina u cihlicky ----
+   Ukaze se po najeti mysi a nese cely popis etapy v odrazkach, jmena lidi
+   a upozorneni na skluz. Zije mimo #root, takze ji prekresleni nezahodi
+   uprostred — jen se pri kazdem render() schova. */
+function etapaBublinaEl() {
+  let el = document.getElementById('etbub');
+  if (!el) { el = document.createElement('div'); el.id = 'etbub'; el.className = 'etbub'; document.body.appendChild(el); }
+  return el;
+}
+function etapaBublinaPryc() {
+  const el = document.getElementById('etbub');
+  if (el) el.style.display = 'none';
+}
+function etapaBublina(prvek) {
+  const pid = prvek.dataset.pid, i = Number(prvek.dataset.i);
+  const p = proj(pid); const m = ((p || {}).milestones || [])[i];
+  if (!m) return;
+  const pct = milePct(m);
+  const stav = etapaStav(m);
+  const jmena = etapaLide(m).map(id => fullName(userById(id) || {}).trim()).filter(Boolean);
+  const body = String(m.popis || '').split(/\n+/).map(x => x.trim()).filter(Boolean);
+  const barva = { done: 'var(--ok)', now: 'var(--amber-d)', next: 'var(--ink2)', late: 'var(--red)' }[stav];
+  const el = etapaBublinaEl();
+  el.innerHTML = `
+    <div class="etbub-h" style="border-left-color:${barva}">
+      <small>${esc(p.name || '')}</small>
+      <b>${esc(m.t || '')}</b>
+      <span>${fmtISO(m.od)} – ${fmtISO(m.do)} · hotovo ${pct} %</span>
+    </div>
+    ${stav === 'late' ? `<div class="etbub-skluz">⚠ Mělo skončit ${fmtISO(m.do)} a hotové to není</div>` : ''}
+    ${body.length ? `<ul class="etbub-body">${body.map(x => `<li>${esc(x)}</li>`).join('')}</ul>`
+      : '<div class="etbub-nic">Bez popisu — ťukni a doplň, co etapa obnáší.</div>'}
+    ${jmena.length ? `<div class="etbub-lide">👷 ${esc(jmena.join(', '))}</div>`
+      : '<div class="etbub-lide" style="color:var(--wait)">👷 nikdo nepřiřazen</div>'}`;
+  el.style.display = 'block';
+  /* Umistit nad cihlicku; kdyz se nahoru nevejde, dat ji pod ni. Vodorovne
+     se drzi v okne, at neutece za okraj u etap na kraji osy. */
+  const r = prvek.getBoundingClientRect();
+  const b = el.getBoundingClientRect();
+  let left = r.left + r.width / 2 - b.width / 2;
+  left = Math.max(8, Math.min(left, window.innerWidth - b.width - 8));
+  const nahoru = r.top - b.height - 10;
+  el.style.left = Math.round(left) + 'px';
+  el.style.top = Math.round(nahoru > 8 ? nahoru : r.bottom + 10) + 'px';
 }
 /* Harmonogram stavby (milniky s terminy) bydli na zalozce Zakladni informace. */
 function otevriEtapu(pid) { S.projDetailId = pid; S.projDetailTab = 'info'; S.view = 'projdetail'; render(); }
