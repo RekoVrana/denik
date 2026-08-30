@@ -114,21 +114,37 @@
   .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#10233a;color:#fff;border-radius:99px;padding:10px 20px;font-size:13.5px;opacity:0;pointer-events:none;transition:opacity .25s;z-index:200;max-width:92vw;text-align:center}
   .toast.show{opacity:1}
   /* ---- harmonogram (Gantt) ----
-     Pruhy se umistuji v procentech sirky osy, ne v mrizce — okno se da
-     posouvat a etapa muze zacinat kdykoli, ne jen v pondeli. */
+     Osa je PO DNECH a sirsi nez obrazovka — sirku pocita JS a dava ji
+     inline, tady jsou jen barvy a chovani. Sloupec se jmenem drzi
+     u leveho okraje (sticky), at clovek pri jizde do strany vi, ci je radek. */
   .chartcard{background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;margin-bottom:12px}
-  .hscroll{overflow-x:auto}
-  .hgantt{min-width:820px}
+  .hscroll{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch}
+  .hgantt{position:relative}
   .hrow{display:flex;border-bottom:1px solid var(--line)}
   .hrow:last-child{border-bottom:0}
-  .hlab{flex:0 0 178px;padding:9px 10px 9px 14px;font-size:13.5px;font-weight:600;border-right:1px solid var(--line);background:#fff}
+  .hlab{flex:0 0 186px;padding:9px 10px 9px 14px;font-size:13.5px;font-weight:600;
+        border-right:1px solid var(--line);background:#fff;position:sticky;left:0;z-index:5}
   .hlab small{display:block;font-weight:400;font-size:11px;color:var(--ink2);margin-top:1px}
-  .htrack{flex:1;position:relative;min-height:44px;padding:5px 0;
-          background:repeating-linear-gradient(to right,var(--line) 0 1px,transparent 1px calc(100% / 12))}
-  .hrow.hhdr{background:var(--int-soft)}
-  .hrow.hhdr .hlab{background:var(--int-soft);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink2);display:flex;align-items:center}
-  .hrow.hhdr .htrack{display:flex;min-height:0;padding:7px 0;background:none}
-  .hwk{flex:1;text-align:center;font-size:10.5px;font-weight:600;color:var(--ink2)}
+  .htrack{position:relative;flex:none;
+          background:repeating-linear-gradient(to right,
+              transparent 0 170px, rgba(26,60,94,.045) 170px 238px),
+            repeating-linear-gradient(to right, var(--line) 0 1px, transparent 1px 34px)}
+  .hrow.hhdr{background:var(--int-soft);border-bottom:1px solid var(--line)}
+  .hlab-hdr{background:var(--int-soft);font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+            color:var(--ink2);display:flex;align-items:center}
+  .htrack.hhead{background:none;height:46px}
+  .hmesice{position:relative;height:19px;border-bottom:1px solid var(--line)}
+  .hmesic{position:absolute;top:0;height:19px;display:flex;align-items:center;padding-left:8px;
+          font-size:11px;font-weight:700;color:var(--navy);border-left:1px solid var(--line);
+          text-transform:capitalize;white-space:nowrap;overflow:hidden}
+  .hdny{display:flex;height:27px}
+  .hden{flex:0 0 34px;display:flex;flex-direction:column;align-items:center;justify-content:center;
+         border-left:1px solid var(--line);line-height:1.1}
+  .hden i{font-style:normal;font-size:8.5px;font-weight:700;letter-spacing:.03em;color:var(--ink2)}
+  .hden b{font-size:11px;color:var(--ink)}
+  .hden.vik{background:rgba(26,60,94,.06)}
+  .hden.vik i,.hden.vik b{color:var(--ink2)}
+  .hden.dnesden b{color:var(--red);font-weight:800}
   .hbar{position:absolute;border-radius:6px;display:flex;align-items:center;
         padding:0 7px;overflow:hidden;font-size:11px;font-weight:700;white-space:nowrap;cursor:pointer}
   .hbar span{position:relative;z-index:1}
@@ -139,10 +155,18 @@
   .hb-late{background:#fdeceb;color:var(--red);border:1px solid var(--red)}
   .hb-kolize{background:#fdeceb;color:var(--red);border:2px solid var(--red)}
   .hb-nikdo{border-style:dotted}
-  .hdnes{position:absolute;top:0;bottom:0;width:2px;background:var(--red);z-index:3;pointer-events:none}
-  .hdnes.hlabeled::after{content:"dnes";position:absolute;top:-1px;left:4px;font-size:9.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--red)}
-  .hlegend{display:flex;gap:8px 16px;flex-wrap:wrap;padding:10px 14px;border-top:1px solid var(--line);font-size:12px;color:var(--ink2)}
+  .hdnes{position:absolute;top:0;bottom:0;width:2px;background:var(--red);z-index:4;pointer-events:none}
+  .hdnes.hlabeled::after{content:"dnes";position:absolute;top:1px;left:4px;font-size:9px;font-weight:800;
+    letter-spacing:.06em;text-transform:uppercase;color:var(--red)}
+  .hlegend{display:flex;gap:8px 16px;flex-wrap:wrap;padding:10px 14px;border-top:1px solid var(--line);
+           font-size:12px;color:var(--ink2)}
   .hlegend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-2px}
+  /* Na telefonu ukrajoval sloupec se jmenem pulku obrazovky a na osu
+     zbylo par dni — jmeno se zuzi a zalomi. */
+  @media(max-width:700px){
+    .hlab{flex-basis:118px;padding:8px 6px 8px 9px;font-size:12px;white-space:normal;line-height:1.25}
+    .hlab small{font-size:10px}
+  }
   .chipselect{display:flex;gap:6px;flex-wrap:wrap}
   .chipselect button{border:1px solid var(--line);background:#fff;border-radius:99px;padding:7px 14px;font-size:12.5px;cursor:pointer;font-weight:600}
   .chipselect button.active{background:var(--navy);color:#fff;border-color:var(--navy)}
@@ -348,9 +372,9 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js" integrity="sha384-ZaR6mWzmJtrRibZ1Vm7SoHFr8OXjyAuGAXalGDKqbxFT18oi/z+oZLIRFkpeNor1" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" integrity="sha384-I1LYojsZ5RM1cOda44Z2h42Qa6YfsQ1XkXxREnhp4ueYBR/4d1pG1K+NZM537Vsj" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" integrity="sha384-Ke0FJhH7LyRqDxZ0wt+/OXV38yfQVu7g9VPEEGjYmB4RVOY/ta04uecRhsMwT7V3" crossorigin="anonymous"></script>
-<script src="vypocty.js?v=20260830u"></script>
-<script src="navod.js?v=20260830u"></script>
-<script src="config.js?v=20260830u"></script>
-<script src="app.js?v=20260830u"></script>
+<script src="vypocty.js?v=20260830v"></script>
+<script src="navod.js?v=20260830v"></script>
+<script src="config.js?v=20260830v"></script>
+<script src="app.js?v=20260830v"></script>
 </body>
 </html>

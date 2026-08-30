@@ -2767,46 +2767,70 @@ function etapyVeSkluzu() {
   return vsechnyEtapy().filter(e => etapaStav(e) === 'late');
 }
 
-/* ---- okno casove osy ----
-   Vychozi pohled: pondeli dva tydny zpet a dvanact tydnu dopredu. Sipky
-   posouvaji po ctyrech tydnech, at se da dojet i na jaro. */
-const HARMO_TYDNU = 12;
-function harmoZacatek() {
-  return pondeli(shiftISO(isoToday(), -14 + 7 * (S.harmoPosun || 0)));
-}
-function harmoKonec() { return shiftISO(harmoZacatek(), HARMO_TYDNU * 7 - 1); }
-/* Umisteni pruhu v procentech sirky osy; null = etapa je uplne mimo okno. */
+/* ---- okno časové osy ----
+   Osa je PO DNECH a je sirsi nez obrazovka — jezdi se po ni do stran.
+   Tydenni mrizka natlacena na sirku okna byla necitelna: tridenni etapa
+   merila deset pixelu a nazev se do ni nevesel.
+   Okno: 16 tydnu (dva zpet, ctrnact dopredu), sipky posouvaji po ctyrech. */
+const HARMO_DNU = 112;
+const HARMO_DEN = 34;          /* sirka jednoho dne v px */
+const HARMO_LAB = 186;         /* sirka sloupce se jmenem */
+function harmoZacatek() { return pondeli(shiftISO(isoToday(), -14 + 7 * (S.harmoPosun || 0))); }
+function harmoKonec() { return shiftISO(harmoZacatek(), HARMO_DNU - 1); }
+function harmoSirka() { return HARMO_DNU * HARMO_DEN; }
+/* Umisteni pruhu v pixelech; null = etapa je uplne mimo okno. */
 function harmoPruh(od, doo) {
-  const z = denCislo(harmoZacatek()), k = denCislo(harmoKonec()) + 1;
+  const z = denCislo(harmoZacatek()), k = z + HARMO_DNU;
   const a = Math.max(denCislo(od), z), b = Math.min(denCislo(doo) + 1, k);
   if (b <= a) return null;
-  const celkem = k - z;
-  return { left: (a - z) / celkem * 100, width: (b - a) / celkem * 100,
-           uriznutoVlevo: denCislo(od) < z, uriznutoVpravo: denCislo(doo) + 1 > k };
+  return { left: (a - z) * HARMO_DEN, width: (b - a) * HARMO_DEN };
 }
-function harmoTydny() {
+function harmoDny() {
   const out = [];
-  for (let i = 0; i < HARMO_TYDNU; i++) {
-    const d = shiftISO(harmoZacatek(), i * 7);
-    const [, m, den] = d.split('-');
-    out.push({ iso: d, popis: Number(den) + '. ' + Number(m) + '.' });
+  for (let i = 0; i < HARMO_DNU; i++) {
+    const iso = shiftISO(harmoZacatek(), i);
+    const dow = new Date(iso + 'T00:00:00Z').getUTCDay();
+    out.push({ iso, den: Number(iso.slice(8)), dow: DAYS2[dow], vikend: dow === 0 || dow === 6 });
   }
   return out;
+}
+/* Pruh s nazvy mesicu nad dny — bez nej clovek pri jizde do strany ztrati
+   pojem, ve kterem je mesici. */
+function harmoMesice() {
+  const useky = [];
+  harmoDny().forEach((d, i) => {
+    const klic = d.iso.slice(0, 7);
+    const posl = useky[useky.length - 1];
+    if (posl && posl.klic === klic) posl.dnu++;
+    else useky.push({ klic, dnu: 1, od: i });
+  });
+  return useky.map(u => ({ popis: mesicNazev(u.klic), left: u.od * HARMO_DEN, width: u.dnu * HARMO_DEN }));
 }
 function harmoDnesLeft() {
   const p = harmoPruh(isoToday(), isoToday());
   return p ? p.left : null;
 }
+/* Prekresleni (render) zahodi DOM a s nim i to, kam byl clovek odjety.
+   Pozice se proto pamatuje a po prekresleni vraci. Kdyz jeste nikam
+   nejel, osa se sama nastavi na dnesek. */
+function harmoScrollObnov() {
+  const el = document.getElementById('harmo-scroll'); if (!el) return;
+  if (S.harmoScroll == null) {
+    const d = harmoDnesLeft();
+    el.scrollLeft = d == null ? 0 : Math.max(0, d - 3 * HARMO_DEN);
+  } else el.scrollLeft = S.harmoScroll;
+}
 
 /* ---- kolize: jeden clovek na dvou stavbach naraz ----
    Poctive se to musi pocitat pres VSECHNY etapy, ne jen pres ty v okne —
-   jinak by kolize zmizela, jakmile uzivatel posune osu. */
+   jinak by kolize zmizela, jakmile uzivatel posune osu.
+   Prekryv v ramci JEDNE stavby se nehlasi: tam lidi bezne delaji dve veci
+   naraz (dodelava omitky a uz zacina malovat) a hlaska by jen otravovala. */
 function kolizeCloveka(udi) {
   const moje = vsechnyEtapy().filter(e => etapaLide(e).indexOf(udi) >= 0);
   const kolidujici = new Set();
   for (let a = 0; a < moje.length; a++) {
     for (let b = a + 1; b < moje.length; b++) {
-      /* dve etapy na RUZNYCH stavbach, ktere se casove prekryvaji */
       if (moje[a].pid === moje[b].pid) continue;
       if (moje[a].od <= moje[b].do && moje[b].od <= moje[a].do) {
         kolidujici.add(moje[a].pid + '|' + moje[a].i);
@@ -2840,7 +2864,7 @@ function mileTerminForm(pid, i) {
         onclick="this.classList.toggle('active')" data-id="${u.id}">${esc(fullName(u))}</button>`).join('')
         || '<span class="muted">Žádní lidé v partě ani subdodavatelé.</span>'}
     </div>
-    <div class="note">Vyber i víc lidí — omítky bývají celá parta. Kdo je vybraný, uvidí tuhle etapu ve svém řádku harmonogramu a aplikace hlídá, ať není ve stejný týden na dvou stavbách.</div>
+    <div class="note">Vyber i víc lidí — omítky bývají celá parta. Kdo je vybraný, uvidí tuhle etapu ve svém řádku harmonogramu a aplikace hlídá, ať není ve stejný termín na dvou stavbách.</div>
     <div class="aprv"><button class="btn amber" onclick="ulozMileTermin('${pid}',${i})">💾 Uložit</button>
       ${etapaNaplanovana(m) ? `<button class="btn ghost" onclick="zrusMileTermin('${pid}',${i})">✕ Zrušit naplánování</button>` : ''}
       <button class="btn ghost" onclick="closeModal()">Zavřít</button></div>`);
@@ -2883,11 +2907,13 @@ function pgHarmonogram() {
   const t = S.harmoTab || 'stavby';
   const etapy = vsechnyEtapy();
   const skluz = etapyVeSkluzu();
+  /* Osa se po prekresleni vraci tam, kde clovek byl (nebo poprve na dnesek). */
+  setTimeout(harmoScrollObnov, 0);
   return `
   <div class="strip"><h1>Harmonogram</h1><span class="sp"></span>
-    <button class="btn ghost sm" onclick="S.harmoPosun=(S.harmoPosun||0)-4;render()">‹ zpět</button>
-    <button class="btn ghost sm" onclick="S.harmoPosun=0;render()">dnes</button>
-    <button class="btn ghost sm" onclick="S.harmoPosun=(S.harmoPosun||0)+4;render()">dál ›</button></div>
+    <button class="btn ghost sm" onclick="harmoPosun(-4)">‹ o měsíc zpět</button>
+    <button class="btn ghost sm" onclick="harmoNaDnesek()">dnes</button>
+    <button class="btn ghost sm" onclick="harmoPosun(4)">o měsíc dál ›</button></div>
   <div class="sectabs">
     <div class="t ${t === 'stavby' ? 'active' : ''}" onclick="S.harmoTab='stavby';render()">🏗 Podle staveb</div>
     <div class="t ${t === 'lide' ? 'active' : ''}" onclick="S.harmoTab='lide';render()">👷 Podle lidí</div>
@@ -2900,25 +2926,16 @@ function pgHarmonogram() {
         <span class="muted">${esc(e.t || '')} — mělo skončit ${fmtISO(e.do)}, je na ${milePct(e)} %</span>
       </div>`).join('')}</div>` : ''}
     ${!etapy.length ? `<div class="card"><div class="empty">📅 Zatím není naplánovaná žádná etapa.
-      <br><span class="muted">Otevři stavbu → záložka Portál a harmonogram → u milníku ťukni <b>📅 naplánovat</b> a zadej od, do a kdo na tom bude.</span></div></div>`
+      <br><span class="muted">Otevři stavbu → záložka Základní informace → u milníku ťukni <b>📅 naplánovat</b> a zadej od, do a kdo na tom bude.</span></div></div>`
       : t === 'stavby' ? harmoPodleStaveb() : harmoPodleLidi()}
-    <div class="note">Etapa bez termínu se nekreslí — milníky, které nikdo nenaplánoval, fungují dál jako dřív.
-      Barva pruhu se počítá sama: <b>zelená</b> hotovo, <b>oranžová</b> probíhá, <b>šedá</b> čeká,
-      <b>červená</b> mělo skončit a hotové to není.</div>
+    <div class="note">Osa je po dnech a je širší než obrazovka — <b>posouvej ji do stran</b>, tlačítka nahoře skáčou po měsících.
+      Etapa bez termínu se nekreslí. Barva pruhu se počítá sama: <b>zelená</b> hotovo, <b>oranžová</b> probíhá,
+      <b>šedá</b> čeká, <b>červená</b> mělo skončit a hotové to není.</div>
   </main>`;
 }
+function harmoPosun(k) { S.harmoPosun = (S.harmoPosun || 0) + k; S.harmoScroll = null; render(); }
+function harmoNaDnesek() { S.harmoPosun = 0; S.harmoScroll = null; render(); }
 
-/* Hlavicka s tydny — spolecna pro oba pohledy. */
-function harmoHlavicka(popisSloupce) {
-  const dnes = harmoDnesLeft();
-  return `<div class="hrow hhdr">
-    <div class="hlab">${esc(popisSloupce)}</div>
-    <div class="htrack">
-      ${harmoTydny().map(w => `<div class="hwk">${w.popis}</div>`).join('')}
-      ${dnes != null ? `<div class="hdnes hlabeled" style="left:${dnes}%"></div>` : ''}
-    </div>
-  </div>`;
-}
 /* Souběžné etapy se nesmi kreslit pres sebe — u kompletni rekonstrukce
    bezi elektro a voda soucasne a jeden pruh by druhy schoval. Kazda etapa
    proto dostane patro: prvni volne, ve kterem se s nicim neprekryva.
@@ -2934,19 +2951,19 @@ function harmoPatra(etapy) {
 function harmoPocetPater(etapy) {
   return Math.max(1, ...harmoPatra(etapy).map(e => e.patro + 1));
 }
-const HARMO_PATRO = 26;   /* vyska jednoho patra v pixelech */
+const HARMO_PATRO = 28;   /* vyska jednoho patra v pixelech */
+
 function harmoPruhHtml(e, tridaNavic, popis) {
   const g = harmoPruh(e.od, e.do); if (!g) return '';
   const stav = etapaStav(e);
   const pct = milePct(e);
   const tr = { done: 'hb-done', now: 'hb-now', next: 'hb-next', late: 'hb-late' }[stav];
-  /* Uzky pruh popisek stejne neuveze a orezane slovo mate vic, nez pomuze
-     — pod urcitou sirku se necha prazdny a nazev rekne bublina po najeti
-     (a na telefonu tuknuti, ktere otevre stavbu). */
-  const text = g.width < 3.2 ? '' : esc(popis);
+  /* Uzky pruh popisek stejne neuveze a orezane slovo mate vic, nez pomuze. */
+  const text = g.width < 54 ? '' : esc(popis);
+  const jmena = etapaLide(e).map(id => fullName(userById(id) || {}).trim()).filter(Boolean).join(', ');
   return `<div class="hbar ${tr} ${tridaNavic || ''}"
-      style="left:${g.left}%;width:${g.width}%;top:${5 + (e.patro || 0) * HARMO_PATRO}px;height:${HARMO_PATRO - 4}px"
-      title="${esc(e.projekt ? e.projekt + ' — ' : '')}${esc(e.t || '')}&#10;${fmtISO(e.od)} – ${fmtISO(e.do)} · hotovo ${pct} %${etapaStav(e) === 'late' ? '&#10;⚠ SKLUZ — mělo skončit a hotové to není' : ''}${etapaLide(e).length ? '&#10;' + esc(etapaLide(e).map(id => fullName(userById(id) || {}).trim()).filter(Boolean).join(', ')) : ''}"
+      style="left:${g.left}px;width:${g.width}px;top:${5 + (e.patro || 0) * HARMO_PATRO}px;height:${HARMO_PATRO - 5}px"
+      title="${esc(e.projekt ? e.projekt + ' — ' : '')}${esc(e.t || '')}&#10;${fmtISO(e.od)} – ${fmtISO(e.do)} · hotovo ${pct} %${stav === 'late' ? '&#10;⚠ SKLUZ — mělo skončit a hotové to není' : ''}${jmena ? '&#10;' + esc(jmena) : ''}"
       onclick="otevriEtapu('${e.pid}')">
       ${pct > 0 && pct < 100 ? `<div class="hfill" style="width:${pct}%"></div>` : ''}
       <span>${text}</span></div>`;
@@ -2954,69 +2971,86 @@ function harmoPruhHtml(e, tridaNavic, popis) {
 /* Harmonogram stavby (milniky s terminy) bydli na zalozce Zakladni informace. */
 function otevriEtapu(pid) { S.projDetailId = pid; S.projDetailTab = 'info'; S.view = 'projdetail'; render(); }
 
-function harmoPodleStaveb() {
+/* Hlavicka: mesice, pod nimi jednotlive dny. Spolecna pro oba pohledy. */
+function harmoHlavicka(popisSloupce) {
   const dnes = harmoDnesLeft();
+  const dnesIso = isoToday();
+  return `<div class="hrow hhdr">
+    <div class="hlab hlab-hdr">${esc(popisSloupce)}</div>
+    <div class="htrack hhead" style="width:${harmoSirka()}px">
+      <div class="hmesice">${harmoMesice().map(m =>
+        `<div class="hmesic" style="left:${m.left}px;width:${m.width}px">${esc(m.popis)}</div>`).join('')}</div>
+      <div class="hdny">${harmoDny().map(d =>
+        `<div class="hden ${d.vikend ? 'vik' : ''} ${d.iso === dnesIso ? 'dnesden' : ''}"><i>${d.dow}</i><b>${d.den}</b></div>`).join('')}</div>
+      ${dnes != null ? `<div class="hdnes hlabeled" style="left:${dnes}px"></div>` : ''}
+    </div>
+  </div>`;
+}
+/* Jeden radek osy — spolecny pro oba pohledy, at se chovaji stejne. */
+function harmoRadek(popisekHtml, etapy, tridaEtapy) {
+  const dnes = harmoDnesLeft();
+  const pater = harmoPocetPater(etapy);
+  return `<div class="hrow">
+    <div class="hlab">${popisekHtml}</div>
+    <div class="htrack" style="width:${harmoSirka()}px;height:${10 + pater * HARMO_PATRO}px">
+      ${harmoPatra(etapy).map(e => harmoPruhHtml(e, tridaEtapy ? tridaEtapy(e) : '', e.__popis)).join('')}
+      ${dnes != null ? `<div class="hdnes" style="left:${dnes}px"></div>` : ''}
+    </div>
+  </div>`;
+}
+function harmoObal(hlavicka, radky, legenda) {
+  return `<div class="chartcard">
+    <div class="hscroll" id="harmo-scroll" onscroll="S.harmoScroll=this.scrollLeft">
+      <div class="hgantt" style="width:${HARMO_LAB + harmoSirka()}px">${hlavicka}${radky}</div>
+    </div>
+    <div class="hlegend">${legenda}</div>
+  </div>`;
+}
+
+function harmoPodleStaveb() {
   const stavby = S.projects.filter(p => (p.milestones || []).some(etapaNaplanovana));
-  return `<div class="chartcard"><div class="hscroll"><div class="hgantt">
-    ${harmoHlavicka('Stavba')}
-    ${stavby.map(p => {
-      const etapy = (p.milestones || []).map((m, i) => ({ ...m, i, pid: p.id, projekt: p.name || '' })).filter(etapaNaplanovana);
-      return `<div class="hrow">
-        <div class="hlab"><b class="lnk" style="color:inherit" onclick="otevriEtapu('${p.id}',0)">${esc(p.name || '')}</b>
-          <small>${esc(p.cn || '')}${projProgress(p) != null ? ' · ' + projProgress(p) + ' %' : ''}</small></div>
-        <div class="htrack" style="height:${10 + harmoPocetPater(etapy) * HARMO_PATRO}px">
-          ${harmoPatra(etapy).map(e => harmoPruhHtml(e, '', e.t + (milePct(e) === 100 ? ' ✓' : milePct(e) ? ' ' + milePct(e) + ' %' : ''))).join('')}
-          ${dnes != null ? `<div class="hdnes" style="left:${dnes}%"></div>` : ''}
-        </div>
-      </div>`;
-    }).join('')}
-  </div></div>
-  <div class="hlegend">
-    <span><i class="hb-done"></i>hotovo</span>
-    <span><i class="hb-now"></i>probíhá</span>
-    <span><i class="hb-next"></i>čeká</span>
-    <span><i class="hb-late"></i>skluz — mělo skončit a hotové to není</span>
-  </div></div>`;
+  const radky = stavby.map(p => {
+    const etapy = (p.milestones || []).map((m, i) => ({ ...m, i, pid: p.id, projekt: p.name || '' }))
+      .filter(etapaNaplanovana)
+      .map(e => ({ ...e, __popis: e.t + (milePct(e) === 100 ? ' ✓' : milePct(e) ? ' ' + milePct(e) + ' %' : '') }));
+    const lab = `<b class="lnk" style="color:inherit" onclick="otevriEtapu('${p.id}')">${esc(p.name || '')}</b>
+      <small>${esc(p.cn || '')}${projProgress(p) != null ? ' · ' + projProgress(p) + ' %' : ''}</small>`;
+    return harmoRadek(lab, etapy);
+  }).join('');
+  return harmoObal(harmoHlavicka('Stavba'), radky,
+    `<span><i class="hb-done"></i>hotovo</span>
+     <span><i class="hb-now"></i>probíhá</span>
+     <span><i class="hb-next"></i>čeká</span>
+     <span><i class="hb-late"></i>skluz — mělo skončit a hotové to není</span>`);
 }
 
 function harmoPodleLidi() {
-  const dnes = harmoDnesLeft();
   const etapy = vsechnyEtapy();
-  /* Radky jen pro lidi, kteri nekde opravdu jsou — prazdny seznam vsech
-     zamestnancu by byl nepouzitelne dlouhy. Na konci radek pro etapy,
-     na kterych zatim nikdo neni: to je taky informace. */
+  /* Radky jen pro lidi, kteri nekde opravdu jsou — seznam vsech zamestnancu
+     by byl nepouzitelne dlouhy. Na konci radek pro etapy, na kterych zatim
+     nikdo neni: to je taky informace. */
   const idcka = [];
   etapy.forEach(e => etapaLide(e).forEach(id => { if (idcka.indexOf(id) < 0) idcka.push(id); }));
   const lide = idcka.map(id => userById(id)).filter(Boolean)
     .sort((a, b) => fullName(a).localeCompare(fullName(b), 'cs'));
-  const nikdo = etapy.filter(e => !etapaLide(e).length);
-  return `<div class="chartcard"><div class="hscroll"><div class="hgantt">
-    ${harmoHlavicka('Člověk')}
-    ${lide.map(u => {
-      const moje = etapy.filter(e => etapaLide(e).indexOf(u.id) >= 0);
-      const kol = kolizeCloveka(u.id);
-      return `<div class="hrow">
-        <div class="hlab"${kol.size ? ' style="color:var(--red)"' : ''}>
-          ${jmenoOdkaz(u)}<small${kol.size ? ' style="color:var(--red)"' : ''}>${kol.size ? '⚠ kolize — dvě stavby naráz' : esc(u.role || '')}</small></div>
-        <div class="htrack" style="height:${10 + harmoPocetPater(moje) * HARMO_PATRO}px">
-          ${harmoPatra(moje).map(e => harmoPruhHtml(e, kol.has(e.pid + '|' + e.i) ? 'hb-kolize' : '', e.projekt + ' — ' + e.t)).join('')}
-          ${dnes != null ? `<div class="hdnes" style="left:${dnes}%"></div>` : ''}
-        </div>
-      </div>`;
-    }).join('')}
-    ${nikdo.length ? `<div class="hrow">
-      <div class="hlab" style="color:var(--wait)">Nikdo nepřiřazen<small>${nikdo.length} ${nikdo.length === 1 ? 'etapa' : nikdo.length < 5 ? 'etapy' : 'etap'}</small></div>
-      <div class="htrack" style="height:${10 + harmoPocetPater(nikdo) * HARMO_PATRO}px">
-        ${harmoPatra(nikdo).map(e => harmoPruhHtml(e, 'hb-nikdo', e.projekt + ' — ' + e.t)).join('')}
-        ${dnes != null ? `<div class="hdnes" style="left:${dnes}%"></div>` : ''}
-      </div></div>` : ''}
-  </div></div>
-  <div class="hlegend">
-    <span><i class="hb-kolize"></i>kolize — jeden člověk na dvou stavbách naráz</span>
-    <span><i class="hb-now"></i>probíhá</span>
-    <span><i class="hb-next"></i>čeká</span>
-    <span class="muted">Ťuknutím na pruh se dostaneš na harmonogram té stavby.</span>
-  </div></div>`;
+  const popis = e => e.projekt + ' — ' + e.t;
+  let radky = lide.map(u => {
+    const kol = kolizeCloveka(u.id);
+    const moje = etapy.filter(e => etapaLide(e).indexOf(u.id) >= 0).map(e => ({ ...e, __popis: popis(e) }));
+    const lab = `${jmenoOdkaz(u)}<small${kol.size ? ' style="color:var(--red)"' : ''}>${kol.size ? '⚠ kolize — dvě stavby naráz' : esc(u.role || '')}</small>`;
+    return harmoRadek(lab, moje, e => kol.has(e.pid + '|' + e.i) ? 'hb-kolize' : '');
+  }).join('');
+  const nikdo = etapy.filter(e => !etapaLide(e).length).map(e => ({ ...e, __popis: popis(e) }));
+  if (nikdo.length) {
+    radky += harmoRadek(`<span style="color:var(--wait)">Nikdo nepřiřazen</span>
+      <small>${nikdo.length} ${nikdo.length === 1 ? 'etapa' : nikdo.length < 5 ? 'etapy' : 'etap'}</small>`,
+      nikdo, () => 'hb-nikdo');
+  }
+  return harmoObal(harmoHlavicka('Člověk'), radky,
+    `<span><i class="hb-kolize"></i>kolize — jeden člověk na dvou stavbách naráz</span>
+     <span><i class="hb-now"></i>probíhá</span>
+     <span><i class="hb-next"></i>čeká</span>
+     <span class="muted">Ťuknutím na pruh se dostaneš na tu stavbu.</span>`);
 }
 
 /* ---- fotka: dlaždice ---- */
