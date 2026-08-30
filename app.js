@@ -217,6 +217,10 @@ const S = {
   poznamkyProjekt: '', poznamkyHledat: '',
   taskFoto: [],
   klice: [],
+  /* karta cloveka (viz sekce KARTA CLOVEKA): kdo je otevreny, ktera zalozka
+     a ktery mesic. Vyplacene dny a poznamky k lidem cte jen vedeni. */
+  osobaId: null, osobaTab: 'hodiny', osobaMesic: null,
+  vyplaty: [], pozOsob: [], pozOsobForm: false, pozOsobEdit: null,
   /* galerie fotek (viz sekce GALERIE FOTEK): filtry a kolik dlazdic uz kreslime */
   fgFrom: '', fgTo: '', fgProj: null, fgAutor: '', fgZobrazeno: 60,
   repWorkers: [], repProjects: [], repLoaded: false, repFrom: isoToday().slice(0, 8) + '01', repTo: isoToday(),
@@ -519,7 +523,7 @@ function startData() {
   S.zivyOkno = {}; S.pendingZive = [];
   /* admin-only tajnosti zacinaji prazdne — po odhlaseni admina nesmi
      zustat v pameti pro dalsi prihlaseni jine role */
-  S.portaly = {}; S.kontakty = {}; S.entriesInterni = {};
+  S.portaly = {}; S.kontakty = {}; S.entriesInterni = {}; S.vyplaty = []; S.pozOsob = [];
   S.dotazeno = []; S.dotazenoZapisy = []; S.dotazenoTisk = []; S.zapisyOd = null;
   listen('projects', 'projects', { sort: (a, b) => (b.active - a.active) || String(a.cn || a.name).localeCompare(String(b.cn || b.name), 'cs') });
   /* razeni okennich kolekci drzi OKNO_SORT, at je stejne pro snapshot i archiv */
@@ -543,6 +547,10 @@ function startData() {
      Kazdy klic (vsichni / parta / ja) ma vlastni posluchac a vysledky
      se skladaji dohromady, stejne jako u ukolu. */
   const pzSort = (a, b) => (a.nadpis || '').localeCompare(b.nadpis || '', 'cs');
+  /* Vyplacene dny a poznamky k lidem: citlive udaje, posloucha je jen vedeni.
+     Po odhlaseni admina se pole vyprazdni o kus vys spolu s ostatnimi
+     tajnostmi, aby nezustala v pameti pro dalsi prihlaseni jine role. */
+  if (role === 'admin') { listen('vyplaty', 'vyplaty', {}); listen('poznamky_osob', 'pozOsob', {}); }
   if (role === 'admin') { listen('poznamky', 'poznamky', { sort: pzSort }); prevedStarePoznamky(); uklidRosterAdminy(); prevedTajnosti(); prevedKontaktyInvestoru(); uklidTypySubu(); prevedSazbyNaHistorii(); setTimeout(dorovnejPortaly, 6000); }
   else {
     const pzMid = (S.meAuth && S.meAuth.userDocId) || '__nikdo__';
@@ -1183,11 +1191,29 @@ const WMO = { 0: 'jasno ☀️', 1: 'převážně jasno 🌤', 2: 'polojasno ⛅
 async function fetchWeather(p, date) {
   if (!p || !p.gps || !p.gps.lat || !S.online) return null;
   try {
-    const u = 'https://api.open-meteo.com/v1/forecast?latitude=' + p.gps.lat + '&longitude=' + p.gps.lng + '&daily=weather_code,temperature_2m_min,temperature_2m_max,precipitation_sum&timezone=Europe%2FPrague&start_date=' + date + '&end_date=' + date;
+    /* Vitr a vlhkost pribyly 30. 8. — stavebni denik ma ze zakona popisovat
+       pocasi natolik, aby slo pozdeji dolozit, proc se ten den nedelalo.
+       "Zatazeno 12 az 18 °C" na to nestaci: fasadu zastavi vitr, sterky
+       a lepidla vlhkost. Vlhkost je v hodinovych datech, ne v dennich —
+       bere se hodnota v poledne, kdy se nejcasteji rozhoduje o praci. */
+    const u = 'https://api.open-meteo.com/v1/forecast?latitude=' + p.gps.lat + '&longitude=' + p.gps.lng
+      + '&daily=weather_code,temperature_2m_min,temperature_2m_max,precipitation_sum,wind_speed_10m_max'
+      + '&hourly=relative_humidity_2m&timezone=Europe%2FPrague&start_date=' + date + '&end_date=' + date;
     const r = await fetch(u); const j = await r.json(); const d = j.daily;
     if (!d || !d.time || !d.time.length) return null;
     const srz = d.precipitation_sum[0];
-    return ((WMO[d.weather_code[0]] || '') + ' · ' + Math.round(d.temperature_2m_min[0]) + ' až ' + Math.round(d.temperature_2m_max[0]) + ' °C' + (srz ? ' · srážky ' + srz + ' mm' : '')).trim();
+    const vitr = d.wind_speed_10m_max ? d.wind_speed_10m_max[0] : null;
+    /* Poledni vlhkost. Kdyz hodinova data nedorazi (starsi odpoved serveru),
+       radek se jen zkrati — zapis se kvuli tomu neuklada bez pocasi. */
+    let vlh = null;
+    try {
+      const h = j.hourly, i = h.time.indexOf(date + 'T12:00');
+      if (i >= 0) vlh = h.relative_humidity_2m[i];
+    } catch (e) {}
+    return ((WMO[d.weather_code[0]] || '') + ' · ' + Math.round(d.temperature_2m_min[0]) + ' až ' + Math.round(d.temperature_2m_max[0]) + ' °C'
+      + (srz ? ' · srážky ' + srz + ' mm' : '')
+      + (vitr != null ? ' · vítr ' + Math.round(vitr) + ' km/h' : '')
+      + (vlh != null ? ' · vlhkost ' + Math.round(vlh) + ' %' : '')).trim();
   } catch (e) { return null; }
 }
 
@@ -1846,6 +1872,7 @@ function viewAdmin() {
   else if (S.view === 'schvaleni') body = pgSchvaleni();
   else if (S.view === 'novy') body = pgNovy();
   else if (S.view === 'uzivatele') body = pgUzivatele();
+  else if (S.view === 'osoba') body = pgOsoba();
   else if (S.view === 'newuser') body = pgNewUser();
   else if (S.view === 'organizace') body = pgOrganizace();
   else if (S.view === 'ukoly') body = pgUkoly();
@@ -4233,6 +4260,20 @@ function repTerenni() {
    (podminka a.date >= '' plati vzdycky), a nadpis pritom ukazoval prazdne
    obdobi. Radeji nic nez spatny podklad pro vyplaty. */
 function repObdobiOk() { return !!(S.repFrom && S.repTo && S.repFrom <= S.repTo); }
+/* Skok po celych mesicich. Vychazi z mesice pole „Od" — kdyz je tam
+   10. srpna, „predchozi mesic" da 1.–31. cervence, ne posun o 30 dni.
+   Report se vzdy shodi na nenactenu, aby se necetla stara tabulka
+   s novymi daty v hlavicce. */
+function repMesicPosun(k) {
+  const m = mesicPosun((S.repFrom || isoToday()).slice(0, 7), k);
+  S.repFrom = mesicPrvni(m); S.repTo = mesicPosledni(m);
+  S.repLoaded = false; render();
+}
+function repMesicTento() {
+  const m = mesicTed();
+  S.repFrom = mesicPrvni(m); S.repTo = mesicPosledni(m);
+  S.repLoaded = false; render();
+}
 function pgReporty() {
   const teren = repTerenni();
   const sel = S.repWorkers, selP = S.repProjects;
@@ -4256,6 +4297,11 @@ function pgReporty() {
           </div>
           <div class="chipselect">${S.projects.map(p => `<button class="${selP.includes(p.id) ? 'active' : ''}" onclick="repTogP('${p.id}')">${esc(p.name)}</button>`).join('')}</div>
         </div>
+      </div>
+      <div class="aprv" style="align-items:center">
+        <button class="btn ghost sm" title="Nastaví období na celý předchozí měsíc" onclick="repMesicPosun(-1)">‹ Předchozí měsíc</button>
+        <button class="btn ghost sm" onclick="repMesicTento()">Tento měsíc</button>
+        <button class="btn ghost sm" title="Nastaví období na celý následující měsíc" onclick="repMesicPosun(1)">Následující měsíc ›</button>
       </div>
       <div class="aprv" style="align-items:center">
         <span class="muted">Od</span><input type="date" id="rep-from" value="${S.repFrom}" style="max-width:150px" onchange="S.repFrom=this.value;S.repLoaded=false;render()">
@@ -4511,6 +4557,363 @@ function jmenovciMapa() {
   S.users.forEach(u => { const k = jmenoKlic(u); if (k) m[k] = (m[k] || 0) + 1; });
   return m;
 }
+/* ================= KARTA ČLOVĚKA =================
+   Vedení si otevře jednoho člověka a má u něj pohromadě tři věci, které
+   byly dosud rozházené po aplikaci: co odpracoval a co uz dostal zaplaceno,
+   co si o něm vedení poznamenalo, a jak si píchal.
+
+   Proc to vzniklo: report umi jen souhrn za celou partu a za obdobi. Z nej
+   nejde poznat, KTERY den uz je vyplaceny — Katka to musela drzet v hlave
+   nebo v Excelu vedle. Ted se den zaskrtne a zustane to v databazi.
+
+   POZOR na vyplacenou castku: uklada se cislo, ktere platilo v okamziku
+   vyplaty. Kdyz se sazba pozdeji zmeni zpetne (historie sazeb to umi),
+   uz vyplaceny den se prepocitat NESMI — clovek dostal, co dostal.
+   Proto se u dne uklada hruba/cista/hodiny, ne jen "ano". */
+
+const MESICE_CS = ['leden', 'únor', 'březen', 'duben', 'květen', 'červen',
+                   'červenec', 'srpen', 'září', 'říjen', 'listopad', 'prosinec'];
+
+function mesicTed() { return isoToday().slice(0, 7); }
+function mesicPrvni(m) { return m + '-01'; }
+/* new Date(rok, mesic, 0) = posledni den PREDCHOZIHO mesice; mesic je tu
+   jednickovy (srpen = 8), takze to vrati posledni srpnovy den. */
+function mesicPosledni(m) {
+  const [r, me] = m.split('-').map(Number);
+  return m + '-' + String(new Date(r, me, 0).getDate()).padStart(2, '0');
+}
+function mesicPosun(m, k) {
+  const [r, me] = m.split('-').map(Number);
+  const d = new Date(r, me - 1 + k, 1);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+function mesicNazev(m) {
+  const [r, me] = m.split('-').map(Number);
+  return MESICE_CS[me - 1] + ' ' + r;
+}
+
+/* Odpracovane dny jednoho cloveka za obdobi, uz slozene ze smen.
+   Smeny se paruji v ramci JEDNE stavby (stejne jako v reportu) — kdo behem
+   dne prejede na druhou stavbu, ma dve smeny a hodiny se sectou.
+   Pres pulnoc: spocitejSmeny vrati celou smenu ke dni prichodu, proto se
+   ctou zaznamy jeste o den dal a az potom se orizne obdobi. */
+function osobaDny(udi, od, doo) {
+  const doPlus1 = shiftISO(doo, 1);
+  const podleStavby = {};
+  S.attendance
+    .filter(a => a.userDocId === udi && a.date >= od && a.date <= doPlus1 && jeSchvaleno(a))
+    .forEach(a => { (podleStavby[a.pid] = podleStavby[a.pid] || []).push(a); });
+  const dny = {};
+  Object.keys(podleStavby).forEach(pid => {
+    Vypocty.spocitejSmeny(podleStavby[pid]).forEach(d => {
+      if (d.den < od || d.den > doo) return;
+      const z = dny[d.den] = dny[d.den] || { den: d.den, h: 0, pauzaMin: 0, nedokonceno: false, pidy: [] };
+      z.h += d.minuty / 60;
+      z.pauzaMin += d.pauzaMin;
+      if (d.nedokonceno) z.nedokonceno = true;
+      if (z.pidy.indexOf(pid) < 0) z.pidy.push(pid);
+    });
+  });
+  return dny;
+}
+
+/* ---- vyplacene dny ----
+   Jeden dokument na cloveka a mesic (/vyplaty/{udi}_{RRRR-MM}), uvnitr mapa
+   dnu. Kdyby to byl dokument na kazdy den, mel by pripad Ruslana za rok
+   pres tri sta dokumentu a nacitani karty by bylo drahe. */
+function vyplataId(udi, m) { return udi + '_' + m; }
+function vyplatyDne(udi, m) {
+  const d = (S.vyplaty || []).find(v => v.id === vyplataId(udi, m));
+  return (d && d.dny) || {};
+}
+async function vyplatuPrepni(udi, m, den) {
+  const uz = vyplatyDne(udi, m)[den];
+  const ref = db.collection('vyplaty').doc(vyplataId(udi, m));
+  if (uz) {
+    if (!await potvrd('Zrušit „vyplaceno" u dne ' + fmtISO(den) + '?\n\n'
+      + 'Označil(a) to ' + (uz.kdo || '?') + ' ' + fmtISO(uz.kdy) + ' na ' + kc(uz.hruba) + ' Kč.')) return;
+    await ref.set({ udi, mesic: m, dny: { [den]: firebase.firestore.FieldValue.delete() } }, { merge: true })
+      .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
+    return;
+  }
+  const dny = osobaDny(udi, mesicPrvni(m), mesicPosledni(m));
+  const d = dny[den];
+  if (!d || !d.h) { toast('Za ten den nejsou žádné hodiny.'); return; }
+  const p = penizeZaHodiny(udi, { h: d.h, poDnech: [{ den, h: d.h }] });
+  if (!p.sazby.length) { toast('⚠ Tomu dni chybí sazba — doplň ji v kartě uživatele.'); return; }
+  await ref.set({ udi, mesic: m, dny: { [den]: {
+    hruba: Math.round(p.hruba), cista: Math.round(p.cista), hod: Math.round(d.h * 100) / 100,
+    kdo: fullName(S.me || {}).trim() || 'vedení', kdy: isoToday()
+  } } }, { merge: true }).catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
+}
+/* Hromadne oznaceni: bere jen dny, ktere jeste vyplacene nejsou a maji
+   hodiny i sazbu. Uz vyplacene dny nechava byt — jejich castka je zmrazena
+   a prepsat ji dnesnim prepoctem by byla tichá zmena historie. */
+async function vyplatitZbytekMesice(udi, m) {
+  const dny = osobaDny(udi, mesicPrvni(m), mesicPosledni(m));
+  const uz = vyplatyDne(udi, m);
+  const kdo = fullName(S.me || {}).trim() || 'vedení';
+  const zapis = {};
+  let celkem = 0, bezSazby = 0;
+  Object.keys(dny).sort().forEach(den => {
+    const d = dny[den];
+    if (uz[den] || !d.h) return;
+    const p = penizeZaHodiny(udi, { h: d.h, poDnech: [{ den, h: d.h }] });
+    if (!p.sazby.length) { bezSazby++; return; }
+    zapis[den] = { hruba: Math.round(p.hruba), cista: Math.round(p.cista),
+                   hod: Math.round(d.h * 100) / 100, kdo, kdy: isoToday() };
+    celkem += p.hruba;
+  });
+  const pocet = Object.keys(zapis).length;
+  if (!pocet) { toast(bezSazby ? '⚠ Zbylým dnům chybí sazba.' : 'Není co vyplácet — všechny dny jsou hotové.'); return; }
+  if (!await potvrd('Označit jako vyplacené ' + pocet + ' ' + (pocet === 1 ? 'den' : pocet < 5 ? 'dny' : 'dní')
+    + ' za ' + mesicNazev(m) + '?\n\nCelkem ' + kc(celkem) + ' Kč hrubého.'
+    + (bezSazby ? '\n\n⚠ ' + bezSazby + ' dnům chybí sazba — ty se přeskočí.' : ''), '✓ Označit')) return;
+  await db.collection('vyplaty').doc(vyplataId(udi, m)).set({ udi, mesic: m, dny: zapis }, { merge: true })
+    .then(() => toast('Označeno ' + pocet + ' dní ✓'))
+    .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
+}
+
+/* ---- poznamky u cloveka ----
+   Vlastni kolekce, ne poznamky ke stavbe: tohle jsou veci jako "dluzne
+   najemne", "velikost bot", "nechce jezdit s Ruslanem" — cte je jen vedeni. */
+async function pozOsobPridat(udi) {
+  const t = ($('#poz-novy') || {}).value || '';
+  if (!t.trim()) { toast('Napiš text poznámky.'); return; }
+  await db.collection('poznamky_osob').add({
+    udi, text: t.trim(), kdo: fullName(S.me || {}).trim() || 'vedení', kdy: isoToday(), createdAt: FV()
+  }).then(() => { zapomen('poz-novy'); S.pozOsobForm = false; render(); toast('Poznámka uložena ✓'); })
+    .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
+}
+async function pozOsobUlozit(id) {
+  const t = ($('#poz-e-' + id) || {}).value || '';
+  if (!t.trim()) { toast('Poznámka nesmí být prázdná — smaž ji košem.'); return; }
+  await db.collection('poznamky_osob').doc(id).update({
+    text: t.trim(), kdo: fullName(S.me || {}).trim() || 'vedení', kdy: isoToday()
+  }).then(() => { S.pozOsobEdit = null; render(); zapomen('poz-e-' + id); toast('Uloženo ✓'); })
+    .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
+}
+async function pozOsobSmazat(id) {
+  const p = (S.pozOsob || []).find(x => x.id === id); if (!p) return;
+  if (!await potvrd('Smazat poznámku?\n\n„' + String(p.text).slice(0, 120) + '"', '🗑 Smazat')) return;
+  await db.collection('poznamky_osob').doc(id).delete()
+    .catch(e => toast('Nejde smazat: ' + (e.code || e.message)));
+}
+
+/* ---- otevreni karty ---- */
+function otevriOsobu(udi) {
+  S.osobaId = udi;
+  S.osobaTab = S.osobaTab || 'hodiny';
+  S.osobaMesic = S.osobaMesic || mesicTed();
+  S.view = 'osoba'; S.detail = null;
+  osobaDotahni();
+  render();
+}
+/* Mesic muze byt starsi nez zive okno (30 dni) — bez dotazeni by karta
+   ukazala nuly a vypadalo by to, ze clovek nedelal. */
+async function osobaDotahni() {
+  const m = S.osobaMesic;
+  await dotahniDochazku(mesicPrvni(m), mesicPosledni(m));
+}
+function osobaMesicPosun(k) {
+  S.osobaMesic = mesicPosun(S.osobaMesic || mesicTed(), k);
+  osobaDotahni();
+  render();
+}
+function osobaTab(t) { S.osobaTab = t; render(); }
+
+function pgOsoba() {
+  const u = userById(S.osobaId);
+  if (!u) return `<main><div class="card"><div class="empty">Uživatel už neexistuje.
+    <br><button class="btn ghost sm" style="margin-top:8px" onclick="goPage('uzivatele')">← Zpět na uživatele</button></div></div></main>`;
+  const t = S.osobaTab || 'hodiny';
+  const s = S.sazby[u.id];
+  return `
+  <div class="strip">
+    <button class="btn ghost sm" onclick="goPage('uzivatele')">←</button>
+    <h1>${esc(fullName(u))}</h1>
+    <span class="muted">${esc(u.role || '')}</span>
+    <span class="sp"></span>
+    ${s && s.h ? `<span class="badge b-wait">${s.h} Kč/h</span>${s.c ? ` <span class="badge b-ok">čistá ${s.c}</span>` : ''}` : ''}
+    <button class="btn ghost sm" onclick="editUser('${u.id}')">✏️ Upravit údaje</button>
+  </div>
+  <div class="sectabs">
+    <div class="t ${t === 'hodiny' ? 'active' : ''}" onclick="osobaTab('hodiny')">💰 Hodiny a výplata</div>
+    <div class="t ${t === 'poznamky' ? 'active' : ''}" onclick="osobaTab('poznamky')">📝 Poznámky${(S.pozOsob || []).filter(p => p.udi === u.id).length ? ' · ' + (S.pozOsob || []).filter(p => p.udi === u.id).length : ''}</div>
+    <div class="t ${t === 'zaznamy' ? 'active' : ''}" onclick="osobaTab('zaznamy')">🕒 Záznamy</div>
+  </div>
+  <main>
+    ${t === 'hodiny' ? osobaHodiny(u) : t === 'poznamky' ? osobaPoznamky(u) : osobaZaznamy(u)}
+  </main>`;
+}
+
+function osobaHodiny(u) {
+  const m = S.osobaMesic || mesicTed();
+  const od = mesicPrvni(m), doo = mesicPosledni(m);
+  const dny = osobaDny(u.id, od, doo);
+  const vyp = vyplatyDne(u.id, m);
+  const posledni = Number(doo.slice(8));
+  let cH = 0, cHruba = 0, cCista = 0, cVypl = 0, cZbyva = 0, chybiSazba = 0;
+  const radky = [];
+  for (let i = 1; i <= posledni; i++) {
+    const den = m + '-' + String(i).padStart(2, '0');
+    const dt = new Date(den);
+    const vikend = dt.getDay() === 0 || dt.getDay() === 6;
+    const d = dny[den];
+    const v = vyp[den];
+    let hruba = 0, cista = 0, bezSazby = false;
+    if (d && d.h) {
+      const p = penizeZaHodiny(u.id, { h: d.h, poDnech: [{ den, h: d.h }] });
+      hruba = p.hruba; cista = p.cista; bezSazby = !p.sazby.length;
+      cH += d.h;
+      /* Uz vyplaceny den se do souctu bere castkou, ktera se opravdu
+         vyplatila — ne dnesnim prepoctem. */
+      cHruba += v ? v.hruba : hruba;
+      cCista += v ? v.cista : cista;
+      if (v) cVypl += v.hruba; else cZbyva += hruba;
+      if (bezSazby) chybiSazba++;
+    }
+    radky.push(`<tr style="${vikend ? 'background:var(--int-soft)' : ''}${v ? ';opacity:.72' : ''}">
+      <td style="white-space:nowrap"><b>${i}.</b></td>
+      <td class="muted">${DAYS[dt.getDay()]}</td>
+      <td>${d && d.h ? `<b>${fmtH(d.h)}</b>${d.pauzaMin ? `<br><span class="muted" style="font-size:11px">− pauza ${d.pauzaMin} min</span>` : ''}${d.nedokonceno ? '<br><span class="badge b-red">neúplný den</span>' : ''}` : '<span class="muted">—</span>'}</td>
+      <td>${!d || !d.h ? ''
+        /* Uz vyplaceny den ukazuje ZMRAZENOU castku, ne dnesni prepocet —
+           jinak by se pri zpetne zmene sazby tise rozesel s tim, co clovek
+           opravdu dostal. */
+        : v ? `<b>${kc(v.hruba)} Kč</b>${v.cista && v.cista !== v.hruba ? `<br><span class="muted" style="font-size:11px">čistá ${kc(v.cista)}</span>` : ''}`
+        : bezSazby ? '<span class="badge b-red">chybí sazba</span>'
+        : `<b>${kc(hruba)} Kč</b>${cista && Math.round(cista) !== Math.round(hruba) ? `<br><span class="muted" style="font-size:11px">čistá ${kc(cista)}</span>` : ''}`}</td>
+      <td class="muted" style="font-size:11.5px">${d ? d.pidy.map(pid => esc((proj(pid) || {}).name || '')).filter(Boolean).join(', ') : ''}</td>
+      <td style="white-space:nowrap">${d && d.h ? `
+        <input type="checkbox" ${v ? 'checked' : ''} onclick="vyplatuPrepni('${u.id}','${m}','${den}')">
+        ${v ? `<br><span class="muted" style="font-size:10.5px" title="Označil(a) ${esc(v.kdo || '')} ${fmtISO(v.kdy)}">${kc(v.hruba)} Kč ✓</span>` : ''}` : ''}</td>
+    </tr>`);
+  }
+  return `
+  <div class="card">
+    <div class="aprv" style="align-items:center;justify-content:space-between">
+      <button class="btn ghost sm" onclick="osobaMesicPosun(-1)">‹ Předchozí měsíc</button>
+      <b style="font-size:16px">${mesicNazev(m)}</b>
+      <button class="btn ghost sm" onclick="osobaMesicPosun(1)">Následující měsíc ›</button>
+    </div>
+  </div>
+  ${chybiSazba ? `<div class="note" style="color:var(--red)">⚠ <b>${chybiSazba} ${chybiSazba === 1 ? 'dni chybí sazba' : 'dnům chybí sazba'}.</b>
+    Za ty dny se nedají spočítat peníze ani je označit za vyplacené. Doplň sazbu v kartě uživatele (✏️ Upravit údaje) — historie sazeb umí i zpětnou platnost.</div>` : ''}
+  <div class="tablecard">
+    <div style="overflow-x:auto"><table>
+      <tr><th>Datum</th><th>Den</th><th>Hodiny</th><th>Výplata</th><th>Stavba</th><th>Vyplaceno</th></tr>
+      ${radky.join('')}
+      <tr style="background:#e8f5ec;font-weight:700">
+        <td colspan="2">Celkem</td>
+        <td>${fmtH(cH)}</td>
+        <td>${kc(cHruba)} Kč${cCista && Math.round(cCista) !== Math.round(cHruba) ? `<br><span style="color:var(--ok);font-size:12px">čistá ${kc(cCista)} Kč</span>` : ''}</td>
+        <td></td><td></td>
+      </tr>
+    </table></div>
+    <div class="pagefoot" style="gap:18px;flex-wrap:wrap">
+      <span>Vyplaceno: <b>${kc(cVypl)} Kč</b></span>
+      <span>Zbývá vyplatit: <b style="color:${cZbyva ? 'var(--red)' : 'var(--ok)'}">${kc(cZbyva)} Kč</b></span>
+    </div>
+  </div>
+  <div class="aprv">
+    <button class="btn amber" onclick="vyplatitZbytekMesice('${u.id}','${m}')" ${cZbyva ? '' : 'disabled'}>✓ OZNAČIT ZBYTEK MĚSÍCE JAKO VYPLACENÝ</button>
+    <button class="btn ghost" onclick="osobaExport('${u.id}','${m}')">⬇ Export CSV</button>
+  </div>
+  <div class="note">Zaškrtnutí u dne znamená <b>„tenhle den je zaplacený"</b> — uloží se částka, kdo to označil a kdy.
+    Když se sazba později změní zpětně, už vyplacený den se nepřepočítá; člověk dostal, co dostal.
+    Hodiny se berou ze schválené docházky, směna přes půlnoc patří ke dni příchodu.</div>`;
+}
+function osobaExport(udi, m) {
+  const u = userById(udi) || {};
+  const od = mesicPrvni(m), doo = mesicPosledni(m);
+  const dny = osobaDny(udi, od, doo);
+  const vyp = vyplatyDne(udi, m);
+  let csv = repCsvRadek(['Datum', 'Den', 'Hodiny', 'Kc hruba', 'Kc cista', 'Vyplaceno', 'Oznacil', 'Kdy']);
+  let cH = 0, cHruba = 0, cCista = 0;
+  const posledni = Number(doo.slice(8));
+  for (let i = 1; i <= posledni; i++) {
+    const den = m + '-' + String(i).padStart(2, '0');
+    const d = dny[den]; if (!d || !d.h) continue;
+    const v = vyp[den];
+    const p = penizeZaHodiny(udi, { h: d.h, poDnech: [{ den, h: d.h }] });
+    const hruba = v ? v.hruba : Math.round(p.hruba);
+    const cista = v ? v.cista : Math.round(p.cista);
+    cH += d.h; cHruba += hruba; cCista += cista;
+    csv += repCsvRadek([den, DAYS[new Date(den).getDay()], repCsvCislo(d.h.toFixed(2)),
+                        hruba, cista, v ? 'ano' : 'ne', v ? (v.kdo || '') : '', v ? (v.kdy || '') : '']);
+  }
+  csv += repCsvRadek(['CELKEM', '', repCsvCislo(cH.toFixed(2)), Math.round(cHruba), Math.round(cCista), '', '', '']);
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,﻿' + encodeURIComponent(csv);
+  a.download = 'hodiny_' + (u.prijmeni || 'clovek') + '_' + m + '.csv'; a.click();
+}
+
+function osobaPoznamky(u) {
+  const pz = (S.pozOsob || []).filter(p => p.udi === u.id)
+    .slice().sort((a, b) => String(b.kdy || '').localeCompare(String(a.kdy || '')));
+  return `
+  <div class="card">
+    <h3>📝 Poznámky k člověku <span class="muted" style="font-weight:400;font-size:13px;margin-left:auto">vidí jen vedení</span></h3>
+    ${S.pozOsobForm ? `
+      <label>Nová poznámka</label>
+      <textarea id="poz-novy" placeholder="Např. dluží nájemné za únor 6 000 Kč — sráží se po 2 000 měsíčně." style="min-height:70px"></textarea>
+      <div class="aprv"><button class="btn amber sm" onclick="pozOsobPridat('${u.id}')">💾 Uložit</button>
+        <button class="btn ghost sm" onclick="S.pozOsobForm=false;render()">Zrušit</button></div>`
+      : `<div class="aprv"><button class="btn amber sm" onclick="S.pozOsobForm=true;render()">➕ Přidat poznámku</button></div>`}
+  </div>
+  ${pz.length ? pz.map(p => `
+    <div class="card">
+      ${S.pozOsobEdit === p.id ? `
+        <textarea id="poz-e-${p.id}" style="min-height:70px">${esc(p.text)}</textarea>
+        <div class="aprv"><button class="btn amber sm" onclick="pozOsobUlozit('${p.id}')">💾 Uložit</button>
+          <button class="btn ghost sm" onclick="S.pozOsobEdit=null;render()">Zrušit</button></div>`
+        : `<div style="white-space:pre-wrap">${esc(p.text)}</div>
+        <div class="urow" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
+          <span class="muted" style="font-size:12px">${esc(p.kdo || '')} · ${fmtISO(p.kdy)}</span>
+          <span class="sp" style="margin-left:auto"></span>
+          <span class="lnk" onclick="S.pozOsobEdit='${p.id}';render()">✏️</span>
+          <span class="lnk" style="margin-left:10px" onclick="pozOsobSmazat('${p.id}')">🗑</span>
+        </div>`}
+    </div>`).join('')
+    : '<div class="card"><div class="empty">Zatím žádná poznámka.</div></div>'}`;
+}
+
+function osobaZaznamy(u) {
+  const m = S.osobaMesic || mesicTed();
+  const od = mesicPrvni(m), doo = mesicPosledni(m);
+  const rows = S.attendance.filter(a => a.userDocId === u.id && a.date >= od && a.date <= doo)
+    .slice().sort((a, b) => ((b.date || '') + (b.time || '')).localeCompare((a.date || '') + (a.time || '')));
+  return `
+  <div class="card">
+    <div class="aprv" style="align-items:center;justify-content:space-between">
+      <button class="btn ghost sm" onclick="osobaMesicPosun(-1)">‹ Předchozí měsíc</button>
+      <b style="font-size:16px">${mesicNazev(m)}</b>
+      <button class="btn ghost sm" onclick="osobaMesicPosun(1)">Následující měsíc ›</button>
+    </div>
+  </div>
+  <div class="tablecard">
+    <div style="overflow-x:auto"><table>
+      <tr><th>Datum a čas</th><th>Činnost</th><th>Na stavbě</th><th>GPS odchylka</th><th>Foto</th><th></th></tr>
+      ${rows.map(a => `
+      <tr${a.gpsProvereno ? ' style="opacity:.62"' : ''}>
+        <td style="white-space:nowrap">${fmtISO(a.date)} ${a.time}${a.pauza ? `<br><span class="badge b-int">🥪 pauza ${a.pauza} min · ručně</span>` : ''}${a.upraveno ? `<br><span class="badge b-wait" title="${esc(a.upraveno.duvod || '')}">✏️ opraveno — ${esc(a.upraveno.kdo || '')}</span>` : ''}${a.zapsal ? `<br><span class="badge b-wait">✍ zapsalo vedení — ${esc(a.zapsal.kdo || '')}</span>` : ''}${a.schvaleno === false ? '<br><span class="badge b-red">čeká na schválení</span>' : ''}</td>
+        <td><span class="badge ${a.akce === 'Příchod' ? 'b-ok' : 'b-int'}">${esc(a.akce || '')}</span></td>
+        <td>${esc((proj(a.pid) || {}).name || a.projName || '')}</td>
+        <td>${gpsBunka(a)}</td>
+        <td>${a.selfie ? `<img src="${a.selfie}" style="width:34px;height:34px;border-radius:50%;object-fit:cover;cursor:pointer" onclick="openPhoto('${a.selfieDriveId || ''}','ověřovací foto — ${esc(a.userName || '')}',this.parentElement)">` : a.manual ? '<span class="badge b-wait">admin</span>' : '<b style="color:var(--red)">chybí</b>'}</td>
+        <td style="white-space:nowrap">
+          ${gpsPodezrela(a) ? `<button class="btn ok sm" title="Poloha je v pořádku — odbavit" onclick="attGpsProvereno('${a.id}')">✓</button>` : ''}
+          <button class="btn ghost sm" title="Opravit" onclick="attUpravitForm('${a.id}')">✏️</button>
+          <button class="btn ghost sm" title="Smazat" onclick="attSmazat('${a.id}')">🗑</button>
+        </td>
+      </tr>`).join('') || `<tr><td colspan="6"><div class="empty">Za ${mesicNazev(m)} tu není žádné píchnutí.</div></td></tr>`}
+    </table></div>
+    <div class="pagefoot"><span>${rows.length} záznamů</span></div>
+  </div>
+  <div class="note">Stejné záznamy jsou i v <b>Organizaci</b> — tady jsou jen ty jeho a po měsících, ať se dá zpětně dohledat spor o hodiny.</div>`;
+}
+
 function pgUzivatele() {
   const JMENOVCI = jmenovciMapa();
   const jsouJmenovci = Object.keys(JMENOVCI).some(k => JMENOVCI[k] > 1);
@@ -4534,7 +4937,7 @@ function pgUzivatele() {
         ${uzFiltrovani().map(u => { const t = u.typ || {}; const s = S.sazby[u.id]; return `
         <tr style="${u.active === false ? 'opacity:.5' : ''}">
           <td><span class="uav">${ini(u)}</span></td>
-          <td><b>${esc(fullName(u))}</b>${(JMENOVCI[jmenoKlic(u)] || 1) > 1
+          <td><b class="lnk" style="color:inherit" title="Otevřít kartu — hodiny, výplata, poznámky, záznamy" onclick="otevriOsobu('${u.id}')">${esc(fullName(u))}</b>${(JMENOVCI[jmenoKlic(u)] || 1) > 1
             ? `<br><span class="badge b-red" style="margin-top:3px">⚠ ${JMENOVCI[jmenoKlic(u)] === 2 ? 'Dva účty' : JMENOVCI[jmenoKlic(u)] + (JMENOVCI[jmenoKlic(u)] < 5 ? ' účty' : ' účtů')} se stejným jménem</span>` : ''}</td>
           <td class="muted">${esc(kontaktOsoby(u.id).email || '—')}</td>
           <td style="text-align:center">${t.kanc ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>

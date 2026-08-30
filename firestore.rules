@@ -7,6 +7,16 @@
 //  Živá verze: Firebase konzole → Firestore → Rules
 //  Když se změní tam, změň i tady, ať kopie nezastará.
 //
+//  Poslední změna 30. 8. 2026 (karta člověka):
+//  17) Přibyly dvě kolekce, obě jen pro vedení:
+//      /vyplaty/{userDocId}_{RRRR-MM} — které dny už jsou zaplacené, za
+//      kolik, kdo to označil a kdy. Částka se zmrazí, aby zpětná změna
+//      sazby nepřepsala to, co člověk opravdu dostal.
+//      /poznamky_osob/{id} — poznámky vedení ke konkrétnímu člověku
+//      (dluhy, srážky, domluvy). Poznámky ke STAVBĚ zůstávají v /poznamky.
+//      Obojí je read i write jen isAdmin() — parta si nesmí číst navzájem
+//      výplaty ani poznámky o sobě.
+//
 //  Poslední změna 29. 8. 2026 (úkoly):
 //  16) /tasks update: přibyla druhá větev pro ZADAVATELE. Rozhodnutí Marca —
 //      „úkoly může upravovat vedení a člověk, co je zadal." Do bodu 10 se
@@ -158,6 +168,20 @@ service cloud.firestore {
     }
 
     match /sazby/{id} {
+      allow read, write: if isAdmin();
+    }
+
+    // Vyplacene dny (karta cloveka). Jeden dokument na cloveka a mesic,
+    // uvnitr mapa dnu s castkou, kdo to oznacil a kdy. Peníze konkretniho
+    // cloveka nesmi videt nikdo krome vedeni — ani on sam, jinak by si
+    // parta navzajem cetla vyplaty.
+    match /vyplaty/{id} {
+      allow read, write: if isAdmin();
+    }
+
+    // Poznamky k lidem (dluhy, srazky, domluvy). Citlive uz z podstaty —
+    // jen vedeni. Poznamky ke STAVBE jsou jinde, v /poznamky.
+    match /poznamky_osob/{id} {
       allow read, write: if isAdmin();
     }
 
