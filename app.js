@@ -219,6 +219,7 @@ const S = {
   klice: [],
   /* karta cloveka (viz sekce KARTA CLOVEKA): kdo je otevreny, ktera zalozka
      a ktery mesic. Vyplacene dny a poznamky k lidem cte jen vedeni. */
+  harmoTab: 'stavby', harmoPosun: 0,
   osobaId: null, osobaTab: 'hodiny', osobaMesic: null,
   vyplaty: [], pozOsob: [], pozOsobForm: false, pozOsobEdit: null, uzHledat: '',
   /* galerie fotek (viz sekce GALERIE FOTEK): filtry a kolik dlazdic uz kreslime */
@@ -1844,6 +1845,7 @@ function sidebar() {
   const items = [
     { k: 'nastenka', ic: '📊', t: 'Nástěnka' },
     { k: 'projekty', ic: '🛠️', t: 'Projekty' },
+    { k: 'harmonogram', ic: '📅', t: 'Harmonogram', bdg: etapyVeSkluzu().length || '' },
     { k: 'denik', ic: '📓', t: 'Stavební deník' },
     { k: 'fotky', ic: '🖼', t: 'Fotky' },
     { k: 'schvaleni', ic: '✅', t: 'Schvalování', bdg: n || '' },
@@ -1873,6 +1875,7 @@ function viewAdmin() {
   else if (S.view === 'novy') body = pgNovy();
   else if (S.view === 'uzivatele') body = pgUzivatele();
   else if (S.view === 'osoba') body = pgOsoba();
+  else if (S.view === 'harmonogram') body = pgHarmonogram();
   else if (S.view === 'newuser') body = pgNewUser();
   else if (S.view === 'organizace') body = pgOrganizace();
   else if (S.view === 'ukoly') body = pgUkoly();
@@ -2360,10 +2363,11 @@ function pgProjDetail() {
               ${[0, 25, 50, 75, 100].map(v => `<button onclick="setMilePct('${p.id}',${i},${v})" style="width:40px;padding:4px 0;border:1px solid var(--line);border-radius:7px;cursor:pointer;font-size:12px;${v === pct ? 'background:var(--amber);font-weight:700' : 'background:var(--int-soft)'}">${v}</button>`).join('')}
               <span class="muted" style="font-size:11px">${pct} %</span>
             </div>
+            <div style="margin-top:5px">${mileTerminRadek(p, m, i)}</div>
           </div>
           <span class="lnk" style="font-size:11px" onclick="delMile('${p.id}',${i})">✕</span></div>`; }).join('') || '<div class="empty">Zatím žádné milníky.</div>'}
         <div class="aprv"><input type="text" id="mile-t" placeholder="Nový milník…" style="max-width:260px"><button class="btn ghost sm" onclick="addMile('${p.id}')">➕ Přidat</button></div>
-        <div class="note">Postup milníku nastavíš tlačítky, kolečko odškrtne hotovo. Průběh stavby (%) je průměr milníků a fáze = první nedokončený milník. Milníky vidí investor na portálu.</div>
+        <div class="note">Postup milníku nastavíš tlačítky, kolečko odškrtne hotovo. Průběh stavby (%) je průměr milníků a fáze = první nedokončený milník. Milníky vidí investor na portálu.<br><b>📅 naplánovat</b> přidá milníku termín a lidi — teprve pak se z něj stane etapa a nakreslí se v sekci <b>Harmonogram</b>.</div>
       </div>
     </div></main>`;
   } else if (t === 'media') {
@@ -2708,6 +2712,291 @@ async function prejmenujMile(pid, i) {
   toast('Milník přejmenován ✓');
 }
 
+
+/* ================= HARMONOGRAM =================
+   Milnik dostal termin (od, do) a lidi (kdo) — a tim se z nej stala ETAPA,
+   kterou jde nakreslit na casovou osu. Data jsou jedna, pohledy dva:
+
+   · PODLE STAVEB — radek je stavba, pruhy jsou jeji etapy.
+     Odpovida klientovi na "kdy to bude hotove".
+   · PODLE LIDI — radek je clovek, pruhy jsou etapy, na kterych ma byt.
+     Odpovida na "kam v pondeli koho poslu" a hlavne ZAKRICI, kdyz je nekdo
+     naplanovany na dve stavby naraz. To je duvod, proc to vzniklo.
+
+   Rozhodnuti Marca 30. 8.: planuje se na JEDNOTLIVE LIDI, ne na party.
+   Jedna etapa proto nese pole lidi — omitky u Saska = Ruslan + dva jeho.
+   Sablony etap zatim nedelame, zacina se rucnim naklikanim.
+
+   Milniky bez terminu se chovaji presne jako driv a v harmonogramu se
+   nekresli — stara data nikde nespadnou a nic se nemusi doplnovat naraz. */
+
+/* ---- prace s datem ---- */
+/* 'RRRR-MM-DD' se parsuje jako UTC pulnoc, takze rozdil je vzdy presny
+   nasobek dne — letni cas do toho nemluvi. */
+function denCislo(iso) { return Math.round(new Date(iso + 'T00:00:00Z').getTime() / 86400000); }
+function pocetDnu(od, doo) { return denCislo(doo) - denCislo(od) + 1; }
+/* Pondeli daneho tydne. */
+function pondeli(iso) {
+  const d = new Date(iso + 'T00:00:00Z');
+  const posun = (d.getUTCDay() + 6) % 7;          /* pondeli = 0 */
+  return shiftISO(iso, -posun);
+}
+
+/* ---- etapa ---- */
+function etapaNaplanovana(m) { return !!(m && m.od && m.do && m.od <= m.do); }
+function etapaLide(m) { return Array.isArray(m && m.kdo) ? m.kdo : []; }
+/* Stav etapy pro barvu pruhu. Skluz se pozna sam: termin je pryc a neni
+   sto procent — nikdo to nemusi hlasit. */
+function etapaStav(m) {
+  const pct = milePct(m);
+  if (pct === 100) return 'done';
+  if (m.do && m.do < isoToday()) return 'late';
+  if (pct > 0 || (m.od && m.od <= isoToday())) return 'now';
+  return 'next';
+}
+/* Vsechny naplanovane etapy napric stavbami, kazda vi, odkud je. */
+function vsechnyEtapy() {
+  const out = [];
+  S.projects.forEach(p => (p.milestones || []).forEach((m, i) => {
+    if (etapaNaplanovana(m)) out.push({ ...m, i, pid: p.id, projekt: p.name || '', cn: p.cn || '' });
+  }));
+  return out.sort((a, b) => a.od < b.od ? -1 : a.od > b.od ? 1 : 0);
+}
+/* Etapy po terminu, ktere nejsou hotove — pro dlazdici na nastence. */
+function etapyVeSkluzu() {
+  return vsechnyEtapy().filter(e => etapaStav(e) === 'late');
+}
+
+/* ---- okno casove osy ----
+   Vychozi pohled: pondeli dva tydny zpet a dvanact tydnu dopredu. Sipky
+   posouvaji po ctyrech tydnech, at se da dojet i na jaro. */
+const HARMO_TYDNU = 12;
+function harmoZacatek() {
+  return pondeli(shiftISO(isoToday(), -14 + 7 * (S.harmoPosun || 0)));
+}
+function harmoKonec() { return shiftISO(harmoZacatek(), HARMO_TYDNU * 7 - 1); }
+/* Umisteni pruhu v procentech sirky osy; null = etapa je uplne mimo okno. */
+function harmoPruh(od, doo) {
+  const z = denCislo(harmoZacatek()), k = denCislo(harmoKonec()) + 1;
+  const a = Math.max(denCislo(od), z), b = Math.min(denCislo(doo) + 1, k);
+  if (b <= a) return null;
+  const celkem = k - z;
+  return { left: (a - z) / celkem * 100, width: (b - a) / celkem * 100,
+           uriznutoVlevo: denCislo(od) < z, uriznutoVpravo: denCislo(doo) + 1 > k };
+}
+function harmoTydny() {
+  const out = [];
+  for (let i = 0; i < HARMO_TYDNU; i++) {
+    const d = shiftISO(harmoZacatek(), i * 7);
+    const [, m, den] = d.split('-');
+    out.push({ iso: d, popis: Number(den) + '. ' + Number(m) + '.' });
+  }
+  return out;
+}
+function harmoDnesLeft() {
+  const p = harmoPruh(isoToday(), isoToday());
+  return p ? p.left : null;
+}
+
+/* ---- kolize: jeden clovek na dvou stavbach naraz ----
+   Poctive se to musi pocitat pres VSECHNY etapy, ne jen pres ty v okne —
+   jinak by kolize zmizela, jakmile uzivatel posune osu. */
+function kolizeCloveka(udi) {
+  const moje = vsechnyEtapy().filter(e => etapaLide(e).indexOf(udi) >= 0);
+  const kolidujici = new Set();
+  for (let a = 0; a < moje.length; a++) {
+    for (let b = a + 1; b < moje.length; b++) {
+      /* dve etapy na RUZNYCH stavbach, ktere se casove prekryvaji */
+      if (moje[a].pid === moje[b].pid) continue;
+      if (moje[a].od <= moje[b].do && moje[b].od <= moje[a].do) {
+        kolidujici.add(moje[a].pid + '|' + moje[a].i);
+        kolidujici.add(moje[b].pid + '|' + moje[b].i);
+      }
+    }
+  }
+  return kolidujici;
+}
+
+/* ---- plánovací okénko u etapy ---- */
+function mileTerminForm(pid, i) {
+  const p = proj(pid); const m = ((p || {}).milestones || [])[i]; if (!m) return;
+  /* Nabizi se parta i subdodavatele — obojí na stavbe fyzicky je. Vedeni
+     a investori ne. Neaktivni clovek se nabidne jen tehdy, kdyz uz na
+     etape je, at ho z ni jde odebrat. */
+  const vybrani = etapaLide(m);
+  const lide = S.users.filter(u => {
+    const ty = u.typ || {};
+    if (!ty.teren && !ty.sub) return false;
+    return u.active !== false || vybrani.indexOf(u.id) >= 0;
+  }).sort((a, b) => fullName(a).localeCompare(fullName(b), 'cs'));
+  modal(`<h3>📅 Naplánovat etapu „${esc(m.t || '')}"</h3>
+    <div class="frow">
+      <div><label>Od</label><input type="date" id="et-od" value="${esc(m.od || isoToday())}"></div>
+      <div><label>Do</label><input type="date" id="et-do" value="${esc(m.do || shiftISO(isoToday(), 6))}"></div>
+    </div>
+    <label>Kdo na tom bude</label>
+    <div class="chipselect" id="et-lide">
+      ${lide.map(u => `<button type="button" class="${vybrani.indexOf(u.id) >= 0 ? 'active' : ''}"
+        onclick="this.classList.toggle('active')" data-id="${u.id}">${esc(fullName(u))}</button>`).join('')
+        || '<span class="muted">Žádní lidé v partě ani subdodavatelé.</span>'}
+    </div>
+    <div class="note">Vyber i víc lidí — omítky bývají celá parta. Kdo je vybraný, uvidí tuhle etapu ve svém řádku harmonogramu a aplikace hlídá, ať není ve stejný týden na dvou stavbách.</div>
+    <div class="aprv"><button class="btn amber" onclick="ulozMileTermin('${pid}',${i})">💾 Uložit</button>
+      ${etapaNaplanovana(m) ? `<button class="btn ghost" onclick="zrusMileTermin('${pid}',${i})">✕ Zrušit naplánování</button>` : ''}
+      <button class="btn ghost" onclick="closeModal()">Zavřít</button></div>`);
+}
+async function ulozMileTermin(pid, i) {
+  const od = ($('#et-od') || {}).value || '', doo = ($('#et-do') || {}).value || '';
+  if (!od || !doo) { toast('Vyplň obě data.'); return; }
+  if (od > doo) { toast('„Do" nesmí být dřív než „od".'); return; }
+  const kdo = [...document.querySelectorAll('#et-lide button.active')].map(b => b.dataset.id);
+  const p = proj(pid); const ms = (p.milestones || []).map(x => ({ ...x }));
+  if (!ms[i]) return;
+  ms[i].od = od; ms[i].do = doo; ms[i].kdo = kdo;
+  await ulozMilniky(pid, ms).then(() => { closeModal(); toast('Naplánováno ✓'); })
+    .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
+}
+async function zrusMileTermin(pid, i) {
+  const p = proj(pid); const ms = (p.milestones || []).map(x => ({ ...x }));
+  if (!ms[i]) return;
+  if (!await potvrd('Zrušit naplánování etapy „' + (ms[i].t || '') + '"?\n\n'
+    + 'Etapa zůstane i s procentem hotovo, jen zmizí z harmonogramu.', 'Ano, zrušit')) return;
+  delete ms[i].od; delete ms[i].do; delete ms[i].kdo;
+  await ulozMilniky(pid, ms).then(() => { closeModal(); toast('Naplánování zrušeno'); })
+    .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
+}
+/* Radek pod milnikem v detailu projektu — bud termin s lidmi, nebo vyzva. */
+function mileTerminRadek(p, m, i) {
+  if (!etapaNaplanovana(m)) {
+    return `<span class="lnk" style="font-size:11.5px" onclick="mileTerminForm('${p.id}',${i})">📅 naplánovat</span>`;
+  }
+  const jmena = etapaLide(m).map(id => fullName(userById(id) || {})).filter(s => s.trim());
+  const skluz = etapaStav(m) === 'late';
+  return `<span class="lnk" style="font-size:11.5px${skluz ? ';color:var(--red);font-weight:700' : ''}"
+    onclick="mileTerminForm('${p.id}',${i})" title="Upravit termín a lidi">📅 ${fmtISO(m.od)} – ${fmtISO(m.do)}${skluz ? ' ⚠ skluz' : ''}</span>
+    ${jmena.length ? `<span class="muted" style="font-size:11.5px"> · ${esc(jmena.join(', '))}</span>`
+      : '<span class="muted" style="font-size:11.5px"> · nikdo nepřiřazen</span>'}`;
+}
+
+/* ---- stránka ---- */
+function pgHarmonogram() {
+  const t = S.harmoTab || 'stavby';
+  const etapy = vsechnyEtapy();
+  const skluz = etapyVeSkluzu();
+  return `
+  <div class="strip"><h1>Harmonogram</h1><span class="sp"></span>
+    <button class="btn ghost sm" onclick="S.harmoPosun=(S.harmoPosun||0)-4;render()">‹ zpět</button>
+    <button class="btn ghost sm" onclick="S.harmoPosun=0;render()">dnes</button>
+    <button class="btn ghost sm" onclick="S.harmoPosun=(S.harmoPosun||0)+4;render()">dál ›</button></div>
+  <div class="sectabs">
+    <div class="t ${t === 'stavby' ? 'active' : ''}" onclick="S.harmoTab='stavby';render()">🏗 Podle staveb</div>
+    <div class="t ${t === 'lide' ? 'active' : ''}" onclick="S.harmoTab='lide';render()">👷 Podle lidí</div>
+  </div>
+  <main>
+    ${skluz.length ? `<div class="inote" style="border-color:var(--red)">
+      <b style="color:var(--red)">⚠ ${skluz.length} ${skluz.length === 1 ? 'etapa je' : skluz.length < 5 ? 'etapy jsou' : 'etap je'} ve skluzu.</b>
+      ${skluz.map(e => `<div class="urow" style="border:0;padding:4px 0">
+        <span>🏗</span><b>${esc(e.projekt)}</b>
+        <span class="muted">${esc(e.t || '')} — mělo skončit ${fmtISO(e.do)}, je na ${milePct(e)} %</span>
+      </div>`).join('')}</div>` : ''}
+    ${!etapy.length ? `<div class="card"><div class="empty">📅 Zatím není naplánovaná žádná etapa.
+      <br><span class="muted">Otevři stavbu → záložka Portál a harmonogram → u milníku ťukni <b>📅 naplánovat</b> a zadej od, do a kdo na tom bude.</span></div></div>`
+      : t === 'stavby' ? harmoPodleStaveb() : harmoPodleLidi()}
+    <div class="note">Etapa bez termínu se nekreslí — milníky, které nikdo nenaplánoval, fungují dál jako dřív.
+      Barva pruhu se počítá sama: <b>zelená</b> hotovo, <b>oranžová</b> probíhá, <b>šedá</b> čeká,
+      <b>červená</b> mělo skončit a hotové to není.</div>
+  </main>`;
+}
+
+/* Hlavicka s tydny — spolecna pro oba pohledy. */
+function harmoHlavicka(popisSloupce) {
+  const dnes = harmoDnesLeft();
+  return `<div class="hrow hhdr">
+    <div class="hlab">${esc(popisSloupce)}</div>
+    <div class="htrack">
+      ${harmoTydny().map(w => `<div class="hwk">${w.popis}</div>`).join('')}
+      ${dnes != null ? `<div class="hdnes hlabeled" style="left:${dnes}%"></div>` : ''}
+    </div>
+  </div>`;
+}
+function harmoPruhHtml(e, tridaNavic, popis) {
+  const g = harmoPruh(e.od, e.do); if (!g) return '';
+  const stav = etapaStav(e);
+  const pct = milePct(e);
+  const tr = { done: 'hb-done', now: 'hb-now', next: 'hb-next', late: 'hb-late' }[stav];
+  return `<div class="hbar ${tr} ${tridaNavic || ''}" style="left:${g.left}%;width:${g.width}%"
+      title="${esc(e.t || '')} · ${fmtISO(e.od)} – ${fmtISO(e.do)} · ${pct} %"
+      onclick="otevriEtapu('${e.pid}',${e.i})">
+      ${pct > 0 && pct < 100 ? `<div class="hfill" style="width:${pct}%"></div>` : ''}
+      <span>${esc(popis)}</span></div>`;
+}
+/* Harmonogram stavby (milniky s terminy) bydli na zalozce Zakladni informace. */
+function otevriEtapu(pid) { S.projDetailId = pid; S.projDetailTab = 'info'; S.view = 'projdetail'; render(); }
+
+function harmoPodleStaveb() {
+  const dnes = harmoDnesLeft();
+  const stavby = S.projects.filter(p => (p.milestones || []).some(etapaNaplanovana));
+  return `<div class="chartcard"><div class="hscroll"><div class="hgantt">
+    ${harmoHlavicka('Stavba')}
+    ${stavby.map(p => {
+      const etapy = (p.milestones || []).map((m, i) => ({ ...m, i, pid: p.id })).filter(etapaNaplanovana);
+      return `<div class="hrow">
+        <div class="hlab"><b class="lnk" style="color:inherit" onclick="otevriEtapu('${p.id}',0)">${esc(p.name || '')}</b>
+          <small>${esc(p.cn || '')}${projProgress(p) != null ? ' · ' + projProgress(p) + ' %' : ''}</small></div>
+        <div class="htrack">
+          ${etapy.map(e => harmoPruhHtml(e, '', e.t + (milePct(e) === 100 ? ' ✓' : milePct(e) ? ' ' + milePct(e) + ' %' : ''))).join('')}
+          ${dnes != null ? `<div class="hdnes" style="left:${dnes}%"></div>` : ''}
+        </div>
+      </div>`;
+    }).join('')}
+  </div></div>
+  <div class="hlegend">
+    <span><i class="hb-done"></i>hotovo</span>
+    <span><i class="hb-now"></i>probíhá</span>
+    <span><i class="hb-next"></i>čeká</span>
+    <span><i class="hb-late"></i>skluz — mělo skončit a hotové to není</span>
+  </div></div>`;
+}
+
+function harmoPodleLidi() {
+  const dnes = harmoDnesLeft();
+  const etapy = vsechnyEtapy();
+  /* Radky jen pro lidi, kteri nekde opravdu jsou — prazdny seznam vsech
+     zamestnancu by byl nepouzitelne dlouhy. Na konci radek pro etapy,
+     na kterych zatim nikdo neni: to je taky informace. */
+  const idcka = [];
+  etapy.forEach(e => etapaLide(e).forEach(id => { if (idcka.indexOf(id) < 0) idcka.push(id); }));
+  const lide = idcka.map(id => userById(id)).filter(Boolean)
+    .sort((a, b) => fullName(a).localeCompare(fullName(b), 'cs'));
+  const nikdo = etapy.filter(e => !etapaLide(e).length);
+  return `<div class="chartcard"><div class="hscroll"><div class="hgantt">
+    ${harmoHlavicka('Člověk')}
+    ${lide.map(u => {
+      const moje = etapy.filter(e => etapaLide(e).indexOf(u.id) >= 0);
+      const kol = kolizeCloveka(u.id);
+      return `<div class="hrow">
+        <div class="hlab"${kol.size ? ' style="color:var(--red)"' : ''}>
+          ${jmenoOdkaz(u)}<small${kol.size ? ' style="color:var(--red)"' : ''}>${kol.size ? '⚠ kolize — dvě stavby naráz' : esc(u.role || '')}</small></div>
+        <div class="htrack">
+          ${moje.map(e => harmoPruhHtml(e, kol.has(e.pid + '|' + e.i) ? 'hb-kolize' : '', e.projekt + ' — ' + e.t)).join('')}
+          ${dnes != null ? `<div class="hdnes" style="left:${dnes}%"></div>` : ''}
+        </div>
+      </div>`;
+    }).join('')}
+    ${nikdo.length ? `<div class="hrow">
+      <div class="hlab" style="color:var(--wait)">Nikdo nepřiřazen<small>${nikdo.length} ${nikdo.length === 1 ? 'etapa' : nikdo.length < 5 ? 'etapy' : 'etap'}</small></div>
+      <div class="htrack">
+        ${nikdo.map(e => harmoPruhHtml(e, 'hb-nikdo', e.projekt + ' — ' + e.t)).join('')}
+        ${dnes != null ? `<div class="hdnes" style="left:${dnes}%"></div>` : ''}
+      </div></div>` : ''}
+  </div></div>
+  <div class="hlegend">
+    <span><i class="hb-kolize"></i>kolize — jeden člověk na dvou stavbách naráz</span>
+    <span><i class="hb-now"></i>probíhá</span>
+    <span><i class="hb-next"></i>čeká</span>
+    <span class="muted">Ťuknutím na pruh se dostaneš na harmonogram té stavby.</span>
+  </div></div>`;
+}
 
 /* ---- fotka: dlaždice ---- */
 function phTile(ph, clientView, eid) {
@@ -7069,7 +7358,7 @@ function viewPortal() {
     ${(P.milestones || []).length ? `<div class="card">
       <h3>📅 Harmonogram</h3>
       ${/* Stav milniku na portalu se bere z postupu (milePct) — funguje i pro stara data bez „p". */''}
-      ${P.milestones.map(m => { const pc = milePct(m); const cls = pc === 100 ? 'done' : pc > 0 ? 'now' : 'next'; return `<div class="mile ${cls}"><div class="dot">${pc === 100 ? '✓' : pc > 0 ? '●' : ''}</div><div>${cls === 'now' ? '<b>' + esc(m.t) + ' — probíhá (' + pc + ' %)</b>' : esc(m.t)}${m.dur ? ' <span class="muted" style="font-size:11px">(' + esc(m.dur) + ')</span>' : ''}</div></div>`; }).join('')}
+      ${P.milestones.map(m => { const pc = milePct(m); const cls = pc === 100 ? 'done' : pc > 0 ? 'now' : 'next'; return `<div class="mile ${cls}"><div class="dot">${pc === 100 ? '✓' : pc > 0 ? '●' : ''}</div><div>${cls === 'now' ? '<b>' + esc(m.t) + ' — probíhá (' + pc + ' %)</b>' : esc(m.t)}${m.od && m.do ? ' <span class="muted" style="font-size:11px">' + fmtISO(m.od) + ' – ' + fmtISO(m.do) + '</span>' : (m.dur ? ' <span class="muted" style="font-size:11px">(' + esc(m.dur) + ')</span>' : '')}</div></div>`; }).join('')}
     </div>` : ''}
     ${S.portalDocs.length ? `<div class="card">
       <h3>📁 Dokumenty</h3>
@@ -7112,9 +7401,22 @@ async function syncPortalHeader(p, tokZnamy) {
   // Do mirroru jde prubeh i faze uz odvozene z harmonogramu (ne stary rucni
   // zapis) — portal pak nemuze ukazat jine cislo nez detail projektu.
   const r = msRecalc(p.milestones || [], p);
+  /* Do portalu jde termin etapy (to investora zajima), ale NE pole „kdo".
+     Portal cte kdokoli, kdo ma odkaz — je to jen token, zadne prihlaseni.
+     Kdo na stavbe delá, je nase vec; investorovi do toho nic neni a ID lidi
+     by se dala parovat s dalsimi daty. Proto se milniky pred zapisem
+     prevypravi jen na pole, ktera ma videt. */
+  const proPortal = (p.milestones || []).map(m => {
+    const out = { t: m.t, p: typeof m.p === 'number' ? m.p : undefined, s: m.s };
+    if (m.dur) out.dur = m.dur;
+    if (m.od) out.od = m.od;
+    if (m.do) out.do = m.do;
+    Object.keys(out).forEach(k => { if (out[k] === undefined) delete out[k]; });
+    return out;
+  });
   await db.collection('portals').doc(tok).set({
     pid: p.id, client: p.client || '', name: p.name, address: p.address || '', type: p.type || '',
-    progress: r.progress, phase: r.phase, handover: p.handover || '', milestones: p.milestones || []
+    progress: r.progress, phase: r.phase, handover: p.handover || '', milestones: proPortal
   }, { merge: true }).catch(() => {});
 }
 // automaticky syncuj portal hlavičky když se změní projekty (levné — jen při renderu adminů)
