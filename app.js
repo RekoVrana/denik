@@ -220,7 +220,7 @@ const S = {
   /* karta cloveka (viz sekce KARTA CLOVEKA): kdo je otevreny, ktera zalozka
      a ktery mesic. Vyplacene dny a poznamky k lidem cte jen vedeni. */
   osobaId: null, osobaTab: 'hodiny', osobaMesic: null,
-  vyplaty: [], pozOsob: [], pozOsobForm: false, pozOsobEdit: null,
+  vyplaty: [], pozOsob: [], pozOsobForm: false, pozOsobEdit: null, uzHledat: '',
   /* galerie fotek (viz sekce GALERIE FOTEK): filtry a kolik dlazdic uz kreslime */
   fgFrom: '', fgTo: '', fgProj: null, fgAutor: '', fgZobrazeno: 60,
   repWorkers: [], repProjects: [], repLoaded: false, repFrom: isoToday().slice(0, 8) + '01', repTo: isoToday(),
@@ -1969,7 +1969,7 @@ function nastenkaDochazka() {
       ${teren.map(u => { const a = last[u.id]; const ap = a ? proj(a.pid) : null;
         const on = !!a && a.akce === 'Příchod' && a.date === isoToday();
         const visiTomu = !!a && a.akce === 'Příchod' && a.date < isoToday(); return `
-        <div class="urow"><span class="uav">${ini(u)}</span><b>${esc(fullName(u))}</b>
+        <div class="urow"><span class="uav">${ini(u)}</span><b>${jmenoOdkaz(u)}</b>
         ${on ? `<span class="badge b-ok">✓ v práci — ${esc((ap || {}).name || '')} (od ${a.time})</span>`
           : visiTomu ? `<span class="badge b-wait" title="Píchnul příchod a nepíchnul odchod. Den se do hodin nezapočítá, dokud se to nedoplní.">🕗 neuzavřená směna od ${fmtISO(a.date)} ${a.time}</span>`
           : `<span class="badge b-int">nepřítomen</span>`}
@@ -2008,22 +2008,6 @@ function pgProjekty() {
   return `
   <div class="strip"><h1>Projekty</h1><span class="sp"></span><button class="btn amber" onclick="projectForm()">➕ PŘIDAT</button></div>
   <main>
-    ${(() => {
-      const skryte = stavbySkrytePart();
-      if (!skryte.length) return '';
-      const kolik = skryte.length === 1 ? '1 stavba je v realizaci, ale parta ji nevidí'
-        : skryte.length < 5 ? skryte.length + ' stavby jsou v realizaci, ale parta je nevidí'
-        : skryte.length + ' staveb je v realizaci, ale parta je nevidí';
-      return `<div class="inote">
-        <b>⚠ ${kolik}.</b> Nemůže si na ně píchnout docházku ani napsat zápis.
-        ${skryte.map(x => `<div class="urow" style="border:0;padding:5px 0">
-          <span>🏗</span><b>${esc(x.name)}</b>
-          <span class="muted">${esc(x.cn || '')}</span>
-          <button class="btn ghost sm" style="margin-left:auto" onclick="toggleActive('${x.id}')">👁 Zapnout partě</button>
-        </div>`).join('')}
-        ${skryte.length > 1 ? `<div class="aprv"><button class="btn amber sm" onclick="zapniVsemVidi()">👁 Zapnout u všech (${skryte.length})</button></div>` : ''}
-      </div>`;
-    })()}
     <div class="tablecard">
       <div style="overflow-x:auto"><table>
         <tr><th>Název stavby</th><th>Zodpovědný</th><th>Vidí parta</th><th>Stav</th><th>Zakázka</th><th>Investor</th><th>Adresa</th><th>Deník</th><th>Průběh</th></tr>
@@ -2047,20 +2031,6 @@ function pgProjekty() {
   </main>`;
 }
 async function toggleActive(pid) { const p = proj(pid); await db.collection('projects').doc(pid).update({ active: !p.active }); }
-/* Stavba v realizaci, kterou parta nevidi, nebyla nikde videt. Devet
-   z dvanacti staveb melo „Vidi parta" vypnute — parta si na ne nemohla
-   pichnout ani napsat zapis a vedeni o tom nevedelo. */
-function stavbySkrytePart() {
-  return S.projects.filter(x => (x.stav || '') === 'Realizace' && !x.active);
-}
-async function zapniVsemVidi() {
-  const skryte = stavbySkrytePart();
-  if (!skryte.length) return;
-  if (!await potvrd('Zapnout „Vidí parta" u ' + skryte.length + ' staveb v realizaci?\n\n' +
-    skryte.map(x => '· ' + x.name).join('\n') + '\n\nObjeví se partě v seznamu, kde si píchá docházku a zakládá zápisy.', 'Ano, zapnout')) return;
-  for (const x of skryte) await db.collection('projects').doc(x.id).update({ active: true }).catch(() => {});
-  toast('Hotovo ✓ — parta stavby vidí');
-}
 function openProj(id) { S.projDetailId = id; S.projDetailTab = 'info'; S.view = 'projdetail'; render(); }
 function projectForm(id) {
   const p = id ? proj(id) : {};
@@ -3690,7 +3660,7 @@ function pgOrganizace() {
         <tr><th>Terénní pracovník</th><th>Činnost</th><th>Na projektu</th><th>Datum a čas</th><th>GPS odchylka</th><th>Foto</th><th></th></tr>
         ${rows.map(a => { const u = userById(a.userDocId) || { jmeno: a.userName || '?', prijmeni: '' }; return `
         <tr${a.gpsProvereno ? ' style="opacity:.62"' : ''}>
-          <td><span class="uav" style="margin-right:6px">${ini(u)}</span>${esc(fullName(u))}</td>
+          <td><span class="uav" style="margin-right:6px">${ini(u)}</span>${jmenoOdkaz(u)}</td>
           <td><span class="badge ${a.akce === 'Příchod' ? 'b-ok' : 'b-int'}">${a.akce}</span></td>
           <td>${esc((proj(a.pid) || {}).name || a.projName || '')}</td>
           <td>${fmtISO(a.date)} ${a.time}${a.pauza ? `<br><span class="badge b-int" title="Pauzu zadalo ručně vedení — přebíjí pauzu z časovače v mobilu.">🥪 pauza ${a.pauza} min · ručně</span>` : ''}${a.upraveno ? `<br><span class="badge b-wait" title="${esc(a.upraveno.duvod || '')}">✏️ opraveno — ${esc(a.upraveno.kdo || '')}</span>` : ''}${a.zapsal ? `<br><span class="badge b-wait">✍ zapsalo vedení — ${esc(a.zapsal.kdo || '')}</span>` : ''}</td>
@@ -4414,7 +4384,7 @@ function repTable() {
     if (rowBez > 0) missing.push(fullName(u));
     totKc += rowKc; totC += rowC; totH += rowH;
     const diff = rowCista ? rowKc - rowC : 0;
-    return `<tr><td><span class="uav" style="margin-right:6px">${ini(u)}</span>${esc(fullName(u))}<br><span class="muted" style="margin-left:34px">${esc(u.role || '')}</span>${rowVice ? '<br><span class="badge b-wait" style="margin-left:34px">sazba se v období měnila</span>' : ''}</td>${cells.join('')}<td style="text-align:center"><b>${kc(rowKc)} Kč${rowBez > 0 ? ' ⚠' : ''}</b>${diff > 0 ? `<br><span class="muted">čistá: ${kc(rowC)} Kč</span><br><span class="badge b-wait">vedoucímu party: ${kc(diff)} Kč</span>` : ''}</td><td style="text-align:center"><b>${fmtH(rowH)}</b></td></tr>`;
+    return `<tr><td><span class="uav" style="margin-right:6px">${ini(u)}</span>${jmenoOdkaz(u)}<br><span class="muted" style="margin-left:34px">${esc(u.role || '')}</span>${rowVice ? '<br><span class="badge b-wait" style="margin-left:34px">sazba se v období měnila</span>' : ''}</td>${cells.join('')}<td style="text-align:center"><b>${kc(rowKc)} Kč${rowBez > 0 ? ' ⚠' : ''}</b>${diff > 0 ? `<br><span class="muted">čistá: ${kc(rowC)} Kč</span><br><span class="badge b-wait">vedoucímu party: ${kc(diff)} Kč</span>` : ''}</td><td style="text-align:center"><b>${fmtH(rowH)}</b></td></tr>`;
   });
   // křížová kontrola proti deníku (#25)
   /* Hodiny na stavbach, ktere NEJSOU zaskrtnute. Jedna zapomenuta stavba
@@ -4464,7 +4434,7 @@ function repTable() {
     <div class="card" style="margin-top:12px;background:#f8fafc">
       <h3>🔎 Křížová kontrola proti deníku (#25)</h3>
       ${sel.map(udi => { const u = userById(udi); if (!u) return ''; const pairs = [...(attPairs[udi] || [])]; const missing = pairs.filter(k => !entryDaySet.has(k)); const okk = missing.length === 0; return `
-        <div class="urow"><span>${okk ? '✅' : '⚠️'}</span><b>${esc(fullName(u))}</b>
+        <div class="urow"><span>${okk ? '✅' : '⚠️'}</span><b>${jmenoOdkaz(u)}</b>
         <span class="muted" style="margin-left:auto">docházka: <b>${pairs.length} dní</b> · deník existuje pro <b>${pairs.length - missing.length}</b> z nich${okk ? '' : ` — <b style="color:var(--red)">chybí zápis: ${missing.slice(0, 5).map(k => fmtISO(k.split('|')[0]) + ' (' + esc((proj(k.split('|')[1]) || {}).name || '?') + ')').join(', ')}${missing.length > 5 ? ' +' + (missing.length - 5) + ' dalších' : ''}</b>`}</span></div>`; }).join('')}
       <div class="note">Kontroluje se: každý den z docházky má mít deníkový zápis na stejném projektu. Chybějící dny prověř před proplacením (#25).</div>
     </div>
@@ -4541,11 +4511,26 @@ function uzFiltrPrepni(k) {
   }
   render();
 }
-/* Člověk se ukáže, když patří aspoň do jedné vybrané skupiny. */
+/* Člověk se ukáže, když patří aspoň do jedné vybrané skupiny A zároveň
+   sedí na hledany text. Hleda se ve jmene, mailu a popisu — pri 26 lidech
+   uz scrollovani nestacilo. */
 function uzFiltrovani() {
   const f = uzFiltrPole();
-  if (!f.length) return S.users;
-  return S.users.filter(u => f.some(k => (u.typ || {})[k]));
+  const q = (S.uzHledat || '').trim().toLowerCase();
+  let lide = f.length ? S.users.filter(u => f.some(k => (u.typ || {})[k])) : S.users;
+  if (q) lide = lide.filter(u => (fullName(u) + ' ' + (u.role || '') + ' '
+    + (kontaktOsoby(u.id).email || '') + ' ' + (kontaktOsoby(u.id).telefon || '')).toLowerCase().includes(q));
+  return lide;
+}
+
+/* Jmeno cloveka jako odkaz na jeho kartu (hodiny, poznamky, zaznamy).
+   Pouziva se vsude, kde vedeni jmeno vidi — nastenka, dochazka, report —
+   at se nemusi vracet do seznamu uzivatelu a hledat ho tam znovu.
+   stopPropagation kvuli tabulkam, kde uz kliknuti na radek neco dela. */
+function jmenoOdkaz(u) {
+  if (!u || !u.id) return esc(fullName(u || {}));
+  return `<b class="lnk" style="color:inherit;font-weight:inherit" title="Otevřít kartu člověka"
+    onclick="event.stopPropagation();otevriOsobu('${u.id}')">${esc(fullName(u))}</b>`;
 }
 
 /* Dva lide se stejnym jmenem se na prihlasovaci obrazovce nedaji rozeznat
@@ -4678,24 +4663,30 @@ async function vyplatitZbytekMesice(udi, m) {
    Vlastni kolekce, ne poznamky ke stavbe: tohle jsou veci jako "dluzne
    najemne", "velikost bot", "nechce jezdit s Ruslanem" — cte je jen vedeni. */
 async function pozOsobPridat(udi) {
+  const n = ($('#poz-nadpis') || {}).value || '';
   const t = ($('#poz-novy') || {}).value || '';
+  if (!n.trim()) { toast('Pojmenuj poznámku — podle názvu ji pak najdeš.'); return; }
   if (!t.trim()) { toast('Napiš text poznámky.'); return; }
   await db.collection('poznamky_osob').add({
-    udi, text: t.trim(), kdo: fullName(S.me || {}).trim() || 'vedení', kdy: isoToday(), createdAt: FV()
-  }).then(() => { zapomen('poz-novy'); S.pozOsobForm = false; render(); toast('Poznámka uložena ✓'); })
+    udi, nadpis: n.trim(), text: t.trim(),
+    kdo: fullName(S.me || {}).trim() || 'vedení', kdy: isoToday(), createdAt: FV()
+  }).then(() => { S.pozOsobForm = false; render(); zapomen('poz-nadpis', 'poz-novy'); toast('Poznámka uložena ✓'); })
     .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
 }
 async function pozOsobUlozit(id) {
+  const n = ($('#poz-n-' + id) || {}).value || '';
   const t = ($('#poz-e-' + id) || {}).value || '';
+  if (!n.trim()) { toast('Název nesmí být prázdný.'); return; }
   if (!t.trim()) { toast('Poznámka nesmí být prázdná — smaž ji košem.'); return; }
   await db.collection('poznamky_osob').doc(id).update({
-    text: t.trim(), kdo: fullName(S.me || {}).trim() || 'vedení', kdy: isoToday()
-  }).then(() => { S.pozOsobEdit = null; render(); zapomen('poz-e-' + id); toast('Uloženo ✓'); })
+    nadpis: n.trim(), text: t.trim(), kdo: fullName(S.me || {}).trim() || 'vedení', kdy: isoToday()
+  }).then(() => { S.pozOsobEdit = null; render(); zapomen('poz-n-' + id, 'poz-e-' + id); toast('Uloženo ✓'); })
     .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
 }
 async function pozOsobSmazat(id) {
   const p = (S.pozOsob || []).find(x => x.id === id); if (!p) return;
-  if (!await potvrd('Smazat poznámku?\n\n„' + String(p.text).slice(0, 120) + '"', '🗑 Smazat')) return;
+  if (!await potvrd('Smazat poznámku „' + (p.nadpis || 'bez názvu') + '"?\n\n'
+    + String(p.text).slice(0, 160), '🗑 Smazat')) return;
   await db.collection('poznamky_osob').doc(id).delete()
     .catch(e => toast('Nejde smazat: ' + (e.code || e.message)));
 }
@@ -4850,14 +4841,19 @@ function osobaExport(udi, m) {
 }
 
 function osobaPoznamky(u) {
+  /* Radi se podle nazvu, ne podle data: poznamky u cloveka jsou trvale veci
+     (najemne, srazky, velikost bot), ne casova osa. Podle nazvu se hledaji
+     ocima rychleji nez podle toho, kdy je nekdo napsal. */
   const pz = (S.pozOsob || []).filter(p => p.udi === u.id)
-    .slice().sort((a, b) => String(b.kdy || '').localeCompare(String(a.kdy || '')));
+    .slice().sort((a, b) => String(a.nadpis || '').localeCompare(String(b.nadpis || ''), 'cs'));
   return `
   <div class="card">
     <h3>📝 Poznámky k člověku <span class="muted" style="font-weight:400;font-size:13px;margin-left:auto">vidí jen vedení</span></h3>
     ${S.pozOsobForm ? `
-      <label>Nová poznámka</label>
-      <textarea id="poz-novy" placeholder="Např. dluží nájemné za únor 6 000 Kč — sráží se po 2 000 měsíčně." style="min-height:70px"></textarea>
+      <label>Název *</label>
+      <input type="text" id="poz-nadpis" placeholder="Nájemné" maxlength="60">
+      <label>Text</label>
+      <textarea id="poz-novy" placeholder="Dluží za únor 6 000 Kč — sráží se po 2 000 měsíčně, poslední placené srpen." style="min-height:70px"></textarea>
       <div class="aprv"><button class="btn amber sm" onclick="pozOsobPridat('${u.id}')">💾 Uložit</button>
         <button class="btn ghost sm" onclick="S.pozOsobForm=false;render()">Zrušit</button></div>`
       : `<div class="aprv"><button class="btn amber sm" onclick="S.pozOsobForm=true;render()">➕ Přidat poznámku</button></div>`}
@@ -4865,16 +4861,20 @@ function osobaPoznamky(u) {
   ${pz.length ? pz.map(p => `
     <div class="card">
       ${S.pozOsobEdit === p.id ? `
+        <label>Název *</label>
+        <input type="text" id="poz-n-${p.id}" value="${esc(p.nadpis || '')}" maxlength="60">
+        <label>Text</label>
         <textarea id="poz-e-${p.id}" style="min-height:70px">${esc(p.text)}</textarea>
         <div class="aprv"><button class="btn amber sm" onclick="pozOsobUlozit('${p.id}')">💾 Uložit</button>
           <button class="btn ghost sm" onclick="S.pozOsobEdit=null;render()">Zrušit</button></div>`
-        : `<div style="white-space:pre-wrap">${esc(p.text)}</div>
-        <div class="urow" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">
-          <span class="muted" style="font-size:12px">${esc(p.kdo || '')} · ${fmtISO(p.kdy)}</span>
+        : `<div class="urow" style="border:0;padding:0 0 6px">
+          <h3 style="margin:0">${esc(p.nadpis || 'Bez názvu')}</h3>
           <span class="sp" style="margin-left:auto"></span>
-          <span class="lnk" onclick="S.pozOsobEdit='${p.id}';render()">✏️</span>
-          <span class="lnk" style="margin-left:10px" onclick="pozOsobSmazat('${p.id}')">🗑</span>
-        </div>`}
+          <span class="lnk" title="Upravit" onclick="S.pozOsobEdit='${p.id}';render()">✏️</span>
+          <span class="lnk" style="margin-left:10px" title="Smazat" onclick="pozOsobSmazat('${p.id}')">🗑</span>
+        </div>
+        <div style="white-space:pre-wrap">${esc(p.text)}</div>
+        <div class="muted" style="font-size:12px;margin-top:8px;padding-top:8px;border-top:1px solid var(--line)">${esc(p.kdo || '')} · ${fmtISO(p.kdy)}</div>`}
     </div>`).join('')
     : '<div class="card"><div class="empty">Zatím žádná poznámka.</div></div>'}`;
 }
@@ -4932,6 +4932,8 @@ function pgUzivatele() {
         ${[['', '👥 Všichni'], ['kanc', '🗂 Vedení'], ['teren', '👷 Parta'], ['sub', '🔧 Subdodavatelé'], ['inv', '🏠 Investoři']].map(([k, t]) => `
           <div class="t ${uzFiltrZapnuty(k) ? 'active' : ''}" onclick="uzFiltrPrepni('${k}')">${t} · ${k ? S.users.filter(u => (u.typ || {})[k]).length : S.users.length}</div>`).join('')}
       </div>
+      <div class="tabletools"><div class="search"><input id="q-uziv" placeholder="Hledat — jméno, e-mail, popis" value="${esc(S.uzHledat || '')}" oninput="S.uzHledat=this.value;render()"></div>
+        ${(S.uzHledat || '').trim() ? `<button class="btn ghost sm" onclick="S.uzHledat='';zapomen('q-uziv');render()">✕ Zrušit hledání</button>` : ''}</div>
       <div style="overflow-x:auto"><table>
         <tr><th></th><th>Jméno</th><th>Email</th><th>Kancelářský</th><th>Terénní</th><th>Investor</th><th>Sub</th><th>Sazba hrubá / čistá</th><th>Popis</th><th>Přihlášení</th><th></th></tr>
         ${uzFiltrovani().map(u => { const t = u.typ || {}; const s = S.sazby[u.id]; return `
