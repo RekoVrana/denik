@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '29. 8. 2026 r';
+const VERZE = '30. 8. 2026 w';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -91,6 +91,20 @@ function updBar() {
 async function aktualizovatApp() {
   if (S.updating) return;
   S.updating = true; render();
+  /* NEJDRIV overit, ze server opravdu odpovida. Na wifi bez internetu se
+     drive smazala ulozena aplikace a teprve potom se ji nepodarilo stahnout
+     — zustala bila obrazovka a neslo ani pichnout dochazku, dokud se
+     nevratil signal. */
+  try {
+    const zk = await fetch('verze.txt?ts=' + Date.now(), { cache: 'no-store' });
+    const txt = (await zk.text()).trim();
+    if (!zk.ok || !txt || txt.length > 40 || txt.indexOf('<') >= 0) throw new Error('spatna odpoved');
+  } catch (e) {
+    S.updating = false; S.updateReady = false; updBar(); render();
+    await oznam('Teď to nejde — telefon sice hlásí připojení, ale k serveru se nedovolá.\n\n'
+      + 'Aplikaci jsem nechal, jak byla, ať můžeš dál píchat docházku. Zkus to znovu, až budeš mít signál.');
+    return;
+  }
   try {
     /* Service worker rovnou odhlasit — po nacteni se zaregistruje znovu
        a cerstvy. "Jemna" aktualizace pres reg.update() nechavala na Macu
@@ -119,7 +133,12 @@ async function zkontrolujVerzi() {
     const r = await fetch('verze.txt?ts=' + Date.now(), { cache: 'no-store' });
     if (!r.ok) return;
     const v = (await r.text()).trim();
-    if (v && v !== VERZE) { S.updateReady = true; updBar(); render(); }
+    /* Na wifi bez internetu (nebo kdyz servis vrati stranku misto souboru)
+       prisla misto verze cela HTML stranka — appka ji vzala jako "nova verze"
+       a nabizela aktualizaci, ktera nemela co stahnout. Bereme jen kratky
+       radek bez znacek. */
+    if (!v || v.length > 40 || v.indexOf('<') >= 0) return;
+    if (v !== VERZE) { S.updateReady = true; updBar(); render(); }
   } catch (e) { /* bez site apod. — zkusi se to znovu za chvili */ }
 }
 

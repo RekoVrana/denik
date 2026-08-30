@@ -21,10 +21,21 @@ self.addEventListener('fetch', e => {
      mezipamet obejde a jde vzdy na server. Offline to nevadi — pri vypadku
      site se stejne sahne do nasi vlastni cache nize. */
   if (url.origin === location.origin) {
+    /* Majak verze se NECACHUJE a pri vypadku site se nenahrazuje nicim jinym.
+       Driv se pri chybe vracela ulozena index.html (fallback plati pro kazdy
+       pozadavek) — stranka ji vzala jako obsah verze.txt, neshodla se
+       s VERZE a donekonecna nabizela aktualizaci, ktera nemela co stahnout. */
+    if (url.pathname.endsWith('verze.txt')) {
+      e.respondWith(fetch(new Request(e.request, { cache: 'reload' })));
+      return;
+    }
     const cerstve = new Request(e.request, { cache: 'reload' });
     e.respondWith(
       fetch(cerstve).then(r => { const cp = r.clone(); caches.open(CACHE).then(c => c.put(e.request, cp)); return r; })
-        .catch(() => caches.match(e.request, { ignoreSearch: true }).then(r => r || caches.match('./index.html')))
+        /* Nahradni index.html jen pro NAVIGACI (otevreni stranky) — u skriptu
+           a dat by prohlizec dostal HTML misto toho, co cekal. */
+        .catch(() => caches.match(e.request, { ignoreSearch: true })
+          .then(r => r || (e.request.mode === 'navigate' ? caches.match('./index.html') : undefined)))
     );
   } else if (url.hostname === 'www.gstatic.com' || url.hostname === 'unpkg.com') {
     // firebase SDK + Leaflet: cache-first

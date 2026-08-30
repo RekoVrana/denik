@@ -7,6 +7,17 @@
 //  Živá verze: Firebase konzole → Firestore → Rules
 //  Když se změní tam, změň i tady, ať kopie nezastará.
 //
+//  Poslední změna 30. 8. 2026 (po velkém auditu):
+//  18) /attendance update: pracovník smí dopsat selfieDriveId ke SVÉMU
+//      záznamu. Doteď to směl jen admin, takže zápis fronty z telefonu
+//      tiše padal do .catch a odkaz na plnou verzi ověřovacího selfie
+//      zůstával prázdný u CELÉ party — foto nešlo otevřít u nikoho.
+//      Create navíc dostal strop 60 kB na pole selfie (náhled má ~20 kB).
+//  19) /poznamky update: komentář smí přidat jen ten, kdo poznámku opravdu
+//      VIDÍ, a pole komentářů smí jen RŮST. Doteď stačila jakákoli role
+//      a znalost id dokumentu — šlo jedním zápisem smazat komentáře
+//      i u poznámky určené jen vedení, kterou ten člověk nesmí ani číst.
+//
 //  Poslední změna 30. 8. 2026 (karta člověka):
 //  17) Přibyly dvě kolekce, obě jen pro vedení:
 //      /vyplaty/{userDocId}_{RRRR-MM} — které dny už jsou zaplacené, za
@@ -336,7 +347,11 @@ service cloud.firestore {
                || (mojeRole() == 'worker' && 'parta' in resource.data.vidi)
                || mujDocId() in resource.data.vidi)
            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['komentare'])
-           && request.resource.data.komentare.size() >= resource.data.komentare.size());
+           // Poznamka, ktera jeste zadny komentar nema, pole komentare vubec
+           // neobsahuje — bez teto pojistky by pravidlo spadlo a PRVNI
+           // komentar by neslo pridat nikdy.
+           && (!('komentare' in resource.data)
+               || request.resource.data.komentare.size() >= resource.data.komentare.size()));
       allow delete: if isAdmin() || resource.data.autorId == mujDocId();
     }
 
