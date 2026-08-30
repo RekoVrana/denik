@@ -2919,16 +2919,37 @@ function harmoHlavicka(popisSloupce) {
     </div>
   </div>`;
 }
+/* Souběžné etapy se nesmi kreslit pres sebe — u kompletni rekonstrukce
+   bezi elektro a voda soucasne a jeden pruh by druhy schoval. Kazda etapa
+   proto dostane patro: prvni volne, ve kterem se s nicim neprekryva.
+   Radek pak vyroste podle poctu pater. */
+function harmoPatra(etapy) {
+  const konce = [];
+  return etapy.slice().sort((a, b) => a.od < b.od ? -1 : a.od > b.od ? 1 : 0).map(e => {
+    let i = konce.findIndex(k => k < e.od);
+    if (i < 0) { konce.push(e.do); i = konce.length - 1; } else konce[i] = e.do;
+    return { ...e, patro: i };
+  });
+}
+function harmoPocetPater(etapy) {
+  return Math.max(1, ...harmoPatra(etapy).map(e => e.patro + 1));
+}
+const HARMO_PATRO = 26;   /* vyska jednoho patra v pixelech */
 function harmoPruhHtml(e, tridaNavic, popis) {
   const g = harmoPruh(e.od, e.do); if (!g) return '';
   const stav = etapaStav(e);
   const pct = milePct(e);
   const tr = { done: 'hb-done', now: 'hb-now', next: 'hb-next', late: 'hb-late' }[stav];
-  return `<div class="hbar ${tr} ${tridaNavic || ''}" style="left:${g.left}%;width:${g.width}%"
-      title="${esc(e.t || '')} · ${fmtISO(e.od)} – ${fmtISO(e.do)} · ${pct} %"
-      onclick="otevriEtapu('${e.pid}',${e.i})">
+  /* Uzky pruh popisek stejne neuveze a orezane slovo mate vic, nez pomuze
+     — pod urcitou sirku se necha prazdny a nazev rekne bublina po najeti
+     (a na telefonu tuknuti, ktere otevre stavbu). */
+  const text = g.width < 3.2 ? '' : esc(popis);
+  return `<div class="hbar ${tr} ${tridaNavic || ''}"
+      style="left:${g.left}%;width:${g.width}%;top:${5 + (e.patro || 0) * HARMO_PATRO}px;height:${HARMO_PATRO - 4}px"
+      title="${esc(e.projekt ? e.projekt + ' — ' : '')}${esc(e.t || '')}&#10;${fmtISO(e.od)} – ${fmtISO(e.do)} · hotovo ${pct} %${etapaStav(e) === 'late' ? '&#10;⚠ SKLUZ — mělo skončit a hotové to není' : ''}${etapaLide(e).length ? '&#10;' + esc(etapaLide(e).map(id => fullName(userById(id) || {}).trim()).filter(Boolean).join(', ')) : ''}"
+      onclick="otevriEtapu('${e.pid}')">
       ${pct > 0 && pct < 100 ? `<div class="hfill" style="width:${pct}%"></div>` : ''}
-      <span>${esc(popis)}</span></div>`;
+      <span>${text}</span></div>`;
 }
 /* Harmonogram stavby (milniky s terminy) bydli na zalozce Zakladni informace. */
 function otevriEtapu(pid) { S.projDetailId = pid; S.projDetailTab = 'info'; S.view = 'projdetail'; render(); }
@@ -2939,12 +2960,12 @@ function harmoPodleStaveb() {
   return `<div class="chartcard"><div class="hscroll"><div class="hgantt">
     ${harmoHlavicka('Stavba')}
     ${stavby.map(p => {
-      const etapy = (p.milestones || []).map((m, i) => ({ ...m, i, pid: p.id })).filter(etapaNaplanovana);
+      const etapy = (p.milestones || []).map((m, i) => ({ ...m, i, pid: p.id, projekt: p.name || '' })).filter(etapaNaplanovana);
       return `<div class="hrow">
         <div class="hlab"><b class="lnk" style="color:inherit" onclick="otevriEtapu('${p.id}',0)">${esc(p.name || '')}</b>
           <small>${esc(p.cn || '')}${projProgress(p) != null ? ' · ' + projProgress(p) + ' %' : ''}</small></div>
-        <div class="htrack">
-          ${etapy.map(e => harmoPruhHtml(e, '', e.t + (milePct(e) === 100 ? ' ✓' : milePct(e) ? ' ' + milePct(e) + ' %' : ''))).join('')}
+        <div class="htrack" style="height:${10 + harmoPocetPater(etapy) * HARMO_PATRO}px">
+          ${harmoPatra(etapy).map(e => harmoPruhHtml(e, '', e.t + (milePct(e) === 100 ? ' ✓' : milePct(e) ? ' ' + milePct(e) + ' %' : ''))).join('')}
           ${dnes != null ? `<div class="hdnes" style="left:${dnes}%"></div>` : ''}
         </div>
       </div>`;
@@ -2977,16 +2998,16 @@ function harmoPodleLidi() {
       return `<div class="hrow">
         <div class="hlab"${kol.size ? ' style="color:var(--red)"' : ''}>
           ${jmenoOdkaz(u)}<small${kol.size ? ' style="color:var(--red)"' : ''}>${kol.size ? '⚠ kolize — dvě stavby naráz' : esc(u.role || '')}</small></div>
-        <div class="htrack">
-          ${moje.map(e => harmoPruhHtml(e, kol.has(e.pid + '|' + e.i) ? 'hb-kolize' : '', e.projekt + ' — ' + e.t)).join('')}
+        <div class="htrack" style="height:${10 + harmoPocetPater(moje) * HARMO_PATRO}px">
+          ${harmoPatra(moje).map(e => harmoPruhHtml(e, kol.has(e.pid + '|' + e.i) ? 'hb-kolize' : '', e.projekt + ' — ' + e.t)).join('')}
           ${dnes != null ? `<div class="hdnes" style="left:${dnes}%"></div>` : ''}
         </div>
       </div>`;
     }).join('')}
     ${nikdo.length ? `<div class="hrow">
       <div class="hlab" style="color:var(--wait)">Nikdo nepřiřazen<small>${nikdo.length} ${nikdo.length === 1 ? 'etapa' : nikdo.length < 5 ? 'etapy' : 'etap'}</small></div>
-      <div class="htrack">
-        ${nikdo.map(e => harmoPruhHtml(e, 'hb-nikdo', e.projekt + ' — ' + e.t)).join('')}
+      <div class="htrack" style="height:${10 + harmoPocetPater(nikdo) * HARMO_PATRO}px">
+        ${harmoPatra(nikdo).map(e => harmoPruhHtml(e, 'hb-nikdo', e.projekt + ' — ' + e.t)).join('')}
         ${dnes != null ? `<div class="hdnes" style="left:${dnes}%"></div>` : ''}
       </div></div>` : ''}
   </div></div>
