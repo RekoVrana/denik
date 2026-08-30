@@ -1,5 +1,5 @@
 /* Service worker — Deník staveb Rekonstrukce Vrána */
-const CACHE = 'vrana-denik-v15';
+const CACHE = 'vrana-denik-v16';
 const ASSETS = ['./', './index.html', './app.js', './vypocty.js', './navod.js', './config.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
@@ -29,13 +29,23 @@ self.addEventListener('fetch', e => {
       e.respondWith(fetch(new Request(e.request, { cache: 'reload' })));
       return;
     }
-    const cerstve = new Request(e.request, { cache: 'reload' });
+    /* NEJDRIV Z PAMETI, novou verzi stahnout na pozadi.
+       Driv se pri KAZDEM otevreni stahoval cely pulmegabajt znovu (a schvalne
+       se obchazela i pamet prohlizece) — na jedne carce signalu to znamenalo
+       deset az ctyricet vterin bile obrazovky. A iPhone appku na pozadi
+       zabiji casto, takze to parta platila nekolikrat denne, prave kdyz si
+       chtela jen pichnout prichod.
+       O nove verzi se clovek stejne dozvi z majaku verze.txt (lista dole),
+       takze se tim nic neztraci — jen se to nemusi cekat. */
     e.respondWith(
-      fetch(cerstve).then(r => { const cp = r.clone(); caches.open(CACHE).then(c => c.put(e.request, cp)); return r; })
-        /* Nahradni index.html jen pro NAVIGACI (otevreni stranky) — u skriptu
-           a dat by prohlizec dostal HTML misto toho, co cekal. */
-        .catch(() => caches.match(e.request, { ignoreSearch: true })
-          .then(r => r || (e.request.mode === 'navigate' ? caches.match('./index.html') : undefined)))
+      caches.match(e.request, { ignoreSearch: true }).then(ulozene => {
+        const zeSite = fetch(new Request(e.request, { cache: 'reload' }))
+          .then(r => { const cp = r.clone(); caches.open(CACHE).then(c => c.put(e.request, cp)); return r; })
+          /* Nahradni index.html jen pro NAVIGACI (otevreni stranky) — u skriptu
+             a dat by prohlizec dostal HTML misto toho, co cekal. */
+          .catch(() => ulozene || (e.request.mode === 'navigate' ? caches.match('./index.html') : undefined));
+        return ulozene || zeSite;
+      })
     );
   } else if (url.hostname === 'www.gstatic.com' || url.hostname === 'unpkg.com') {
     // firebase SDK + Leaflet: cache-first

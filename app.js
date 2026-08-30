@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '30. 8. 2026 w';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '30. 8. 2026 x';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -261,7 +261,7 @@ const S = {
   loginMode: 'teren', loginWorker: null, loginHledani: null,
   online: navigator.onLine, unsub: [],
   searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false, checking: null, installPrompt: null, swReg: null, updateReady: false, updating: false,
-  frontaPocet: 0
+  frontaPocet: 0, frontaSelhalo: [], orgZobrazeno: 40
 };
 window.addEventListener('online', () => { S.online = true; render(); });
 window.addEventListener('offline', () => { S.online = false; render(); });
@@ -849,7 +849,20 @@ function pickGeo(i) {
 async function driveCall(payload) {
   if (!CFG.scriptUrl) throw new Error('Drive most není nastaven (config.js → scriptUrl)');
   const res = await fetch(CFG.scriptUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) });
-  const j = await res.json();
+  /* Kdyz Google zrovna nestiha nebo se prihlaseni presmeruje, most vrati
+     HTML stranku misto odpovedi. Driv na tom spadlo res.json() a fronta to
+     pocitala jako VADU SOUBORU — pet takovych vypadku (klidne rozlozenych
+     do dnu) a originalni fotka se z telefonu smazala navzdy. Takova chyba
+     je pritom docasna: oznacime ji, at ji fronta pozna a nepocita. */
+  const txt = await res.text();
+  let j;
+  try { j = JSON.parse(txt); }
+  catch (e) {
+    const err = new Error('most neodpovedel daty (' + res.status + ')');
+    err.docasne = true;
+    throw err;
+  }
+  if (!res.ok) { const err = new Error('most vratil chybu ' + res.status); err.docasne = true; throw err; }
   if (j.error) throw new Error(j.error);
   return j;
 }
@@ -899,16 +912,64 @@ async function frontaVse() {
 }
 async function frontaSmazat(id) { try { await frontaTx('readwrite', st => st.delete(id)); } catch (e) {} }
 async function frontaSpocitat() {
-  try { const v = await frontaVse(); S.frontaPocet = v.length; } catch (e) { S.frontaPocet = 0; }
+  try {
+    const v = await frontaVse();
+    S.frontaPocet = v.filter(x => !x.selhalo).length;
+    S.frontaSelhalo = v.filter(x => x.selhalo);
+  } catch (e) { S.frontaPocet = 0; S.frontaSelhalo = []; }
   render();
+}
+/* Zkusit selhale polozky znovu — rucne, tlacitkem. Pocitadlo pokusu se
+   vynuluje, at maji cistych pet pokusu. */
+async function frontaZkusitZnovu() {
+  const v = (await frontaVse()).filter(x => x.selhalo);
+  for (const it of v) {
+    it.selhalo = false; it.pokusy = 0; delete it.chyba;
+    try { await frontaTx('readwrite', st => st.put(it)); } catch (e) {}
+  }
+  await frontaSpocitat();
+  toast(v.length + (v.length === 1 ? ' soubor se zkusí odeslat znovu' : ' souborů se zkusí odeslat znovu'));
+  frontaOdeslat();
+}
+/* Trvale zahodit — az kdyz clovek rekne, ze o soubor nestoji. */
+async function frontaZahodit() {
+  const v = (await frontaVse()).filter(x => x.selhalo);
+  if (!v.length) return;
+  if (!await potvrd('Opravdu zahodit ' + v.length + ' ' + (v.length === 1 ? 'soubor' : 'souborů') + ', které se nepodařilo odeslat?\n\n'
+    + 'Fotky se tím ztratí nadobro — na Disk se nikdy nedostaly.', '🗑 Zahodit')) return;
+  for (const it of v) await frontaSmazat(it.id);
+  await frontaSpocitat();
+  toast('Zahozeno');
+}
+/* Karta na nastence: co se nepodarilo odeslat. Driv se to reklo jen bublinou
+   na tri vteriny — a fotka se pritom mazala. */
+function kartaFrontaSelhala() {
+  const v = S.frontaSelhalo || [];
+  if (!v.length) return '';
+  return `<div class="card" style="border-color:var(--red)">
+    <h3>⚠ Nepodařilo se odeslat na Disk (${v.length})</h3>
+    <div class="note" style="margin-top:0">Soubory zůstaly v telefonu, nic se neztratilo.
+      Nejčastěji za to může výpadek Disku — zkus je poslat znovu.</div>
+    ${v.slice(0, 8).map(x => `<div class="urow"><span>📎</span><b>${esc(x.name || 'soubor')}</b>
+      <span class="muted" style="margin-left:auto;font-size:11.5px">${esc(x.chyba || '')}</span></div>`).join('')}
+    ${v.length > 8 ? `<div class="muted" style="font-size:12px">… a další ${v.length - 8}</div>` : ''}
+    <div class="aprv"><button class="btn amber sm" onclick="frontaZkusitZnovu()">↻ Zkusit znovu</button>
+      <button class="btn ghost sm" onclick="frontaZahodit()">🗑 Zahodit</button></div>
+  </div>`;
 }
 /* Odesle vsechno, co ceka. Bezi po jedne polozce, aby se dva zapisy do stejneho
    deniku neprepsaly navzajem. Co se nepovede, zustane ve fronte na priste. */
+/* Dochazka se kresli po strankach. Kazdy radek nese overovaci selfie primo
+   v dokumentu (base64), takze 350 radku znamenalo devet megabajtu HTML —
+   a to se prekreslovalo pri KAZDEM pichnuti kohokoli z party. Rano mezi
+   sedmou a osmou to byly desitky takovych prekresleni za sebou. */
+const ORG_STRANKA = 40;
 const FRONTA_POKUSU = 5;   // po kolika marnych pokusech (mimo vypadku site) polozku vzdame
 /* Vypadek site vypada jinak nez odmitnuti mostem: fetch spadne na TypeError
    („Failed to fetch" / „Load failed"), zadna odpoved nedorazi. Takovy pokus
    se nesmi pocitat, jinak by pulden bez signalu smazal partě fotky. */
 function jeVypadekSite(e) {
+  if (e && e.docasne) return true;            /* most odpovedel HTML nebo chybou serveru */
   if (!navigator.onLine || !S.online) return true;
   if (e instanceof TypeError) return true;
   return /failed to fetch|load failed|network|timed? ?out/i.test(String((e && e.message) || ''));
@@ -919,7 +980,9 @@ async function frontaOdeslat() {
      (navrat signalu, casovac po 90 s, odeslani zapisu) projdou obe
      a tataz fotka se na Drive nahraje dvakrat. */
   _frontaBezi = true;
-  const cekaji = await frontaVse();
+  /* Polozky oznacene jako selhale se uz samy nezkousi — cekaji, az je nekdo
+     posle znovu tlacitkem. Frontu neblokuji. */
+  const cekaji = (await frontaVse()).filter(x => !x.selhalo);
   if (!cekaji.length) { _frontaBezi = false; return; }
   S.uploading++; render();
   let zmeskano = 0;
@@ -972,8 +1035,15 @@ async function frontaOdeslat() {
            nic: dalsi fotky, prilohy ani selfie z dochazky. */
         it.pokusy = (it.pokusy || 0) + 1;
         if (it.pokusy >= FRONTA_POKUSU) {
+          /* Polozku uz nezkousime, ale ANI NEMAZEME. Driv se smazala a s ni
+             i jedina plna verze fotky, kterou clovek vyfotil — nenavratne.
+             Ted zustane oznacena jako selhala: frontu neblokuje (preskakuje
+             se), z pocitadla vypadne, a vedeni ji vidi v nastenkove karte
+             a muze ji poslat znovu. */
           console.warn('fronta: polozka vzdana po ' + it.pokusy + ' pokusech', it.name || '', e);
-          await frontaSmazat(it.id);
+          it.selhalo = true;
+          it.chyba = String((e && e.message) || e).slice(0, 120);
+          try { await frontaTx('readwrite', st => st.put(it)); } catch (e3) {}
           zmeskano++;
           continue;
         }
@@ -984,7 +1054,7 @@ async function frontaOdeslat() {
     }
   } finally {
     _frontaBezi = false; S.uploading--;
-    if (zmeskano) toast('⚠ ' + zmeskano + (zmeskano === 1 ? ' soubor se nepodařilo odeslat' : ' souborů se nepodařilo odeslat') + ' — zkus je přidat znovu.');
+    if (zmeskano) toast('⚠ ' + zmeskano + (zmeskano === 1 ? ' soubor se nepodařilo odeslat' : ' souborů se nepodařilo odeslat') + ' — zůstaly v telefonu, pošleš je znovu z nástěnky.');
     await frontaSpocitat();
   }
 }
@@ -1938,6 +2008,7 @@ function nastenkaPrehled() {
   const noToday = act.filter(p => !entriesOf(p.id).some(e => e.date === isoToday()));
   const lastPhotos = S.entries.flatMap(e => (e.photos || []).map(ph => ({ ...ph, pn: (proj(e.pid) || {}).name }))).slice(0, 6);
   return `<main>
+    ${kartaFrontaSelhala()}
     <div class="stats">
       <div class="stat" onclick="goPage('schvaleni')"><span class="sic">⏳</span><span class="st2">Čeká na schválení</span><span class="sn ${n ? 'warn' : ''}">${n}</span></div>
       <div class="stat" onclick="goPage('denik')"><span class="sic">📓</span><span class="st2">Denní záznamy za 30 dní</span><span class="sn">${S.entries.length}</span></div>
@@ -4035,21 +4106,21 @@ function pgOrganizace() {
     </div>` : ''}
     <div class="card">
       <div class="frow">
-        <div><label>Filtr — pracovník</label><select onchange="S.orgUser=this.value;render()">
+        <div><label>Filtr — pracovník</label><select onchange="S.orgUser=this.value;S.orgZobrazeno=ORG_STRANKA;render()">
           <option value="">Všichni pracovníci</option>
           ${filtUsers.map(u => `<option value="${u.id}" ${S.orgUser === u.id ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}
         </select></div>
-        <div><label>Filtr — projekt</label><select onchange="S.orgProj=this.value;render()">
+        <div><label>Filtr — projekt</label><select onchange="S.orgProj=this.value;S.orgZobrazeno=ORG_STRANKA;render()">
           <option value="">Všechny projekty</option>
           ${S.projects.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', 'cs')).map(p => `<option value="${p.id}" ${S.orgProj === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
         </select></div>
       </div>
-      ${(S.orgUser || S.orgProj) ? `<div class="aprv"><button class="btn ghost sm" onclick="S.orgUser='';S.orgProj='';render()">✕ Zrušit filtr</button><span class="muted" style="align-self:center">zobrazeno ${rows.length} z ${S.attendance.length} záznamů</span></div>` : ''}
+      ${(S.orgUser || S.orgProj) ? `<div class="aprv"><button class="btn ghost sm" onclick="S.orgUser='';S.orgProj='';S.orgZobrazeno=ORG_STRANKA;render()">✕ Zrušit filtr</button><span class="muted" style="align-self:center">zobrazeno ${rows.length} z ${S.attendance.length} záznamů</span></div>` : ''}
     </div>
     <div class="tablecard">
       <div style="overflow-x:auto"><table>
         <tr><th>Terénní pracovník</th><th>Činnost</th><th>Na projektu</th><th>Datum a čas</th><th>GPS odchylka</th><th>Foto</th><th></th></tr>
-        ${rows.map(a => { const u = userById(a.userDocId) || { jmeno: a.userName || '?', prijmeni: '' }; return `
+        ${rows.slice(0, S.orgZobrazeno || ORG_STRANKA).map(a => { const u = userById(a.userDocId) || { jmeno: a.userName || '?', prijmeni: '' }; return `
         <tr${a.gpsProvereno ? ' style="opacity:.62"' : ''}>
           <td><span class="uav" style="margin-right:6px">${ini(u)}</span>${jmenoOdkaz(u)}</td>
           <td><span class="badge ${a.akce === 'Příchod' ? 'b-ok' : 'b-int'}">${a.akce}</span></td>
@@ -4067,7 +4138,9 @@ function pgOrganizace() {
           : (S.orgUser || S.orgProj) ? 'Tomuto filtru neodpovídá žádný záznam. Zruš ho tlačítkem ✕ o kus výš.'
           : 'Zatím žádné záznamy docházky. Objeví se tu, jakmile si někdo z party píchne příchod.'}</div></td></tr>`}
       </table></div>
-      <div class="pagefoot"><span>${rows.length} záznamů</span></div>
+      <div class="pagefoot"><span>${Math.min(rows.length, S.orgZobrazeno || ORG_STRANKA)} z ${rows.length} záznamů</span>
+        ${rows.length > (S.orgZobrazeno || ORG_STRANKA)
+          ? `<button class="btn ghost sm" onclick="S.orgZobrazeno=(S.orgZobrazeno||ORG_STRANKA)+ORG_STRANKA;render()">⤓ Zobrazit dalších ${Math.min(ORG_STRANKA, rows.length - (S.orgZobrazeno || ORG_STRANKA))}</button>` : ''}</div>
     </div>
     <div class="note">GPS nad povolenou odchylku (${TOL} m) se hlásí ⚠ — ale jen tehdy, když telefon polohu opravdu změřil. Když ji jen odhadl ze sítě, píše se „poloha nepřesná" a za podezřelou se to nepočítá. Odchylku, kterou jsi prověřil tlačítkem <b>✓ Prověřeno</b>, zešedne a zmizí z počítadla. Záznam jde <b>✏️ opravit</b> nebo <b>🗑 smazat</b> — u opravy se uloží kdo, kdy a proč, ať je to při sporu o výplatu dohledatelné. Měsíční kontrola hodin Ruslana (#25) = záložka Reporty.</div>
   </main>`}`;
@@ -5645,6 +5718,11 @@ async function delProject(pid) {
       await db.collection('portals').doc(tok).delete().catch(() => {});
     }
     await db.collection('portaly').doc(pid).delete().catch(() => {}); // i zaznam s tokenem
+    /* Kontakt investora bydli v admin-only /kontakty pod klicem projekt_<id>
+       (presun S4b). Doted se pri mazani stavby nemazal — mail a telefon
+       klienta zustavaly v databazi navzdy, nikde nezobrazene. U cloveka
+       se to uklizi taky, tady to chybelo. */
+    await db.collection('kontakty').doc(kontaktKlicStavby(pid)).delete().catch(() => {});
     await db.collection('projects').doc(pid).delete();
     S.projDetailId = null; goPage('projekty'); toast('Stavba smazána ✓');
   } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
@@ -5688,6 +5766,13 @@ async function delUser(udi) {
     await db.collection('roster').doc(udi).delete().catch(() => {});
     await db.collection('sazby').doc(udi).delete().catch(() => {});
     await db.collection('kontakty').doc(udi).delete().catch(() => {}); // kontakty bydli zvlast (S4)
+    /* Poznamky vedeni o tom cloveku (dluhy, srazky) — citlive uz z podstaty.
+       Bez tohohle by po smazani zustaly v databazi navzdy jako neviditelni
+       sirotci, ktere si kazdy admin dal stahuje posluchacem. */
+    try {
+      const pz = await db.collection('poznamky_osob').where('udi', '==', udi).get();
+      for (const d of pz.docs) await d.ref.delete().catch(() => {});
+    } catch (e) { console.warn('uklid poznamek o cloveku', e); }
     for (const t of S.tasks.filter(x => x.respId === udi)) await db.collection('tasks').doc(t.id).update({ respId: '' }).catch(() => {});
     await db.collection('users').doc(udi).delete();
     goPage('uzivatele'); toast('Uživatel smazán ✓');
@@ -5723,7 +5808,7 @@ async function smazSazbuOd(udi, od) {
 }
 function pgNewUser() {
   const edit = S.editUserId ? userById(S.editUserId) : null;
-  const t = S.newUserType || (edit ? (edit.typ.kanc ? 'kanc' : edit.typ.inv ? 'inv' : edit.typ.sub ? 'sub' : 'teren') : null);
+  const t = S.newUserType || (edit ? ((edit.typ || {}).kanc ? 'kanc' : (edit.typ || {}).inv ? 'inv' : (edit.typ || {}).sub ? 'sub' : 'teren') : null);  /* stary zaznam bez pole typ shazoval cely render na bilou obrazovku */
   const s = edit ? S.sazby[edit.id] : null;
   const TYPES = [{ k: 'kanc', t: 'Kancelářský (Vedení)', ic: '🖥' }, { k: 'teren', t: 'Terénní pracovník', ic: '📱' }, { k: 'inv', t: 'Investor', ic: '💰' }, { k: 'sub', t: 'Subdodavatel', ic: '👥' }];
   return `
@@ -5802,7 +5887,7 @@ async function prepisPole(docs, zmena) {
 }
 async function saveUser() {
   const edit = S.editUserId ? userById(S.editUserId) : null;
-  const typKey = S.newUserType || (edit ? (edit.typ.kanc ? 'kanc' : edit.typ.inv ? 'inv' : edit.typ.sub ? 'sub' : 'teren') : null);
+  const typKey = S.newUserType || (edit ? ((edit.typ || {}).kanc ? 'kanc' : (edit.typ || {}).inv ? 'inv' : (edit.typ || {}).sub ? 'sub' : 'teren') : null);
   if (!typKey) { toast('Vyber typ přístupu'); return; }
   const j = $('#nu-j').value.trim(), p = $('#nu-p').value.trim();
   if (!j || !p) { toast('Vyplň jméno a příjmení'); return; }
