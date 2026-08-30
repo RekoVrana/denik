@@ -163,7 +163,12 @@
     var useky = pauzy.useky.slice();
     if (pauzy.otevrenyOd !== null && prace.useky.length) {
       var posledniOdchod = prace.useky[prace.useky.length - 1].do;
-      if (posledniOdchod > pauzy.otevrenyOd) {
+      /* Neukoncena pauza, ktera zacala JESTE PRED prichodem, je nesmysl —
+         na pauze nemuze byt nekdo driv, nez prisel do prace. Vznika jen
+         rucni opravou zaznamu vedenim. Dopocitat ji do odchodu by pokrylo
+         celou smenu a den by potichu skoncil s nulou hodin, bez varovani
+         a rovnou do vyplaty. Takova pauza se proto ignoruje. */
+      if (pauzy.otevrenyOd >= prace.useky[0].od && posledniOdchod > pauzy.otevrenyOd) {
         useky.push({ od: pauzy.otevrenyOd, do: posledniOdchod, dopocitana: true });
       }
     }

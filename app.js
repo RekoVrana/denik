@@ -15,6 +15,16 @@ const CONFIGURED = CFG.firebase.apiKey !== 'VYPLNIT';
 /* ---------- helpers ---------- */
 const $ = s => document.querySelector(s);
 const esc = t => String(t == null ? '' : t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/>/g, '&gt;');
+/* Text vkladany DOVNITR onclick="fn('…')" musi projit JS-escapem, ne esc().
+   esc() dela z apostrofu &#39; — prohlizec ho pred spustenim JS dekoduje zpet
+   na ' a uzavre retezec: jmeno fotky jako x');alert(1);// pak spusti kod
+   u vedeni i u investora na portalu. Tady se apostrof zpetlomitkuje (a NECHA
+   jako '), navic se escapuji jen &"<> pro bezpecnost atributu. */
+function jsAttr(t) {
+  return String(t == null ? '' : t)
+    .replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r?\n/g, '\\n')
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 const DAYS = ['neděle', 'pondělí', 'úterý', 'středa', 'čtvrtek', 'pátek', 'sobota'];
 const DAYS2 = ['NE', 'PO', 'ÚT', 'ST', 'ČT', 'PÁ', 'SO'];
 function isoToday() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
@@ -46,7 +56,10 @@ function attZapsano(a) {
 }
 function attCmp(a, b) { return (attKey(a) - attKey(b)) || (attZapsano(a) - attZapsano(b)); }
 function daysBetween(isoA, isoB) { return Math.round((new Date(isoB) - new Date(isoA)) / 86400000); }
-function shiftISO(iso, days) { const d = new Date(iso); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); }
+/* Posun data POCITAT CELE V UTC: parsovani 'RRRR-MM-DD' je UTC pulnoc,
+   ale setDate() pracoval v mistnim case — pres zmenu letniho casu se tak
+   ztratil den a harmonogram kreslil 29. brezen dvakrat. */
+function shiftISO(iso, days) { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + days); return d.toISOString().slice(0, 10); }
 function kc(n) { return (Math.round(n) || 0).toLocaleString('cs-CZ'); }
 function fmtH(h) { const m = Math.round((h || 0) * 60); return Math.floor(m / 60) + ':' + String(m % 60).padStart(2, '0') + ' h'; }
 function uid8() { const a = 'abcdefghjkmnpqrstuvwxyz23456789'; let s = ''; for (let i = 0; i < 22; i++) s += a[Math.floor(Math.random() * a.length)]; return s; }
@@ -668,7 +681,7 @@ function ukolDetailHtml(t) {
 function fotkyUkolu(t) {
   if (!(t.photos || []).length) return '';
   return `<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">${t.photos.map(f =>
-    `<span onclick="event.stopPropagation();otevritFoto('${f.id}','','${esc(t.title)}',this)" style="cursor:pointer"><img src="${f.thumb}" style="width:46px;height:46px;object-fit:cover;border-radius:8px;border:1px solid var(--line)"></span>`).join('')}</div>`;
+    `<span onclick="event.stopPropagation();otevritFoto('${f.id}','','${jsAttr(t.title)}',this)" style="cursor:pointer"><img src="${f.thumb}" style="width:46px;height:46px;object-fit:cover;border-radius:8px;border:1px solid var(--line)"></span>`).join('')}</div>`;
 }
 function ukolModal(id) {
   const t = S.tasks.find(x => x.id === id); if (!t) return;
@@ -2136,7 +2149,7 @@ async function najdiDriveSlozku(tiche) {
     modal(`<h3>📁 Která složka to je?</h3>
       <div class="note" style="margin-top:0">Číslu <b>${esc(cn)}</b> odpovídá víc složek.</div>
       <div class="rosterlist">${nalezene.map(f => `
-        <div class="urow" onclick="vyberDriveSlozku('${f.id}','${esc(f.name).replace(/'/g, "&#39;")}')">
+        <div class="urow" onclick="vyberDriveSlozku('${f.id}','${jsAttr(f.name)}')">
           <span>📁</span><b>${esc(f.name)}</b></div>`).join('')}</div>
       <div class="aprv"><button class="btn ghost" onclick="closeModal()">Zrušit</button></div>`);
     return false;
@@ -2380,7 +2393,7 @@ function pgProjDetail() {
     const docs = p.stavbaDocs || [];
     body = `<main><div class="card">
       <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— půdorysy, vizualizace, výkresy · vidí je i parta v mobilu</span></h3>
-      ${docs.map((d, i) => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${esc(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">zobrazit</span><span class="lnk" style="font-size:11px;margin-left:10px" onclick="event.stopPropagation();delStavbaDoc('${p.id}',${i})">✕</span></div>`).join('') || '<div class="empty">Zatím žádné podklady.</div>'}
+      ${docs.map((d, i) => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${jsAttr(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">zobrazit</span><span class="lnk" style="font-size:11px;margin-left:10px" onclick="event.stopPropagation();delStavbaDoc('${p.id}',${i})">✕</span></div>`).join('') || '<div class="empty">Zatím žádné podklady.</div>'}
       <div class="formsec"><h4>➕ Nahrát soubor (PDF půdorys, vizualizace…)</h4>
         <input type="file" id="sd-file" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple onchange="uploadStavbaDocs('${p.id}',this.files)">
         <div class="note">${S.uploading ? '<b>Nahrávám…</b> ' : ''}Soubor se uloží do složky zakázky na Drive. Partě se zobrazí přímo v apce ve vestavěném prohlížeči (#36) — listování a zoom, bez stahování, i na telefonu.</div>
@@ -2854,6 +2867,7 @@ function mileTerminForm(pid, i) {
     return u.active !== false || vybrani.indexOf(u.id) >= 0;
   }).sort((a, b) => fullName(a).localeCompare(fullName(b), 'cs'));
   modal(`<h3>📅 Naplánovat etapu „${esc(m.t || '')}"</h3>
+    <input type="hidden" id="et-nazev" value="${esc(m.t || '')}">
     <div class="frow">
       <div><label>Od</label><input type="date" id="et-od" value="${esc(m.od || isoToday())}"></div>
       <div><label>Do</label><input type="date" id="et-do" value="${esc(m.do || shiftISO(isoToday(), 6))}"></div>
@@ -2876,6 +2890,14 @@ async function ulozMileTermin(pid, i) {
   const kdo = [...document.querySelectorAll('#et-lide button.active')].map(b => b.dataset.id);
   const p = proj(pid); const ms = (p.milestones || []).map(x => ({ ...x }));
   if (!ms[i]) return;
+  /* Index je z okamziku otevreni okenka. Kdyz mezitim jiny clovek etapu
+     smazal nebo pridal, ukazuje uz jinam — termin by se ulozil cizi etape. */
+  const ocekavany = ($('#et-nazev') || {}).value || '';
+  if (ocekavany && ms[i].t !== ocekavany) {
+    closeModal();
+    await oznam('Etapy se mezitím změnily (nejspíš je upravoval někdo další).\n\nNic jsem neuložil — otevři plánování znovu.');
+    render(); return;
+  }
   ms[i].od = od; ms[i].do = doo; ms[i].kdo = kdo;
   await ulozMilniky(pid, ms).then(() => { closeModal(); toast('Naplánováno ✓'); })
     .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
@@ -3056,7 +3078,7 @@ function harmoPodleLidi() {
 /* ---- fotka: dlaždice ---- */
 function phTile(ph, clientView, eid) {
   const st = clientView ? '' : `<span class="st" ${eid ? `onclick="event.stopPropagation();cyclePhoto('${eid}','${ph.id}')"` : ''}>${ph.status === 'approved' ? '✓' : ph.status === 'pending' ? '⏳' : '🔒'}</span>`;
-  return `<div class="ph" onclick="otevritFoto('${ph.id || ''}','${ph.driveId || ''}','${esc(ph.label)}',this,'${ph.origId || ''}')">
+  return `<div class="ph" onclick="otevritFoto('${ph.id || ''}','${ph.driveId || ''}','${jsAttr(ph.label)}',this,'${ph.origId || ''}')">
     <img src="${ph.thumb}" alt="">${st}<small>${esc(ph.label || '')}</small></div>`;
 }
 /* Tlacitko "Plne rozliseni (Drive)" jen pro prihlasene: firemni Drive je
@@ -3075,7 +3097,7 @@ function openPhoto(driveId, label, el, origId) {
             podkladu. Driv to byl primy odkaz na drive.google.com, takze to
             po kazdem chtelo ucet Google (a parta ho nema vubec). Most soubor
             vyda i cloveku bez uctu a klic pritom neopousti server. */''}
-      ${plneId && !S.portalToken ? `<button class="btn ghost sm" onclick="openDriveDoc('${plneId}','${esc(label)}')">🔍 Plné rozlišení</button>` : '<span class="badge b-int">jen náhled</span>'}
+      ${plneId && !S.portalToken ? `<button class="btn ghost sm" onclick="openDriveDoc('${plneId}','${jsAttr(label)}')">🔍 Plné rozlišení</button>` : '<span class="badge b-int">jen náhled</span>'}
       <button class="btn dark sm" onclick="closeDoc()">✕ Zavřít</button></div>
     <div class="vbody" style="padding:0;align-items:center"><img src="${src}" style="width:100%;max-height:80vh"></div></div></div>`;
 }
@@ -3788,8 +3810,14 @@ async function printDenik() {
       <div class="zhead"><b>${fmtISOFull(e.date)}</b><span>${esc(e.author)}${e.persons ? ' · osob na staveništi: ' + e.persons : ''}${e.status === 'approved' ? '' : e.status === 'internal' ? ' · INTERNÍ' : ' · neschváleno'}</span></div>
       ${e.weather ? `<div class="meta">Počasí: ${esc(e.weather)}</div>` : ''}
       ${(() => { const os = attOn(e.pid, e.date); return os.length ? `<div class="meta">Na staveništi: ${os.map(o => esc(o.name) + (o.prichod || o.odchod ? ' (' + (o.prichod || '—') + '–' + (o.odchod || '—') + ')' : '')).join(', ')}</div>` : ''; })()}
-      <ul>${(e.works || []).map(w => `<li>${esc(w)}</li>`).join('')}</ul>
-      ${(e.attachments || []).length ? `<div class="meta">Přílohy: ${e.attachments.map(a => esc(a.name)).join(', ')}</div>` : ''}
+      ${/* Klientska verze musi tisknout ZNENI PRO INVESTORA (e.client), ktere
+            vedeni pri schvalovani vedome upravilo — ne surovy interni zapis
+            party (e.works). Jinak PDF pro investora obchazi cely schvalovaci
+            krok. Kompletni verze tiskne oboji. */''}
+      ${verze === 'klient'
+        ? `<ul>${rozdelNaVety(e.client || '').map(w => `<li>${esc(w)}</li>`).join('') || '<li class="muted">bez popisu</li>'}</ul>`
+        : `<ul>${(e.works || []).map(w => `<li>${esc(w)}</li>`).join('')}</ul>`}
+      ${(e.attachments || []).length && verze === 'komplet' ? `<div class="meta">Přílohy: ${e.attachments.map(a => esc(a.name)).join(', ')}</div>` : ''}
       ${e.podpis ? `<div class="zpodpis"><img src="${e.podpis.img}">podepsáno: ${esc(e.podpis.jmeno)} · ${fmtISO(e.podpis.at)}</div>` : ''}
       ${verze === 'komplet' && interniPozn(e.id) ? `<div class="interni">Interní poznámka: ${esc(interniPozn(e.id))}</div>` : ''}
       ${(e.photos || []).filter(ph => verze === 'komplet' || ph.status === 'approved').length ? `<div class="fotky">${(e.photos || []).filter(ph => verze === 'komplet' || ph.status === 'approved').map(ph => `<img src="${ph.thumb}">`).join('')}</div>` : ''}
@@ -4376,7 +4404,7 @@ function pgViceprace() {
       <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline">
         <h3>${esc(v.title)}</h3><span class="badge ${cls}">${txt}</span>
       </div>
-      <div class="muted">${esc(p.name || '')} · ${esc(p.cn || '')} · zdroj: ${v.zdroj === 'drive' ? `📁 z Drive${v.driveId ? ` — <span class="lnk" onclick="openDriveDoc('${v.driveId}','${esc(v.title)}')">otevřít PDF</span>` : ''}` : '🏗 ze stavby / deníku'}</div>
+      <div class="muted">${esc(p.name || '')} · ${esc(p.cn || '')} · zdroj: ${v.zdroj === 'drive' ? `📁 z Drive${v.driveId ? ` — <span class="lnk" onclick="openDriveDoc('${v.driveId}','${jsAttr(v.title)}')">otevřít PDF</span>` : ''}` : '🏗 ze stavby / deníku'}</div>
       <div style="margin:8px 0">${esc(v.popis || '')}</div>
       ${v.cena ? `<div style="font-size:16px;font-weight:800;color:var(--navy)">${kc(v.cena)} Kč <span class="muted" style="font-weight:400;font-size:12px">bez DPH · DPH 12 % jako součást díla</span></div>` : ''}
       ${v.podpis ? `<div class="note" style="margin-top:8px">✍️ ${esc(v.podpis)} · nezapomeň propsat do listu Vícepráce v CN (#24)</div>` : ''}
@@ -4682,7 +4710,9 @@ async function dotahniZapisyProReport(from, to) {
 
 async function nactiReport() {
   if (!repObdobiOk()) { S.repLoaded = false; toast('Vyplň celé období.'); render(); return; }
-  await dotahniDochazku(S.repFrom, S.repTo);
+  /* +1 den: smena pres pulnoc z posledniho dne obdobi ma odchod az rano —
+     bez nej by hodiny za posledni noc starsiho mesice tise chybely. */
+  await dotahniDochazku(S.repFrom, shiftISO(S.repTo, 1));
   await dotahniZapisyProReport(S.repFrom, S.repTo);
   S.repLoaded = true; render();
 }
@@ -4787,7 +4817,14 @@ function repTable() {
 /* CSV pro ucetni. Kazda hodnota je v uvozovkach a uvozovka uvnitr se zdvojuje —
    nazev stavby se strednikem uz nerozhodi sloupce. Cisla maji desetinnou carku,
    at je cesky Excel nebere jako text. */
-function repCsvPole(v) { return '"' + String(v === null || v === undefined ? '' : v).replace(/"/g, '""') + '"'; }
+/* Excel/Sheets bere bunku zacinajici = + - @ (nebo tab/CR) jako VZOREC —
+   jmeno pracovnika '=SUM(...)' nebo '@cmd' by se u Katky spustilo. Pred
+   takovou bunku predsadime apostrof, ktery Excel bere jako 'tohle je text'. */
+function repCsvPole(v) {
+  let t = String(v === null || v === undefined ? '' : v);
+  if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;
+  return '"' + t.replace(/"/g, '""') + '"';
+}
 function repCsvRadek(pole) { return pole.map(repCsvPole).join(';') + '\n'; }
 function repCsvCislo(n) { return String(n).replace('.', ','); }
 function repExport() {
@@ -4958,18 +4995,27 @@ function vyplatyDne(udi, m) {
 async function vyplatuPrepni(udi, m, den) {
   const uz = vyplatyDne(udi, m)[den];
   const ref = db.collection('vyplaty').doc(vyplataId(udi, m));
+  /* KAZDA neuspesna cesta konci render() — checkbox se v prohlizeci prepne
+     hned pri kliknuti, a bez prekresleni by ukazoval opak toho, co je
+     v databazi, klidne az do vecera. */
   if (uz) {
     if (!await potvrd('Zrušit „vyplaceno" u dne ' + fmtISO(den) + '?\n\n'
-      + 'Označil(a) to ' + (uz.kdo || '?') + ' ' + fmtISO(uz.kdy) + ' na ' + kc(uz.hruba) + ' Kč.')) return;
+      + 'Označil(a) to ' + (uz.kdo || '?') + ' ' + fmtISO(uz.kdy) + ' na ' + kc(uz.hruba) + ' Kč.')) { render(); return; }
     await ref.set({ udi, mesic: m, dny: { [den]: firebase.firestore.FieldValue.delete() } }, { merge: true })
-      .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
+      .catch(e => { toast('Nejde uložit: ' + (e.code || e.message)); render(); });
     return;
   }
   const dny = osobaDny(udi, mesicPrvni(m), mesicPosledni(m));
   const d = dny[den];
-  if (!d || !d.h) { toast('Za ten den nejsou žádné hodiny.'); return; }
+  if (!d || !d.h) { toast('Za ten den nejsou žádné hodiny.'); render(); return; }
+  /* Nedokonceny nebo dnesni den se jeste muze zmenit — zmrazena castka by
+     pak byla navzdy nizsi, nez co clovek odpracoval. Jde to, ale vedome. */
+  if (d.nedokonceno && !await potvrd('Den ' + fmtISO(den) + ' je NEÚPLNÝ — chybí příchod nebo odchod.\n\n'
+    + 'Když ho označíš teď, zmrazí se jen částečné hodiny a pozdější doplnění už výplatu nezvýší. Opravdu?', 'Označit i tak')) { render(); return; }
+  if (!d.nedokonceno && den >= isoToday() && !await potvrd('Den ' + fmtISO(den) + ' ještě běží — směna se může protáhnout.\n\n'
+    + 'Označit až večer je bezpečnější. Opravdu označit teď?', 'Označit i tak')) { render(); return; }
   const p = penizeZaHodiny(udi, { h: d.h, poDnech: [{ den, h: d.h }] });
-  if (!p.sazby.length) { toast('⚠ Tomu dni chybí sazba — doplň ji v kartě uživatele.'); return; }
+  if (!p.sazby.length) { toast('⚠ Tomu dni chybí sazba — doplň ji v kartě uživatele.'); render(); return; }
   await ref.set({ udi, mesic: m, dny: { [den]: {
     hruba: Math.round(p.hruba), cista: Math.round(p.cista), hod: Math.round(d.h * 100) / 100,
     kdo: fullName(S.me || {}).trim() || 'vedení', kdy: isoToday()
@@ -4984,9 +5030,14 @@ async function vyplatitZbytekMesice(udi, m) {
   const kdo = fullName(S.me || {}).trim() || 'vedení';
   const zapis = {};
   let celkem = 0, bezSazby = 0;
+  let preskoceno = 0;
   Object.keys(dny).sort().forEach(den => {
     const d = dny[den];
     if (uz[den] || !d.h) return;
+    /* Nedokonceny nebo jeste bezici den hromadne NEmrazit — smena se muze
+       protahnout a zmrazena castka by uz navzdy zustala nizsi. Ty dny se
+       oznaci jednotlive, az budou uzavrene. */
+    if (d.nedokonceno || den >= isoToday()) { preskoceno++; return; }
     const p = penizeZaHodiny(udi, { h: d.h, poDnech: [{ den, h: d.h }] });
     if (!p.sazby.length) { bezSazby++; return; }
     zapis[den] = { hruba: Math.round(p.hruba), cista: Math.round(p.cista),
@@ -4994,10 +5045,11 @@ async function vyplatitZbytekMesice(udi, m) {
     celkem += p.hruba;
   });
   const pocet = Object.keys(zapis).length;
-  if (!pocet) { toast(bezSazby ? '⚠ Zbylým dnům chybí sazba.' : 'Není co vyplácet — všechny dny jsou hotové.'); return; }
+  if (!pocet) { toast(bezSazby ? '⚠ Zbylým dnům chybí sazba.' : preskoceno ? 'Zbývají jen neúplné či dnešní dny — ty označ jednotlivě, až budou uzavřené.' : 'Není co vyplácet — všechny dny jsou hotové.'); return; }
   if (!await potvrd('Označit jako vyplacené ' + pocet + ' ' + (pocet === 1 ? 'den' : pocet < 5 ? 'dny' : 'dní')
     + ' za ' + mesicNazev(m) + '?\n\nCelkem ' + kc(celkem) + ' Kč hrubého.'
-    + (bezSazby ? '\n\n⚠ ' + bezSazby + ' dnům chybí sazba — ty se přeskočí.' : ''), '✓ Označit')) return;
+    + (bezSazby ? '\n\n⚠ ' + bezSazby + ' dnům chybí sazba — ty se přeskočí.' : '')
+    + (preskoceno ? '\n\nℹ ' + preskoceno + ' neúplných či ještě běžících dnů se přeskočí.' : ''), '✓ Označit')) return;
   await db.collection('vyplaty').doc(vyplataId(udi, m)).set({ udi, mesic: m, dny: zapis }, { merge: true })
     .then(() => toast('Označeno ' + pocet + ' dní ✓'))
     .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
@@ -5037,6 +5089,14 @@ async function pozOsobSmazat(id) {
 
 /* ---- otevreni karty ---- */
 function otevriOsobu(udi) {
+  /* Rozepsana poznamka se NESMI prenest k jinemu clovekovi: policka maji
+     pevna id (poz-nadpis, poz-novy), takze by FORMMEM vratil text psany
+     pro nekoho jineho — a jedno tuknuti na Ulozit by dluh povesilo cizimu
+     cloveku. Stejny duvod, proc to dela editUser u karty uzivatele. */
+  if (S.osobaId !== udi) {
+    S.pozOsobForm = false; S.pozOsobEdit = null;
+    zapomen('poz-nadpis', 'poz-novy');
+  }
   S.osobaId = udi;
   S.osobaTab = S.osobaTab || 'hodiny';
   S.osobaMesic = S.osobaMesic || mesicTed();
@@ -5048,7 +5108,7 @@ function otevriOsobu(udi) {
    ukazala nuly a vypadalo by to, ze clovek nedelal. */
 async function osobaDotahni() {
   const m = S.osobaMesic;
-  await dotahniDochazku(mesicPrvni(m), mesicPosledni(m));
+  await dotahniDochazku(mesicPrvni(m), shiftISO(mesicPosledni(m), 1)); /* +1 kvuli nocni smene z posledniho dne */
 }
 function osobaMesicPosun(k) {
   S.osobaMesic = mesicPosun(S.osobaMesic || mesicTed(), k);
@@ -5199,7 +5259,7 @@ function osobaPoznamky(u) {
       <label>Text</label>
       <textarea id="poz-novy" placeholder="Dluží za únor 6 000 Kč — sráží se po 2 000 měsíčně, poslední placené srpen." style="min-height:70px"></textarea>
       <div class="aprv"><button class="btn amber sm" onclick="pozOsobPridat('${u.id}')">💾 Uložit</button>
-        <button class="btn ghost sm" onclick="S.pozOsobForm=false;render()">Zrušit</button></div>`
+        <button class="btn ghost sm" onclick="S.pozOsobForm=false;render();zapomen('poz-nadpis','poz-novy')">Zrušit</button></div>`
       : `<div class="aprv"><button class="btn amber sm" onclick="S.pozOsobForm=true;render()">➕ Přidat poznámku</button></div>`}
   </div>
   ${pz.length ? pz.map(p => `
@@ -5210,7 +5270,7 @@ function osobaPoznamky(u) {
         <label>Text</label>
         <textarea id="poz-e-${p.id}" style="min-height:70px">${esc(p.text)}</textarea>
         <div class="aprv"><button class="btn amber sm" onclick="pozOsobUlozit('${p.id}')">💾 Uložit</button>
-          <button class="btn ghost sm" onclick="S.pozOsobEdit=null;render()">Zrušit</button></div>`
+          <button class="btn ghost sm" onclick="S.pozOsobEdit=null;render();zapomen('poz-n-${p.id}','poz-e-${p.id}')">Zrušit</button></div>`
         : `<div class="urow" style="border:0;padding:0 0 6px">
           <h3 style="margin:0">${esc(p.nadpis || 'Bez názvu')}</h3>
           <span class="sp" style="margin-left:auto"></span>
@@ -6054,13 +6114,13 @@ function kartaPodklady(p) {
   const docs = p.stavbaDocs || [];
   return `<div class="card">
     <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— z Drive</span></h3>
-    ${docs.length ? docs.map(d => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${esc(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('') : ''}
+    ${docs.length ? docs.map(d => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${jsAttr(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('') : ''}
     ${!st ? `<div class="aprv"><button class="btn dark sm" onclick="S.podkladyCesta=[];nactiPodklady(proj('${p.id}'))">📂 Zobrazit podklady</button></div>`
       : st.nacita ? '<div class="loading"><span class="spin"></span>Načítám z Drive…</div>'
       : st.chyba ? `<div class="note">${esc(st.chyba)}</div><div class="aprv"><button class="btn ghost sm" onclick="S.podkladyStav=null;render()">Zpět</button>${S.meAuth && S.meAuth.role === 'admin' ? `<button class="btn dark sm" onclick="napojPodklady('${p.id}')">🔗 Napojit složku odkazem</button>` : ''}</div>`
       : `${cesta.length ? `<div class="urow" style="cursor:pointer" onclick="zpetVPodkladech()"><span>⬅</span><b>${esc(cesta.map(c => c.nazev).join(' / '))}</b></div>` : (S.meAuth && S.meAuth.role === 'admin' ? `<div class="aprv" style="justify-content:flex-end"><span class="lnk" style="font-size:12px" onclick="napojPodklady('${p.id}')">🔗 napojit jinou složku</span></div>` : '')}
-        ${st.folders.map(f => `<div class="urow" style="cursor:pointer" onclick="doPodslozky('${f.id}','${esc(f.name)}')"><span>📁</span><b>${esc(f.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('')}
-        ${st.files.map(f => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${f.id}','${esc(f.name)}')"><span>${(f.mime || '').includes('pdf') ? '📄' : (f.mime || '').indexOf('image/') === 0 ? '🖼' : '📎'}</span><b>${esc(f.name)}</b><span class="muted" style="margin-left:auto">${f.size ? Math.round(f.size / 1024) + ' kB' : ''}</span></div>`).join('')}
+        ${st.folders.map(f => `<div class="urow" style="cursor:pointer" onclick="doPodslozky('${f.id}','${jsAttr(f.name)}')"><span>📁</span><b>${esc(f.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('')}
+        ${st.files.map(f => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${f.id}','${jsAttr(f.name)}')"><span>${(f.mime || '').includes('pdf') ? '📄' : (f.mime || '').indexOf('image/') === 0 ? '🖼' : '📎'}</span><b>${esc(f.name)}</b><span class="muted" style="margin-left:auto">${f.size ? Math.round(f.size / 1024) + ' kB' : ''}</span></div>`).join('')}
         ${(!st.folders.length && !st.files.length) ? `<div class="empty">Tady zatím nic není.</div>${S.meAuth && S.meAuth.role === 'admin' && !p.podkladyFolderId ? `<div class="aprv"><button class="btn dark sm" onclick="napojPodklady('${p.id}')">🔗 Napojit složku odkazem</button></div><div class="note">Když vidíš prázdno, i když na Drive něco máš, most trefil jinou složku — napoj ji odkazem, je to jednou a napořád.</div>` : ''}` : ''}`}
   </div>`;
 }
@@ -7427,7 +7487,7 @@ function viewPortal() {
         <div style="border:1px solid var(--line);border-radius:9px;padding:11px 13px;margin-bottom:9px">
           <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>${fmtISOFull(e.date)}</b>${i === 0 ? '<span class="badge b-ok">nové</span>' : ''}</div>
           <div style="margin-top:4px">${esc(e.client).replace(/\n/g, '<br>')}</div>
-          ${(e.photos || []).length ? `<div class="photos">${e.photos.map(ph => `<div class="ph" onclick="otevritFotoPortal('${ph.fotoId || ''}','${esc(ph.label)}',this)"><img src="${ph.thumb}"><small>${esc(ph.label || '')}</small></div>`).join('')}</div>` : ''}
+          ${(e.photos || []).length ? `<div class="photos">${e.photos.map(ph => `<div class="ph" onclick="otevritFotoPortal('${ph.fotoId || ''}','${jsAttr(ph.label)}',this)"><img src="${ph.thumb}"><small>${esc(ph.label || '')}</small></div>`).join('')}</div>` : ''}
         </div>`).join('') : '<div class="empty">Zatím žádné zápisy.</div>'}
     </div>
     <div class="card">

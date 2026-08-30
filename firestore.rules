@@ -327,8 +327,16 @@ service cloud.firestore {
         && (isAdmin() || request.resource.data.autorId == mujDocId());
       allow update: if (isAdmin() || resource.data.autorId == mujDocId())
         ? (request.resource.data.vidi is list && request.resource.data.vidi.size() > 0)
+        // Komentar smi pridat jen ten, kdo poznamku opravdu VIDI (Firestore
+        // u update pravo cist nevyzaduje — bez teto podminky mohl kdokoli
+        // s roli prepsat komentare i u poznamky urcene jen vedeni).
+        // A pole smi jen RUST — jinak by sel obsah smazat jednim zapisem.
         : (hasRole()
-           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['komentare']));
+           && ('vsichni' in resource.data.vidi
+               || (mojeRole() == 'worker' && 'parta' in resource.data.vidi)
+               || mujDocId() in resource.data.vidi)
+           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['komentare'])
+           && request.resource.data.komentare.size() >= resource.data.komentare.size());
       allow delete: if isAdmin() || resource.data.autorId == mujDocId();
     }
 
@@ -371,8 +379,19 @@ service cloud.firestore {
     match /attendance/{id} {
       allow read: if isAdmin() || (hasRole() && resource.data.authUid == request.auth.uid);
       allow create: if isAdmin() || (hasRole() && request.resource.data.authUid == request.auth.uid
-                    && request.resource.data.manual == false);
-      allow update, delete: if isAdmin();
+                    && request.resource.data.manual == false
+                    // strop na overovaci selfie: appka posila nahled ~20 kB,
+                    // bez limitu by sel dokument nafouknout az k 1 MB
+                    && (!('selfie' in request.resource.data)
+                        || request.resource.data.selfie.size() < 60000));
+      // Fronta na telefonu dopisuje ke SVEMU zaznamu odkaz na plnou verzi
+      // selfie na Disku. Doted to smel jen admin, takze zapis pracovnika
+      // tise padal do .catch a selfieDriveId zustavalo prazdne navzdy —
+      // plnou verzi overovaci fotky pak neslo otevrit u NIKOHO z party.
+      allow update: if isAdmin()
+        || (hasRole() && resource.data.authUid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['selfieDriveId']));
+      allow delete: if isAdmin();
     }
 
     // ── Zadosti od party (doplneni zapomenuteho odchodu) ──

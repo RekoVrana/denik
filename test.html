@@ -147,6 +147,16 @@ testSmena('Nový příchod uzavře zapomenutý den', 'Příchod v pondělí 7:00
 testSmena('Běžný den zůstává jedním dnem', 'Příchod 7:00, odchod 16:00 v jeden den → jedna směna, 9 hodin',
   [zd('Příchod','7:00','2026-08-10'), zd('Odchod','16:00','2026-08-10')], 1, 540, { nedokonceno: false });
 
+/* ---- 21. neukoncena pauza zacinajici pred prichodem ---- */
+testSmena('Pauza otevřená před příchodem den nevynuluje',
+  'Pauza 6:00 bez konce (ruční oprava vedení), příchod 7:00, odchod 16:00 → dopočítaná pauza se ořeže na začátek směny, den 9 hodin',
+  [zd('Pauza','6:00','2026-08-10'), zd('Příchod','7:00','2026-08-10'), zd('Odchod','16:00','2026-08-10')], 1, 540);
+
+/* ---- 22. prichod a odchod ve stejnou minutu ---- */
+testSmena('Příchod a odchod ve stejné minutě',
+  'Oba záznamy 7:00 → nula hodin, žádné záporné, den označen jako neúplný',
+  [zd('Příchod','7:00','2026-08-10'), zd('Odchod','7:00','2026-08-10')], 1, 0, { nedokonceno: true });
+
 /* ---- vypis ---- */
 var padlo = testy.filter(function (t) { return !t.ok; }).length;
 document.getElementById('souhrn').className = 'souhrn ' + (padlo ? 'red' : 'ok');
