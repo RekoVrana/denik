@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '30. 8. 2026 x';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '30. 8. 2026 y';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -1661,6 +1661,7 @@ function render() {
   else if (!S.authUser || !S.meAuth) root.innerHTML = viewLogin();
   else root.innerHTML = (S.meAuth.role === 'admin') ? viewAdmin() : (S.meAuth.role === 'sub' ? viewSub() : viewWorker());
   vratitFormulare();
+  setTimeout(srovnejLepeni, 0);      /* kam se ma prilepit hlavicka tabulky */
   if (S.signFor) setTimeout(sigInit, 0);
   setTimeout(mountMaps, 0);
   if (typeof zkontrolovatPauzu === 'function') setTimeout(zkontrolovatPauzu, 0);
@@ -2916,6 +2917,17 @@ function harmoDnesLeft() {
 /* Prekresleni (render) zahodi DOM a s nim i to, kam byl clovek odjety.
    Pozice se proto pamatuje a po prekresleni vraci. Kdyz jeste nikam
    nejel, osa se sama nastavi na dnesek. */
+/* Hlavicka tabulky se lepi POD lepici lastu se jmenem obrazovky. Ta ma ale
+   promenlivou vysku (na uzke obrazovce se zalomi do dvou az tri radku),
+   takze pevne cislo v CSS by sedelo jen na jedne sirce okna. Zmerime ji
+   po kazdem prekresleni a predame do CSS jako promennou. */
+function srovnejLepeni() {
+  const st = document.querySelector('.strip');
+  const tb = document.querySelector('.topbar');
+  const mobil = window.matchMedia('(max-width:700px)').matches;
+  const vrch = (mobil ? 0 : (tb ? tb.offsetHeight : 53)) + (st ? st.offsetHeight : 0);
+  document.documentElement.style.setProperty('--lepeni', vrch + 'px');
+}
 function harmoScrollObnov() {
   const el = document.getElementById('harmo-scroll'); if (!el) return;
   if (S.harmoScroll == null) {
@@ -5260,21 +5272,23 @@ function osobaHodiny(u) {
       if (v) cVypl += v.hruba; else cZbyva += hruba;
       if (bezSazby) chybiSazba++;
     }
+    /* Zaskrtavatko je PRVNI sloupec — je to hlavni akce cele obrazovky
+       a vpravo na konci se na telefonu nedalo trefit ani najit. */
     radky.push(`<tr style="${vikend ? 'background:var(--int-soft)' : ''}${v ? ';opacity:.72' : ''}">
+      <td style="text-align:center">${d && d.h
+        ? `<input type="checkbox" class="vypl" ${v ? 'checked' : ''} title="${v ? 'Označil(a) ' + esc(v.kdo || '') + ' ' + fmtISO(v.kdy) : 'Označit den jako vyplacený'}" onclick="vyplatuPrepni('${u.id}','${m}','${den}')">` : ''}</td>
       <td style="white-space:nowrap"><b>${i}.</b></td>
       <td class="muted">${DAYS[dt.getDay()]}</td>
       <td>${d && d.h ? `<b>${fmtH(d.h)}</b>${d.pauzaMin ? `<br><span class="muted" style="font-size:11px">− pauza ${d.pauzaMin} min</span>` : ''}${d.nedokonceno ? '<br><span class="badge b-red">neúplný den</span>' : ''}` : '<span class="muted">—</span>'}</td>
       <td>${!d || !d.h ? ''
         /* Uz vyplaceny den ukazuje ZMRAZENOU castku, ne dnesni prepocet —
            jinak by se pri zpetne zmene sazby tise rozesel s tim, co clovek
-           opravdu dostal. */
-        : v ? `<b>${kc(v.hruba)} Kč</b>${v.cista && v.cista !== v.hruba ? `<br><span class="muted" style="font-size:11px">čistá ${kc(v.cista)}</span>` : ''}`
+           opravdu dostal. Cista vyplata se tu na prani Marca neukazuje
+           vubec — zustava v exportu a v reportu, kde ji potrebuje Katka. */
+        : v ? `<b>${kc(v.hruba)} Kč</b> <span class="muted" style="font-size:11px">✓</span>`
         : bezSazby ? '<span class="badge b-red">chybí sazba</span>'
-        : `<b>${kc(hruba)} Kč</b>${cista && Math.round(cista) !== Math.round(hruba) ? `<br><span class="muted" style="font-size:11px">čistá ${kc(cista)}</span>` : ''}`}</td>
+        : `<b>${kc(hruba)} Kč</b>`}</td>
       <td class="muted" style="font-size:11.5px">${d ? d.pidy.map(pid => esc((proj(pid) || {}).name || '')).filter(Boolean).join(', ') : ''}</td>
-      <td style="white-space:nowrap">${d && d.h ? `
-        <input type="checkbox" ${v ? 'checked' : ''} onclick="vyplatuPrepni('${u.id}','${m}','${den}')">
-        ${v ? `<br><span class="muted" style="font-size:10.5px" title="Označil(a) ${esc(v.kdo || '')} ${fmtISO(v.kdy)}">${kc(v.hruba)} Kč ✓</span>` : ''}` : ''}</td>
     </tr>`);
   }
   return `
@@ -5287,15 +5301,15 @@ function osobaHodiny(u) {
   </div>
   ${chybiSazba ? `<div class="note" style="color:var(--red)">⚠ <b>${chybiSazba} ${chybiSazba === 1 ? 'dni chybí sazba' : 'dnům chybí sazba'}.</b>
     Za ty dny se nedají spočítat peníze ani je označit za vyplacené. Doplň sazbu v kartě uživatele (✏️ Upravit údaje) — historie sazeb umí i zpětnou platnost.</div>` : ''}
-  <div class="tablecard">
-    <div style="overflow-x:auto"><table>
-      <tr><th>Datum</th><th>Den</th><th>Hodiny</th><th>Výplata</th><th>Stavba</th><th>Vyplaceno</th></tr>
+  <div class="tablecard lepive">
+    <div><table>
+      <tr><th style="text-align:center">✓</th><th>Datum</th><th>Den</th><th>Hodiny</th><th>Výplata</th><th>Stavba</th></tr>
       ${radky.join('')}
       <tr style="background:#e8f5ec;font-weight:700">
-        <td colspan="2">Celkem</td>
+        <td></td><td colspan="2">Celkem</td>
         <td>${fmtH(cH)}</td>
-        <td>${kc(cHruba)} Kč${cCista && Math.round(cCista) !== Math.round(cHruba) ? `<br><span style="color:var(--ok);font-size:12px">čistá ${kc(cCista)} Kč</span>` : ''}</td>
-        <td></td><td></td>
+        <td>${kc(cHruba)} Kč</td>
+        <td></td>
       </tr>
     </table></div>
     <div class="pagefoot" style="gap:18px;flex-wrap:wrap">

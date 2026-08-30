@@ -167,6 +167,32 @@
     .hlab{flex-basis:118px;padding:8px 6px 8px 9px;font-size:12px;white-space:normal;line-height:1.25}
     .hlab small{font-size:10px}
   }
+  /* Hlavicka tabulky zustava videt pri scrollovani mesice. POZOR: sticky
+     uvnitr ramu s overflow se lepi k TOMU RAMU, ne k obrazovce — proto ma
+     ram vlastni vysku a roluje se v nem. Vyska se pocita z --lepeni,
+     ktere meri JS po kazdem prekresleni (viz srovnejLepeni). */
+  /* Ram ZAMERNE bez overflow: sticky uvnitr posuvneho ramu se lepi k tomu
+     ramu, a jakmile odscrolluje ram, odejde s nim i hlavicka. Bez ramu se
+     hlavicka lepi rovnou k obrazovce, pod lepici listu se jmenem. */
+  /* .tablecard ma overflow:hidden kvuli zaoblenym rohum — a jakykoli
+     overflow nad prvkem sticky vypina. U teto karty ho tedy zrusime
+     a rohy orizneme jinak (clip-path zaobleni nechava, sticky neblokuje). */
+  .tablecard.lepive{overflow:visible;clip-path:inset(0 round 10px)}
+  /* Prilepena hlavicka musi mit NEPRUHLEDNE pozadi — jinak pod ni prosvitaji
+     radky, ktere pod ni prijizdeji. Globalni th zadne pozadi nema. */
+  .tablecard.lepive th{position:sticky;top:var(--lepeni,53px);z-index:20;
+                       background:var(--int-soft);
+                       box-shadow:0 2px 5px rgba(16,32,48,.10)}
+  /* Na telefonu se sloupec Stavba schova, at se tabulka vejde bez posouvani
+     do stran — pri posouvani by zmizelo datum a clovek by nevedel, ktery den
+     odskrtava. Stavby jsou videt v zalozce Zaznamy. */
+  @media(max-width:700px){
+    .tablecard.lepive th:nth-child(6), .tablecard.lepive td:nth-child(6){display:none}
+    .tablecard.lepive td, .tablecard.lepive th{padding:9px 6px}
+  }
+  /* Zaskrtavatko vyplaty: hlavni akce obrazovky, musi se do nej trefit prst */
+  input[type=checkbox].vypl{width:22px;height:22px;accent-color:var(--ok);cursor:pointer}
+  @media(max-width:700px){ input[type=checkbox].vypl{width:26px;height:26px} }
   .chipselect{display:flex;gap:6px;flex-wrap:wrap}
   .chipselect button{border:1px solid var(--line);background:#fff;border-radius:99px;padding:7px 14px;font-size:12.5px;cursor:pointer;font-weight:600}
   .chipselect button.active{background:var(--navy);color:#fff;border-color:var(--navy)}
@@ -243,6 +269,13 @@
     .side .it.active{box-shadow:inset 0 3px 0 var(--amber)}
     .shell{padding-bottom:calc(70px + var(--sab))}
     main{padding:10px}
+    /* Na telefonu se horni lista odlepi a misto ni se prilepi STRIP —
+       ten nese to, co clovek potrebuje i po odscrollovani: sipku zpet,
+       nazev obrazovky, sipky mesicu, tlacitko Pridat. Logo, datum a avatar
+       jsou jen ozdoba a klidne odjedou nahoru.
+       Pevny odsazeni (top:53px jako na pocitaci) by nefungovalo — na uzke
+       obrazovce se hlavicka zalomi do tri radku a vyska se meni. */
+    .topbar{position:static}
     .strip{top:0}
   }
   .viewer{position:fixed;inset:0;background:rgba(12,22,36,.78);z-index:120;display:flex;align-items:center;justify-content:center;padding:14px}
@@ -372,9 +405,9 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js" integrity="sha384-ZaR6mWzmJtrRibZ1Vm7SoHFr8OXjyAuGAXalGDKqbxFT18oi/z+oZLIRFkpeNor1" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" integrity="sha384-I1LYojsZ5RM1cOda44Z2h42Qa6YfsQ1XkXxREnhp4ueYBR/4d1pG1K+NZM537Vsj" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" integrity="sha384-Ke0FJhH7LyRqDxZ0wt+/OXV38yfQVu7g9VPEEGjYmB4RVOY/ta04uecRhsMwT7V3" crossorigin="anonymous"></script>
-<script src="vypocty.js?v=20260830x"></script>
-<script src="navod.js?v=20260830x"></script>
-<script src="config.js?v=20260830x"></script>
-<script src="app.js?v=20260830x"></script>
+<script src="vypocty.js?v=20260830y"></script>
+<script src="navod.js?v=20260830y"></script>
+<script src="config.js?v=20260830y"></script>
+<script src="app.js?v=20260830y"></script>
 </body>
 </html>
