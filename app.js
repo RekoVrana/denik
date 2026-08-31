@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '30. 8. 2026 ac';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 ad';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -266,7 +266,7 @@ const S = {
   loginMode: 'teren', loginWorker: null, loginHledani: null,
   online: navigator.onLine, unsub: [],
   searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false, checking: null, installPrompt: null, swReg: null, updateReady: false, updating: false,
-  frontaPocet: 0, frontaSelhalo: [], orgZobrazeno: 40
+  frontaPocet: 0, frontaSelhalo: [], orgZobrazeno: 40, mobTab: 'dnes'
 };
 window.addEventListener('online', () => { S.online = true; render(); });
 window.addEventListener('offline', () => { S.online = false; render(); });
@@ -1667,6 +1667,7 @@ function render() {
   else root.innerHTML = (S.meAuth.role === 'admin') ? viewAdmin() : (S.meAuth.role === 'sub' ? viewSub() : viewWorker());
   vratitFormulare();
   setTimeout(srovnejLepeni, 0);      /* kam se ma prilepit hlavicka tabulky */
+  setTimeout(hlidejPrilepeni, 0);
   etapaBublinaPryc();                /* bublina u cihlicky nesmi prezit prekresleni */
   if (S.signFor) setTimeout(sigInit, 0);
   setTimeout(mountMaps, 0);
@@ -2927,6 +2928,21 @@ function harmoDnesLeft() {
    promenlivou vysku (na uzke obrazovce se zalomi do dvou az tri radku),
    takze pevne cislo v CSS by sedelo jen na jedne sirce okna. Zmerime ji
    po kazdem prekresleni a predame do CSS jako promennou. */
+/* Hlida, jestli je lista prave prilepena nahore. Na telefonu si v tu chvili
+   musi pripocist bezpecnou zonu, jinak jeji obsah leze pod stavovy radek
+   iPhonu. CSS to samo nepozna, sticky zadny stav nenabizi. */
+function hlidejPrilepeni() {
+  const st = document.querySelector('.strip');
+  const tb = document.querySelector('.topbar');
+  if (!st) return;
+  const mobil = window.matchMedia('(max-width:700px)').matches;
+  const mez = mobil ? (tb ? tb.offsetHeight : 0) : 0;
+  st.classList.toggle('prilepeno', mobil && window.scrollY >= mez - 1);
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('scroll', hlidejPrilepeni, { passive: true });
+  window.addEventListener('resize', hlidejPrilepeni);
+}
 function srovnejLepeni() {
   const st = document.querySelector('.strip');
   const tb = document.querySelector('.topbar');
@@ -7044,9 +7060,11 @@ function viewSub() {
     S.subProject = list.length ? list[0].id : S.projects[0].id;
   }
   const p = proj(otevrena ? otevrena.pid : S.subProject);
+  const tab = S.mobTab || 'dnes';
   return topbar() + `<div class="shell"><div class="content">
   <div class="strip"><h1>Můj den na stavbě</h1><span class="sp"></span><span class="muted">${fmtISOFull(isoToday())}</span></div>
-  <main class="mobilewrap">
+  <main class="mobilewrap stabs-main">
+    ${tab === 'dnes' ? `
     ${typeof navodHtml === "function" ? navodHtml('sub') : ""}
     <div class="card">
       <h3>🧰 ${otevrena ? 'Jsem na stavbě' : 'Příchod na stavbu'}</h3>
@@ -7089,11 +7107,15 @@ function viewSub() {
           <span class="lnk" style="margin-left:auto" onclick="subSmazatHlaseni('${h.id}')">✕</span></div>`).join('')}
       </div>` : ''}
     </div>
-    ${kartaUkoly(p)}
-    ${kartaKlice()}
-    ${kartaPodklady(p)}
-    ${kartaPoznamky(p)}
-  </main></div></div>`;
+    ` : ''}
+    ${tab === 'ukoly' ? kartaUkoly(p) : ''}
+    ${tab === 'stavba' ? `
+      ${kartaPodklady(p)}
+      ${kartaPoznamky(p)}
+      ${kartaKlice()}
+    ` : ''}
+    ${tab === 'denik' ? kartaDenikStavby(p) : ''}
+  </main>${mobTaby('sub')}</div></div>`;
 }
 
 /* Doba mezi dvema casy "HH:MM" jako lidsky text. Bez odchodu se meri do ted. */
@@ -7148,6 +7170,49 @@ async function subSmazatHlaseni(id) {
   catch (e) { toast('Nejde smazat: ' + (e.code || e.message)); }
 }
 
+/* ---- záložky dole u party a subdodavatelů ----
+   Obrazovka mela osm karet pod sebou a to nejdulezitejsi (zapis do deniku)
+   bylo az uplne dole. Rozhodnuti Marca 31. 8.: rozdelit do zalozek jako
+   ma vedeni. Podklady = prilohy (jedna a tataz vec), narad a vzkazy sem
+   nepatri. */
+function mobTaby(role) {
+  const t = S.mobTab || 'dnes';
+  const p = proj(S.workerProject);
+  const ukolu = S.tasks.filter(x => x.stav !== 'hotovo' && x.stav !== 'sablona').length;
+  const polozky = [
+    { k: 'dnes', ic: '🕐', t: 'Dnes' },
+    { k: 'ukoly', ic: '📌', t: 'Úkoly', bdg: ukolu || '' },
+    { k: 'stavba', ic: '🏗', t: 'Stavba' },
+    { k: 'denik', ic: '📓', t: 'Deník' }
+  ];
+  return `<div class="mtabs">${polozky.map(i => `
+    <div class="mt ${t === i.k ? 'active' : ''}" onclick="mobTab('${i.k}')">
+      <span class="ic">${i.ic}</span>${i.t}${i.bdg ? `<span class="bdg">${i.bdg}</span>` : ''}
+    </div>`).join('')}</div>`;
+}
+function mobTab(k) { S.mobTab = k; window.scrollTo(0, 0); render(); }
+
+/* Deník stavby pro partu a suba: co se na stavbě psalo, i s fotkami.
+   Doted videl clovek jen dva radky u poslednich zapisu a fotky vubec. */
+function kartaDenikStavby(p) {
+  if (!p) return '<div class="card"><div class="empty">Nejdřív nahoře vyber stavbu.</div></div>';
+  const zapisy = entriesOf(p.id).slice(0, 30);
+  return `<div class="card">
+    <h3>📓 Deník stavby — ${esc(p.name)}</h3>
+    ${zapisy.map(e => `
+      <div style="border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin-bottom:9px">
+        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
+          <b>${fmtISOFull(e.date)}</b>${sBadge(e.status)}</div>
+        <div class="muted" style="font-size:12.5px">${esc(e.author)}</div>
+        <ul class="worklist">${(e.works || []).map(w => `<li>${esc(w)}</li>`).join('')}</ul>
+        ${(e.photos || []).length ? `<div class="photos">${(e.photos || []).map(ph =>
+          `<div class="ph" onclick="otevritFoto('${ph.id || ''}','${ph.driveId || ''}','${jsAttr(ph.label)}',this,'${ph.origId || ''}')">
+            <img src="${ph.thumb}"></div>`).join('')}</div>` : ''}
+      </div>`).join('') || '<div class="empty">Na téhle stavbě zatím nikdo nic nezapsal.</div>'}
+    ${zapisy.length >= 30 ? '<div class="note">Ukazuje se posledních 30 zápisů.</div>' : ''}
+  </div>`;
+}
+
 function viewWorker() {
   ensureMyPos();
   const sm = mojeSmena();
@@ -7169,9 +7234,11 @@ function viewWorker() {
   const myEntries = p ? entriesOf(p.id).slice(0, 8) : [];
   const myAtt = S.attendance.filter(a => a.date === isoToday());
   const lastAct = myAtt[0];
+  const tab = S.mobTab || 'dnes';
   return topbar() + `<div class="shell"><div class="content">
   <div class="strip"><h1>Můj den na stavbě</h1><span class="sp"></span><span class="muted">${fmtISOFull(isoToday())}</span></div>
-  <main class="mobilewrap">
+  <main class="mobilewrap stabs-main">
+    ${tab === 'dnes' ? `
     ${typeof navodHtml === "function" ? navodHtml('worker') : ""}
     <div class="card">
       <label style="margin-top:0">Stavba</label>
@@ -7234,10 +7301,15 @@ function viewWorker() {
       `}
       <div class="note">Po ťuknutí se otevře foťák — vyfoť se na stavbě. Fotka se uloží do složky zakázky na Drive. Zároveň se ověří poloha proti GPS stavby (±${CFG.gpsTolerance || 100} m).</div>
     </div>
-    ${kartaUkoly(p)}
-    ${kartaKlice()}
-    ${kartaPodklady(p)}
-    ${kartaPoznamky(p)}
+    ` : ''}
+    ${tab === 'ukoly' ? kartaUkoly(p) : ''}
+    ${tab === 'stavba' ? `
+      ${kartaPodklady(p)}
+      ${kartaPoznamky(p)}
+      ${kartaKlice()}
+    ` : ''}
+    ${tab === 'denik' ? kartaDenikStavby(p) : ''}
+    ${tab === 'dnes' ? `
     <div class="card">
       <h3>✍️ Nový zápis do deníku</h3>
       <textarea id="wt" placeholder="Co se dnes dělalo… každá věta = jedna odrážka"></textarea>
@@ -7256,7 +7328,8 @@ function viewWorker() {
           <ul class="worklist">${(e.works || []).slice(0, 2).map(w => `<li>${esc(w)}</li>`).join('')}${(e.works || []).length > 2 ? `<li class="muted">… +${e.works.length - 2} další</li>` : ''}</ul>
         </div>`).join('') || '<div class="empty">Zatím žádné zápisy.</div>'}
     </div>
-  </main></div></div>`;
+    ` : ''}
+  </main>${mobTaby('worker')}</div></div>`;
 }
 /* Ziskani polohy: nejdriv rychly pokus (sit/wifi, klidne i fix stary minutu),
    teprve pak presny GPS. Puvodne se rovnou chtela vysoka presnost s limitem

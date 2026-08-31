@@ -38,8 +38,13 @@ function navodWorker() {
       <span class="muted" style="margin-left:auto;font-weight:400;font-size:13px">${navodOtevreny() ? 'skrýt ▲' : 'ukázat ▼'}</span></h3>
     <div style="${navodOtevreny() ? '' : 'display:none'}">
 
+    ${navodKrok('🕐', 'Kde co najdeš',
+        'Dole jsou čtyři záložky. <b>🕐 Dnes</b> — píchačka a zápis, tady jsi skoro pořád. '
+      + '<b>📌 Úkoly</b> — co máš udělat. <b>🏗 Stavba</b> — výkresy, poznámky a klíče. '
+      + '<b>📓 Deník</b> — co se na stavbě psalo, i s fotkami.')}
+
     ${navodKrok('📍', 'Přijdeš na stavbu',
-        'Nahoře vyber stavbu. Ťukni <b>📍 ZAPSAT PŘÍCHOD</b>. '
+        'Záložka <b>🕐 Dnes</b>. Nahoře vyber stavbu a ťukni <b>📍 ZAPSAT PŘÍCHOD</b>. '
       + 'Otevře se foťák — vyfoť se. <b>Bez fotky se příchod nezapíše.</b> '
       + 'Telefon zároveň zkontroluje, že jsi opravdu na té stavbě.')}
 
@@ -48,7 +53,8 @@ function navodWorker() {
       + 'ťukni na ten samý řádek znovu. Čas pauzy se ti odečte z hodin.')}
 
     ${navodKrok('✍️', 'Napiš, co jsi dělal',
-        'Dole je karta <b>✍️ Nový zápis do deníku</b>. Piš krátce, každá věta je jedna odrážka. '
+        'Ve stejné záložce <b>🕐 Dnes</b>, kousek níž, je <b>✍️ Nový zápis do deníku</b>. '
+      + 'Piš krátce, každá věta je jedna odrážka. '
       + 'Pak ťukni <b>📷 Vyfotit / vybrat z galerie</b> a přidej fotky — nejvíc 8, '
       + 'aspoň jedna musí být. '
       + 'Nakonec <b>📤 ODESLAT ZÁPIS</b>.')}
@@ -66,11 +72,19 @@ function navodWorker() {
       + 'Vedení to schválí a den se uzavře. <b>Do té doby se ti ty hodiny nepočítají.</b> '
       + 'Nový příchod si dneska zapíšeš normálně, čekání ti ho neblokuje.')}
 
-    ${navodKrok('📌', 'Co máš pod docházkou',
-        '<b>📌 Úkoly</b> — hotový úkol odškrtni čtverečkem vlevo. '
-      + '<b>🔑 Klíče u mě</b> — když klíč někomu dáš, hned ťukni <b>Předat</b>. '
-      + '<b>📐 Podklady stavby</b> — ťukni <b>📂 Zobrazit podklady</b>, jsou tam výkresy. '
-      + '<b>📝 Poznámky ke stavbě</b> — kódy, kontakty, kde se zavírá voda.')}
+    ${navodKrok('📌', 'Úkoly',
+        'Záložka <b>📌 Úkoly</b> dole. Hotový úkol odškrtni čtverečkem vlevo. '
+      + 'Číslo na záložce říká, kolik jich ještě čeká.')}
+
+    ${navodKrok('🏗', 'Všechno o stavbě',
+        'Záložka <b>🏗 Stavba</b> dole. '
+      + '<b>📐 Podklady stavby</b> — ťukni <b>📂 Zobrazit podklady</b>, jsou tam výkresy a přílohy. '
+      + '<b>📝 Poznámky ke stavbě</b> — kódy, kontakty, kde se zavírá voda. '
+      + '<b>🔑 Klíče u mě</b> — když klíč někomu dáš, hned ťukni <b>Předat</b>.')}
+
+    ${navodKrok('📓', 'Co se na stavbě dělalo',
+        'Záložka <b>📓 Deník</b> dole. Uvidíš zápisy i s fotkami — svoje i od ostatních. '
+      + 'Ťuknutím na fotku se otevře velká.')}
 
     ${navodPata()}
     </div>
@@ -85,8 +99,13 @@ function navodSub() {
       <span class="muted" style="margin-left:auto;font-weight:400;font-size:13px">${navodOtevreny() ? 'skrýt ▲' : 'ukázat ▼'}</span></h3>
     <div style="${navodOtevreny() ? '' : 'display:none'}">
 
+    ${navodKrok('🕐', 'Kde co najdeš',
+        'Dole jsou čtyři záložky. <b>🕐 Dnes</b> — příchod a odchod, tady jsi skoro pořád. '
+      + '<b>📌 Úkoly</b> — co máte udělat. <b>🏗 Stavba</b> — výkresy, poznámky a klíče. '
+      + '<b>📓 Deník</b> — co se na stavbě psalo, i s fotkami.')}
+
     ${navodKrok('🧰', 'Přijedete na stavbu',
-        'Vyber stavbu. Do malého políčka vedle napiš, <b>kolik vás tu je</b> — i s tebou. '
+        'Záložka <b>🕐 Dnes</b>. Vyber stavbu. Do malého políčka vedle napiš, <b>kolik vás tu je</b> — i s tebou. '
       + 'Do řádku pod tím napiš, <b>co tu dnes budete dělat</b>. '
       + 'Ťukni <b>✅ ZAPSAT PŘÍCHOD</b>.')}
 
@@ -104,13 +123,18 @@ function navodSub() {
         'Tvůj text i fotky jdou vedení jako zápis do deníku stavby. '
       + 'Vedení to schválí a je to hotové.')}
 
-    ${navodKrok('📌', 'Co máš níž na obrazovce',
-        '<b>📌 Úkoly</b> — hotový úkol odškrtni čtverečkem vlevo. '
-      + '<b>🔑 Klíče u mě</b> — když klíč někomu dáš, hned ťukni <b>Předat</b>. '
-      + '<b>📐 Podklady stavby</b> — ťukni <b>📂 Zobrazit podklady</b>, jsou tam výkresy. '
+    ${navodKrok('📌', 'Úkoly',
+        'Záložka <b>📌 Úkoly</b> dole. Hotový úkol odškrtni čtverečkem vlevo.')}
+
+    ${navodKrok('🏗', 'Všechno o stavbě',
+        'Záložka <b>🏗 Stavba</b> dole. '
+      + '<b>📐 Podklady stavby</b> — výkresy a přílohy, ťukni <b>📂 Zobrazit podklady</b>. '
       + '<b>📝 Poznámky ke stavbě</b> — kódy, kontakty, kde se zavírá voda. '
-      + '<span class="badge b-wait">pozor</span> Podklady a poznámky se ukážou, '
-      + 'až nahoře vybereš stavbu.')}
+      + '<b>🔑 Klíče u mě</b> — když klíč někomu dáš, hned ťukni <b>Předat</b>. '
+      + '<span class="badge b-wait">pozor</span> Ukážou se, až v záložce <b>🕐 Dnes</b> vybereš stavbu.')}
+
+    ${navodKrok('📓', 'Co se na stavbě dělalo',
+        'Záložka <b>📓 Deník</b> dole — zápisy i s fotkami.')}
 
     ${navodPata()}
     </div>
