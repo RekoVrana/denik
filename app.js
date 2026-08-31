@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 ad';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 ae';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -266,7 +266,7 @@ const S = {
   loginMode: 'teren', loginWorker: null, loginHledani: null,
   online: navigator.onLine, unsub: [],
   searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false, checking: null, installPrompt: null, swReg: null, updateReady: false, updating: false,
-  frontaPocet: 0, frontaSelhalo: [], orgZobrazeno: 40, mobTab: 'dnes'
+  frontaPocet: 0, frontaSelhalo: [], orgZobrazeno: 40, mobTab: 'dnes', mojeMesic: null
 };
 window.addEventListener('online', () => { S.online = true; render(); });
 window.addEventListener('offline', () => { S.online = false; render(); });
@@ -7115,6 +7115,7 @@ function viewSub() {
       ${kartaKlice()}
     ` : ''}
     ${tab === 'denik' ? kartaDenikStavby(p) : ''}
+    ${tab === 'hodiny' ? kartaMojeHodiny() : ''}
   </main>${mobTaby('sub')}</div></div>`;
 }
 
@@ -7183,7 +7184,8 @@ function mobTaby(role) {
     { k: 'dnes', ic: '🕐', t: 'Dnes' },
     { k: 'ukoly', ic: '📌', t: 'Úkoly', bdg: ukolu || '' },
     { k: 'stavba', ic: '🏗', t: 'Stavba' },
-    { k: 'denik', ic: '📓', t: 'Deník' }
+    { k: 'denik', ic: '📓', t: 'Deník' },
+    { k: 'hodiny', ic: '⏱', t: 'Hodiny' }
   ];
   return `<div class="mtabs">${polozky.map(i => `
     <div class="mt ${t === i.k ? 'active' : ''}" onclick="mobTab('${i.k}')">
@@ -7191,6 +7193,68 @@ function mobTaby(role) {
     </div>`).join('')}</div>`;
 }
 function mobTab(k) { S.mobTab = k; window.scrollTo(0, 0); render(); }
+
+/* Moje hodiny — pracovnik si konecne vidi, kolik ma odpracovano.
+   Doted to nesel zjistit nijak a musel se ptat vedeni.
+
+   PENIZE SE TU NEUKAZUJI a nejde to obejit: sazby bydli v /sazby, ktere
+   pravidla pousti jen vedeni (a spravne — parta by si jinak cetla vyplaty
+   navzajem). Pracovnik tedy vidi hodiny a dny, ne koruny.
+
+   Dotahovat nic netreba: posluchac dochazky u party neni omezeny oknem
+   30 dnu, filtruje se podle authUid a vraci celou historii cloveka. */
+function kartaMojeHodiny() {
+  const mid = (S.me && S.me.id) || (S.meAuth && S.meAuth.userDocId);
+  if (!mid) return '<div class="card"><div class="empty">Nevím, kdo jsi — zkus se odhlásit a přihlásit znovu.</div></div>';
+  const m = S.mojeMesic || mesicTed();
+  const dny = osobaDny(mid, mesicPrvni(m), mesicPosledni(m));
+  const klice = Object.keys(dny).sort();
+  let celkem = 0, neuplnych = 0;
+  klice.forEach(k => { celkem += dny[k].h; if (dny[k].nedokonceno) neuplnych++; });
+  const cekaZadost = S.zadosti.filter(z => z.stav === 'ceka').length;
+  return `
+  <div class="card">
+    <div class="aprv" style="align-items:center;justify-content:space-between">
+      <button class="btn ghost sm" onclick="mojeMesicPosun(-1)">‹</button>
+      <b style="font-size:16px">${mesicNazev(m)}</b>
+      <button class="btn ghost sm" onclick="mojeMesicPosun(1)">›</button>
+    </div>
+    <div style="text-align:center;padding:14px 0 4px">
+      <div style="font-size:34px;font-weight:800;color:var(--navy);line-height:1">${fmtH(celkem)}</div>
+      <div class="muted" style="font-size:13px">odpracováno · ${klice.length} ${pocetDniSlovo(klice.length)}</div>
+    </div>
+  </div>
+  ${neuplnych ? `<div class="inote" style="border-color:var(--red)">
+    <b style="color:var(--red)">⚠ ${neuplnych} ${neuplnych === 1 ? 'neúplný den' : neuplnych < 5 ? 'neúplné dny' : 'neúplných dnů'}.</b>
+    Chybí příchod nebo odchod — <b>hodiny se za ně nepočítají</b>, dokud to vedení nedoplní.
+    V záložce <b>🕐 Dnes</b> můžeš požádat o doplnění odchodu.</div>` : ''}
+  ${cekaZadost ? `<div class="inote"><b>🕗 ${cekaZadost} ${cekaZadost === 1 ? 'žádost čeká' : 'žádosti čekají'} na vedení.</b>
+    Než ji schválí, hodiny za ten den se nepočítají.</div>` : ''}
+  <div class="card">
+    <h3>Den po dni</h3>
+    ${klice.length ? klice.map(k => {
+      const d = dny[k];
+      const dt = new Date(k);
+      const stavby = d.pidy.map(pid => (proj(pid) || {}).name || '').filter(Boolean).join(', ');
+      return `<div class="urow" style="align-items:flex-start">
+        <b style="min-width:62px">${Number(k.slice(8))}. ${DAYS[dt.getDay()].slice(0, 2)}</b>
+        <div style="flex:1;min-width:0">
+          <b>${fmtH(d.h)}</b>${d.pauzaMin ? ` <span class="muted" style="font-size:11.5px">− pauza ${d.pauzaMin} min</span>` : ''}
+          ${d.nedokonceno ? '<br><span class="badge b-red">neúplný den</span>' : ''}
+          ${stavby ? `<br><span class="muted" style="font-size:12px">${esc(stavby)}</span>` : ''}
+        </div>
+      </div>`;
+    }).join('') : '<div class="empty">V tomhle měsíci zatím nemáš žádné hodiny.</div>'}
+  </div>
+  <div class="note">Počítá se z tvé píchačky. Směna přes půlnoc patří celá ke dni, kdy jsi přišel.
+    Pauzy se odečítají. <b>Peníze tu nejsou</b> — sazbu vidí jen vedení.</div>`;
+}
+/* "0 dny" bylo spatne — nula ma v cestine tvar jako pet. */
+function pocetDniSlovo(n) { return n === 1 ? 'den' : (n >= 2 && n <= 4) ? 'dny' : 'dní'; }
+function mojeMesicPosun(k) {
+  S.mojeMesic = mesicPosun(S.mojeMesic || mesicTed(), k);
+  window.scrollTo(0, 0); render();
+}
 
 /* Deník stavby pro partu a suba: co se na stavbě psalo, i s fotkami.
    Doted videl clovek jen dva radky u poslednich zapisu a fotky vubec. */
@@ -7329,6 +7393,7 @@ function viewWorker() {
         </div>`).join('') || '<div class="empty">Zatím žádné zápisy.</div>'}
     </div>
     ` : ''}
+    ${tab === 'hodiny' ? kartaMojeHodiny() : ''}
   </main>${mobTaby('worker')}</div></div>`;
 }
 /* Ziskani polohy: nejdriv rychly pokus (sit/wifi, klidne i fix stary minutu),

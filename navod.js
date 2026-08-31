@@ -39,9 +39,10 @@ function navodWorker() {
     <div style="${navodOtevreny() ? '' : 'display:none'}">
 
     ${navodKrok('🕐', 'Kde co najdeš',
-        'Dole jsou čtyři záložky. <b>🕐 Dnes</b> — píchačka a zápis, tady jsi skoro pořád. '
+        'Dole je pět záložek. <b>🕐 Dnes</b> — píchačka a zápis, tady jsi skoro pořád. '
       + '<b>📌 Úkoly</b> — co máš udělat. <b>🏗 Stavba</b> — výkresy, poznámky a klíče. '
-      + '<b>📓 Deník</b> — co se na stavbě psalo, i s fotkami.')}
+      + '<b>📓 Deník</b> — co se na stavbě psalo, i s fotkami. '
+      + '<b>⏱ Hodiny</b> — kolik máš odpracováno.')}
 
     ${navodKrok('📍', 'Přijdeš na stavbu',
         'Záložka <b>🕐 Dnes</b>. Nahoře vyber stavbu a ťukni <b>📍 ZAPSAT PŘÍCHOD</b>. '
@@ -86,6 +87,12 @@ function navodWorker() {
         'Záložka <b>📓 Deník</b> dole. Uvidíš zápisy i s fotkami — svoje i od ostatních. '
       + 'Ťuknutím na fotku se otevře velká.')}
 
+    ${navodKrok('⏱', 'Kolik mám odpracováno',
+        'Záložka <b>⏱ Hodiny</b> dole. Nahoře je součet za měsíc, pod tím den po dni. '
+      + 'Šipkami <b>‹ ›</b> přepneš měsíc. <b>Neúplný den</b> znamená, že chybí příchod '
+      + 'nebo odchod — takový den se ti do hodin nepočítá, dokud ho vedení nedoplní. '
+      + 'Peníze tu nejsou, sazbu vidí jen vedení.')}
+
     ${navodPata()}
     </div>
   </div>`;
@@ -100,9 +107,10 @@ function navodSub() {
     <div style="${navodOtevreny() ? '' : 'display:none'}">
 
     ${navodKrok('🕐', 'Kde co najdeš',
-        'Dole jsou čtyři záložky. <b>🕐 Dnes</b> — příchod a odchod, tady jsi skoro pořád. '
+        'Dole je pět záložek. <b>🕐 Dnes</b> — příchod a odchod, tady jsi skoro pořád. '
       + '<b>📌 Úkoly</b> — co máte udělat. <b>🏗 Stavba</b> — výkresy, poznámky a klíče. '
-      + '<b>📓 Deník</b> — co se na stavbě psalo, i s fotkami.')}
+      + '<b>📓 Deník</b> — co se na stavbě psalo, i s fotkami. '
+      + '<b>⏱ Hodiny</b> — přehled tvých návštěv stavby.')}
 
     ${navodKrok('🧰', 'Přijedete na stavbu',
         'Záložka <b>🕐 Dnes</b>. Vyber stavbu. Do malého políčka vedle napiš, <b>kolik vás tu je</b> — i s tebou. '
