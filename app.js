@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 af';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 ag';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -250,7 +250,7 @@ const S = {
   projDetailId: null, projDetailTab: 'info', newUserType: null, editUserId: null, newUserActive: null,
   ukolyView: 'seznam', orgFilter: 'vse', taskFormOpen: false, attFormOpen: false, vpFormOpen: false,
   hlaseni: [], subProject: null, subPocet: 1, subOdchodOpen: false, subZaznam: '',
-  podkladyStav: null, podkladyCesta: [], poznamky: [], poznamkaEdit: null, entryEdit: null,
+  podkladyStav: null, podkladyCesta: [], podkladyPid: null, poznamky: [], poznamkaEdit: null, entryEdit: null,
   poznamkyProjekt: '', poznamkyHledat: '',
   taskFoto: [],
   klice: [],
@@ -6367,6 +6367,13 @@ function workerProjectList() {
    Vedeni je sklada primo na Drive, aplikace je jen ukazuje a soubory
    vydava most — funguje i bez uctu Google. Zadal Marco 28. 8. 2026. */
 async function nactiPodklady(p, folderId) {
+  /* Nacteny vypis PATRI KONKRETNI STAVBE. Bez tohohle drzela aplikace
+     vypis v jedne globalni promenne a po prepnuti stavby na obrazovce
+     zustaly viset podklady te predchozi — clovek prihlaseny na zkusebni
+     zakazce videl podklady Saska. Data byla po stavbach v poradku, lhalo
+     jen to, co bylo videt.
+     Pri vstupu do podslozky (folderId bez p) se stavba nemeni. */
+  if (p && p.id) S.podkladyPid = p.id;
   const klic = S.tajne && S.tajne.mostKlic;
   if (!klic || !CFG.scriptUrl) { S.podkladyStav = { chyba: 'Most není nastavený' }; render(); return; }
   S.podkladyStav = { nacita: true }; render();
@@ -6402,12 +6409,15 @@ function zpetVPodkladech() {
   S.podkladyCesta.pop();
   const posl = S.podkladyCesta[S.podkladyCesta.length - 1];
   if (posl) nactiPodklady(null, posl.id);
-  else { S.podkladyStav = null; render(); }
+  else { S.podkladyStav = null; S.podkladyPid = null; render(); }
 }
 function kartaPodklady(p) {
   if (!p) return '';
-  const st = S.podkladyStav;
-  const cesta = S.podkladyCesta;
+  /* Vypis z jine stavby se NEUKAZUJE — radeji tlacitko "Zobrazit podklady"
+     nez cizi soubory pod nazvem teto stavby. */
+  const sedi = S.podkladyPid === p.id;
+  const st = sedi ? S.podkladyStav : null;
+  const cesta = sedi ? S.podkladyCesta : [];
   const docs = p.stavbaDocs || [];
   return `<div class="card">
     <h3>📐 Podklady stavby <span class="muted" style="font-weight:400">— z Drive</span></h3>
