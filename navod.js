@@ -78,14 +78,15 @@ function navodWorker() {
       + 'Číslo na záložce říká, kolik jich ještě čeká.')}
 
     ${navodKrok('🏗', 'Všechno o stavbě',
-        'Záložka <b>🏗 Stavba</b> dole. '
+        'Záložka <b>🏗 Stavba</b> dole. Nahoře si <b>vybereš stavbu</b> — můžeš se podívat '
+      + 'i na jinou, než na které máš píchnuto, docházce to nevadí. '
       + '<b>📐 Podklady stavby</b> — ťukni <b>📂 Zobrazit podklady</b>, jsou tam výkresy a přílohy. '
       + '<b>📝 Poznámky ke stavbě</b> — kódy, kontakty, kde se zavírá voda. '
       + '<b>🔑 Klíče u mě</b> — když klíč někomu dáš, hned ťukni <b>Předat</b>.')}
 
     ${navodKrok('📓', 'Co se na stavbě dělalo',
-        'Záložka <b>📓 Deník</b> dole. Uvidíš zápisy i s fotkami — svoje i od ostatních. '
-      + 'Ťuknutím na fotku se otevře velká.')}
+        'Záložka <b>📓 Deník</b> dole. Nahoře vybereš stavbu, pod tím jsou zápisy i s fotkami — '
+      + 'svoje i od ostatních. Ťuknutím na fotku se otevře velká.')}
 
     ${navodKrok('⏱', 'Kolik mám odpracováno',
         'Záložka <b>⏱ Hodiny</b> dole. Nahoře je součet za měsíc, pod tím den po dni. '
@@ -135,14 +136,14 @@ function navodSub() {
         'Záložka <b>📌 Úkoly</b> dole. Hotový úkol odškrtni čtverečkem vlevo.')}
 
     ${navodKrok('🏗', 'Všechno o stavbě',
-        'Záložka <b>🏗 Stavba</b> dole. '
+        'Záložka <b>🏗 Stavba</b> dole. Nahoře si <b>vybereš stavbu</b> — klidně i jinou, '
+      + 'než na kterou jsi zapsal příchod. '
       + '<b>📐 Podklady stavby</b> — výkresy a přílohy, ťukni <b>📂 Zobrazit podklady</b>. '
       + '<b>📝 Poznámky ke stavbě</b> — kódy, kontakty, kde se zavírá voda. '
-      + '<b>🔑 Klíče u mě</b> — když klíč někomu dáš, hned ťukni <b>Předat</b>. '
-      + '<span class="badge b-wait">pozor</span> Ukážou se, až v záložce <b>🕐 Dnes</b> vybereš stavbu.')}
+      + '<b>🔑 Klíče u mě</b> — když klíč někomu dáš, hned ťukni <b>Předat</b>.')}
 
     ${navodKrok('📓', 'Co se na stavbě dělalo',
-        'Záložka <b>📓 Deník</b> dole — zápisy i s fotkami.')}
+        'Záložka <b>📓 Deník</b> dole — nahoře vybereš stavbu, pod tím zápisy i s fotkami.')}
 
     ${navodPata()}
     </div>

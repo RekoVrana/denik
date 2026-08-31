@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 ag';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 ah';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -266,7 +266,7 @@ const S = {
   loginMode: 'teren', loginWorker: null, loginHledani: null,
   online: navigator.onLine, unsub: [],
   searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false, checking: null, installPrompt: null, swReg: null, updateReady: false, updating: false,
-  frontaPocet: 0, frontaSelhalo: [], orgZobrazeno: 40, mobTab: 'dnes', mojeMesic: null
+  frontaPocet: 0, frontaSelhalo: [], orgZobrazeno: 40, mobTab: 'dnes', mojeMesic: null, prohlizenaStavba: null
 };
 window.addEventListener('online', () => { S.online = true; render(); });
 window.addEventListener('offline', () => { S.online = false; render(); });
@@ -7090,6 +7090,7 @@ function viewSub() {
   }
   const p = proj(otevrena ? otevrena.pid : S.subProject);
   const tab = S.mobTab || 'dnes';
+  const pv = prohlizenaStavba(p);
   return topbar() + `<div class="shell"><div class="content">
   <div class="strip"><h1>Můj den na stavbě</h1><span class="sp"></span><span class="muted">${fmtISOFull(isoToday())}</span></div>
   <main class="mobilewrap stabs-main">
@@ -7139,11 +7140,12 @@ function viewSub() {
     ` : ''}
     ${tab === 'ukoly' ? kartaUkoly(p) : ''}
     ${tab === 'stavba' ? `
-      ${kartaPodklady(p)}
-      ${kartaPoznamky(p)}
+      ${vyberStavbyProhlizeni(pv, p && p.id)}
+      ${kartaPodklady(pv)}
+      ${kartaPoznamky(pv)}
       ${kartaKlice()}
     ` : ''}
-    ${tab === 'denik' ? kartaDenikStavby(p) : ''}
+    ${tab === 'denik' ? `${vyberStavbyProhlizeni(pv, p && p.id)}${kartaDenikStavby(pv)}` : ''}
     ${tab === 'hodiny' ? kartaMojeHodiny() : ''}
   </main>${mobTaby('sub')}</div></div>`;
 }
@@ -7222,6 +7224,30 @@ function mobTaby(role) {
     </div>`).join('')}</div>`;
 }
 function mobTab(k) { S.mobTab = k; window.scrollTo(0, 0); render(); }
+
+/* ---- prepinac stavby v zalozkach Stavba a Deník ----
+   Zamerne NEMENI stavbu, na ktere je clovek pichnuty. Je to jen "na kterou
+   stavbu se prave divam": kdo je ve smene na Saskovi, muze si mrknout na
+   vykresy Hradecke, aniz by si tim rozhodil dochazku. Vychozi je stavba,
+   na ktere prave je. */
+function prohlizenaStavba(vychozi) {
+  const p = S.prohlizenaStavba ? proj(S.prohlizenaStavba) : null;
+  return p || vychozi;
+}
+function prohlizetStavbu(pid) { S.prohlizenaStavba = pid || null; window.scrollTo(0, 0); render(); }
+function vyberStavbyProhlizeni(aktualni, vychoziPid) {
+  const list = workerProjectList().map(it => it.p);
+  if (!list.length) return '';
+  return `<div class="card">
+    <label style="margin-top:0">Stavba</label>
+    <select onchange="prohlizetStavbu(this.value)">
+      ${list.map(x => `<option value="${x.id}" ${aktualni && x.id === aktualni.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
+    </select>
+    ${aktualni && vychoziPid && aktualni.id !== vychoziPid
+      ? `<div class="note" style="margin-bottom:0">Koukáš na jinou stavbu, než na které jsi píchnutý.
+         Docházky se to nedotklo. <span class="lnk" onclick="prohlizetStavbu('')">↩ zpět na moji stavbu</span></div>` : ''}
+  </div>`;
+}
 
 /* Moje hodiny — pracovnik si konecne vidi, kolik ma odpracovano.
    Doted to nesel zjistit nijak a musel se ptat vedeni.
@@ -7328,6 +7354,7 @@ function viewWorker() {
   const myAtt = S.attendance.filter(a => a.date === isoToday());
   const lastAct = myAtt[0];
   const tab = S.mobTab || 'dnes';
+  const pv = prohlizenaStavba(p);
   return topbar() + `<div class="shell"><div class="content">
   <div class="strip"><h1>Můj den na stavbě</h1><span class="sp"></span><span class="muted">${fmtISOFull(isoToday())}</span></div>
   <main class="mobilewrap stabs-main">
@@ -7397,11 +7424,12 @@ function viewWorker() {
     ` : ''}
     ${tab === 'ukoly' ? kartaUkoly(p) : ''}
     ${tab === 'stavba' ? `
-      ${kartaPodklady(p)}
-      ${kartaPoznamky(p)}
+      ${vyberStavbyProhlizeni(pv, p && p.id)}
+      ${kartaPodklady(pv)}
+      ${kartaPoznamky(pv)}
       ${kartaKlice()}
     ` : ''}
-    ${tab === 'denik' ? kartaDenikStavby(p) : ''}
+    ${tab === 'denik' ? `${vyberStavbyProhlizeni(pv, p && p.id)}${kartaDenikStavby(pv)}` : ''}
     ${tab === 'dnes' ? `
     <div class="card">
       <h3>✍️ Nový zápis do deníku</h3>
