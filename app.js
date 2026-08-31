@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 ah';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 ai';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -7089,7 +7089,7 @@ function viewSub() {
     S.subProject = list.length ? list[0].id : S.projects[0].id;
   }
   const p = proj(otevrena ? otevrena.pid : S.subProject);
-  const tab = S.mobTab || 'dnes';
+  const tab = mobTabProRoli('sub');
   const pv = prohlizenaStavba(p);
   return topbar() + `<div class="shell"><div class="content">
   <div class="strip"><h1>Můj den na stavbě</h1><span class="sp"></span><span class="muted">${fmtISOFull(isoToday())}</span></div>
@@ -7146,7 +7146,6 @@ function viewSub() {
       ${kartaKlice()}
     ` : ''}
     ${tab === 'denik' ? `${vyberStavbyProhlizeni(pv, p && p.id)}${kartaDenikStavby(pv)}` : ''}
-    ${tab === 'hodiny' ? kartaMojeHodiny() : ''}
   </main>${mobTaby('sub')}</div></div>`;
 }
 
@@ -7208,22 +7207,33 @@ async function subSmazatHlaseni(id) {
    ma vedeni. Podklady = prilohy (jedna a tataz vec), narad a vzkazy sem
    nepatri. */
 function mobTaby(role) {
-  const t = S.mobTab || 'dnes';
+  /* Stejny prepocet jako ve view — jinak by sub zaseknuty na 'hodiny' videl
+     obsah zalozky Dnes, ale dole by nesvitila zadna. */
+  const t = mobTabProRoli(role);
   const p = proj(S.workerProject);
   const ukolu = S.tasks.filter(x => x.stav !== 'hotovo' && x.stav !== 'sablona').length;
   const polozky = [
     { k: 'dnes', ic: '🕐', t: 'Dnes' },
     { k: 'ukoly', ic: '📌', t: 'Úkoly', bdg: ukolu || '' },
     { k: 'stavba', ic: '🏗', t: 'Stavba' },
-    { k: 'denik', ic: '📓', t: 'Deník' },
-    { k: 'hodiny', ic: '⏱', t: 'Hodiny' }
+    { k: 'denik', ic: '📓', t: 'Deník' }
   ];
+  /* Hodiny jen pro partu. Subdodavatel hodiny NEPICHA — hlasi navstevu
+     stavby s poctem lidi (kolekce hlaseni), takze by mu karta ukazovala
+     porad nuly. Radeji zadna zalozka nez prazdna. */
+  if (role !== 'sub') polozky.push({ k: 'hodiny', ic: '⏱', t: 'Hodiny' });
   return `<div class="mtabs">${polozky.map(i => `
     <div class="mt ${t === i.k ? 'active' : ''}" onclick="mobTab('${i.k}')">
       <span class="ic">${i.ic}</span>${i.t}${i.bdg ? `<span class="bdg">${i.bdg}</span>` : ''}
     </div>`).join('')}</div>`;
 }
 function mobTab(k) { S.mobTab = k; window.scrollTo(0, 0); render(); }
+/* Sub nema zalozku Hodiny — kdyby na ni zustal z drivejska, vratime ho
+   na Dnes, at nekouka na prazdnou obrazovku bez zpusobu, jak odejit. */
+function mobTabProRoli(role) {
+  const t = S.mobTab || 'dnes';
+  return (role === 'sub' && t === 'hodiny') ? 'dnes' : t;
+}
 
 /* ---- prepinac stavby v zalozkach Stavba a Deník ----
    Zamerne NEMENI stavbu, na ktere je clovek pichnuty. Je to jen "na kterou

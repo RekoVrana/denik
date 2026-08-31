@@ -108,10 +108,9 @@ function navodSub() {
     <div style="${navodOtevreny() ? '' : 'display:none'}">
 
     ${navodKrok('🕐', 'Kde co najdeš',
-        'Dole je pět záložek. <b>🕐 Dnes</b> — příchod a odchod, tady jsi skoro pořád. '
+        'Dole jsou čtyři záložky. <b>🕐 Dnes</b> — příchod a odchod, tady jsi skoro pořád. '
       + '<b>📌 Úkoly</b> — co máte udělat. <b>🏗 Stavba</b> — výkresy, poznámky a klíče. '
-      + '<b>📓 Deník</b> — co se na stavbě psalo, i s fotkami. '
-      + '<b>⏱ Hodiny</b> — přehled tvých návštěv stavby.')}
+      + '<b>📓 Deník</b> — co se na stavbě psalo, i s fotkami.')}
 
     ${navodKrok('🧰', 'Přijedete na stavbu',
         'Záložka <b>🕐 Dnes</b>. Vyber stavbu. Do malého políčka vedle napiš, <b>kolik vás tu je</b> — i s tebou. '
