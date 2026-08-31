@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 ae';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 af';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -450,7 +450,7 @@ async function dotahniDochazku(from, to) {
     archivujDotazene('attendance', snap.docs.map(d => ({ id: d.id, ...d.data() })));
     S.dotazeno.push(klic);
   } catch (e) {
-    toast('Starší docházku se nepodařilo načíst: ' + (e.code || e.message));
+    toast('Starší docházku se nepodařilo načíst: ' + dbErrText(e));
   }
   S.dotahuji = false; render();
 }
@@ -508,13 +508,13 @@ async function odeslatTicket() {
       authUid: S.authUser.uid, stav: 'novy', date: isoToday(), time: nowTime(), createdAt: FV()
     });
     closeModal(); toast('Odesláno — díky! ✓');
-  } catch (e) { toast('Nepovedlo se odeslat: ' + (e.code || e.message)); }
+  } catch (e) { toast('Nepovedlo se odeslat: ' + dbErrText(e)); }
 }
 async function ticketVyridit(id) {
   const odpoved = await zeptejSe('Vyřídit ticket', 'Odpověď pro autora je nepovinná — uvidí ji u svého hlášení.', '', true);
   if (odpoved === null) return;
   await db.collection('tickety').doc(id).update({ stav: 'vyrizeno', odpoved: odpoved.trim() })
-    .then(() => toast('Vyřízeno ✓')).catch(e => toast('Nejde: ' + (e.code || e.message)));
+    .then(() => toast('Vyřízeno ✓')).catch(e => toast('Neuložilo se — ' + dbErrText(e)));
 }
 /* Vyrizeno omylem, nebo se vada vratila — ticket musi jit otevrit zpatky.
    Odpoved se maze, patrila k minulemu kolu; jinak by autor videl "ceka"
@@ -522,11 +522,11 @@ async function ticketVyridit(id) {
 async function ticketZnovuOtevrit(id) {
   if (!await potvrd('Otevřít ticket znovu?\n\nVrátí se mezi čekající a dosavadní odpověď se smaže.', 'Otevřít znovu')) return;
   await db.collection('tickety').doc(id).update({ stav: 'novy', odpoved: firebase.firestore.FieldValue.delete() })
-    .then(() => toast('Ticket je zase mezi čekajícími ✓')).catch(e => toast('Nejde: ' + (e.code || e.message)));
+    .then(() => toast('Ticket je zase mezi čekajícími ✓')).catch(e => toast('Neuložilo se — ' + dbErrText(e)));
 }
 async function ticketSmazat(id) {
   if (!await potvrd('Smazat ticket?')) return;
-  await db.collection('tickety').doc(id).delete().catch(e => toast('Nejde: ' + (e.code || e.message)));
+  await db.collection('tickety').doc(id).delete().catch(e => toast('Neuložilo se — ' + dbErrText(e)));
 }
 function nastenkaTickety() {
   /* Vyrizene se sbaluji — jinak seznam jen roste a to, co doopravdy ceka,
@@ -686,7 +686,7 @@ async function ukolOdpovedet(id) {
       })
     });
     inp.value = ''; toast('Odpověď přidána ✓');
-  } catch (e) { toast('Nejde přidat: ' + (e.code || e.message)); }
+  } catch (e) { toast('Nepřidalo se — ' + dbErrText(e)); }
 }
 function ukolDetailHtml(t) {
   return `
@@ -1408,7 +1408,7 @@ async function approveEntry(id) {
   try {
     photos = (await cerstveFotky(id, e.photos)).map(ph => ph.status === 'pending' ? { ...ph, status: 'approved' } : ph);
     await db.collection('entries').doc(id).update({ status: 'approved', client: clientTxt, photos, approvedAt: FV(), approvedBy: fullName(S.me || {}) });
-  } catch (err) { toast('Nepovedlo se schválit: ' + (err.code || err.message)); return; }
+  } catch (err) { toast('Nepovedlo se schválit: ' + dbErrText(err)); return; }
   zapomen('ct-' + id);
   /* Zrcadleni na portal smi selhat samo o sobe — zapis uz schvaleny je
      a dorovnejPortaly() ho pri pristim prihlaseni vedeni dozene. */
@@ -1423,7 +1423,7 @@ async function keepInternalEntry(id) {
   try {
     const photos = (await cerstveFotky(id, e.photos)).map(ph => ({ ...ph, status: 'internal' }));
     await db.collection('entries').doc(id).update({ status: 'internal', photos });
-  } catch (err) { toast('Nepovedlo se označit jako interní: ' + (err.code || err.message)); return; }
+  } catch (err) { toast('Nepovedlo se označit jako interní: ' + dbErrText(err)); return; }
   /* token portalu uz neni na projektu, ale v admin-only /portaly (S2) */
   const tok = await tokenPortaluAsync(e.pid).catch(() => null);
   if (tok) {
@@ -1473,7 +1473,7 @@ async function ulozZapis(id) {
   try {
     await db.collection('entries').doc(id).update({ works, client,
       upravenoKym: fullName(S.me || {}), upravenoAt: FV() });
-  } catch (err) { toast('Nejde uložit: ' + (err.code || err.message)); return; }
+  } catch (err) { toast('Neuložilo se — ' + dbErrText(err)); return; }
   S.entryEdit = null;
   /* Schvaleny zapis uz na portale je — po oprave se tam musi poslat znovu,
      jinak by investor cetl porad tu starou verzi. */
@@ -1492,7 +1492,7 @@ async function vratKeSchvaleni(id) {
   try {
     await db.collection('entries').doc(id).update({ status: 'pending' });
     toast('Vráceno ke schválení ✓'); render();
-  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
 async function mirrorEntry(e) {
   // STRUKTURÁLNÍ ZÁRUKA #31: na portál se fyzicky kopíruje JEN klientský text a schválené fotky.
@@ -1607,7 +1607,7 @@ async function cyclePhoto(eid, phid) {
   try {
     photos = (await cerstveFotky(eid, e.photos)).map(ph => ph.id === phid ? { ...ph, status: ph.status === 'pending' ? 'approved' : ph.status === 'approved' ? 'internal' : 'pending' } : ph);
     await db.collection('entries').doc(eid).update({ photos });
-  } catch (err) { toast('Nepovedlo se přepnout fotku: ' + (err.code || err.message)); return; }
+  } catch (err) { toast('Nepovedlo se přepnout fotku: ' + dbErrText(err)); return; }
   if (e.status === 'approved') {
     try { await mirrorEntry({ ...e, photos }); }
     catch (err) { console.warn('zrcadleni po prepnuti fotky', err); toast('Fotka přepnuta ✓ — portál se srovná, až bude signál'); }
@@ -1711,7 +1711,7 @@ function initAuth() {
         }
       } catch (e) {
         console.warn(e);
-        S.loginMsg = 'Přihlášení se nedokončilo: ' + (e.code || e.message);
+        S.loginMsg = 'Přihlášení se nedokončilo: ' + dbErrText(e);
         await auth.signOut();
       }
     }
@@ -1832,6 +1832,25 @@ function authErrText(e) {
   if (c === 'auth/invalid-email') return 'Účet je poškozený (chybná adresa). Ať ti ho vedení založí znovu.';
   return 'Přihlášení se nepodařilo (' + (c || 'neznámá chyba') + ').';
 }
+/* Kody z Firebase videla parta anglicky: "permission-denied", "unavailable".
+   Clovek na strese nema sanci poznat, jestli si ma pockat na signal, nebo
+   volat vedeni. Prekladame do lidske vety, ktera rovnou rika, CO TED delat.
+   Kod zustava drobne v zavorce — z fotky obrazovky se pak da poznat, co se
+   opravdu stalo. Vzor: authErrText o kus vys. */
+function dbErrText(e) {
+  const c = (e && (e.code || e.name)) || '';
+  const k = ' (' + (c || 'neznámá chyba') + ')';
+  if (c === 'permission-denied') return 'K tomuhle nemáš oprávnění. Odhlas se a přihlas znovu — když to nepomůže, ozvi se vedení.' + k;
+  if (c === 'unauthenticated') return 'Jsi odhlášený. Přihlas se znovu.' + k;
+  if (c === 'unavailable' || c === 'deadline-exceeded' || c === 'network-request-failed')
+    return 'Nejde se spojit se serverem. Zkontroluj internet a zkus to znovu.' + k;
+  if (c === 'not-found') return 'Tenhle záznam už neexistuje — někdo ho mezitím smazal.' + k;
+  if (c === 'already-exists') return 'Tohle už je uložené — načti stránku znovu.' + k;
+  if (c === 'resource-exhausted') return 'Server toho má teď moc. Zkus to za pár minut.' + k;
+  if (c === 'failed-precondition') return 'Teď to nejde uložit. Zkus to za chvíli — když to trvá, ozvi se vedení.' + k;
+  if (c === 'invalid-argument') return 'Něco v tom, co se ukládá, nesedí. Ozvi se vedení.' + k;
+  return 'Nepovedlo se to. Zkus to znovu, případně to nahlas tlačítkem 💬.' + k;
+}
 function lerr(msg) { S.loginMsg = null; const e = $('#lerr'); if (e) { e.textContent = msg; e.style.display = 'block'; } }
 async function doLogin() {
   try { await auth.signInWithEmailAndPassword($('#li-email').value.trim(), $('#li-pass').value); }
@@ -1908,7 +1927,7 @@ async function smazVicepraci(id) {
     if (tok) await db.collection('portals').doc(tok).collection('vp').doc(id).delete().catch(() => {});
     await db.collection('viceprace').doc(id).delete();
     toast('Vícepráce smazána ✓');
-  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
 /* Cesta zpet u vicepraci: co je u investora, jde stahnout (treba spatna cena);
    co investor zamitl, jde precenit a poslat znovu. Obojim se vraci stav na
@@ -1931,7 +1950,7 @@ async function vpZpetKPreceneni(id) {
     });
     toast(uInvestora ? 'Staženo zpět — můžeš nacenit znovu ✓' : 'Vráceno k přecenění ✓');
     render();
-  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
 function doLogout() { auth.signOut(); }
 
@@ -1954,7 +1973,7 @@ function sidebar() {
   const gpsBad = S.attendance.filter(gpsPodezrela).length;
   const items = [
     { k: 'nastenka', ic: '📊', t: 'Nástěnka' },
-    { k: 'projekty', ic: '🛠️', t: 'Projekty' },
+    { k: 'projekty', ic: '🛠️', t: 'Stavby' },
     { k: 'harmonogram', ic: '📅', t: 'Harmonogram', bdg: etapyVeSkluzu().length || '' },
     { k: 'denik', ic: '📓', t: 'Stavební deník' },
     { k: 'fotky', ic: '🖼', t: 'Fotky' },
@@ -2019,18 +2038,18 @@ function nastenkaPrehled() {
     ${kartaFrontaSelhala()}
     <div class="stats">
       <div class="stat" onclick="goPage('schvaleni')"><span class="sic">⏳</span><span class="st2">Čeká na schválení</span><span class="sn ${n ? 'warn' : ''}">${n}</span></div>
-      <div class="stat" onclick="goPage('denik')"><span class="sic">📓</span><span class="st2">Denní záznamy za 30 dní</span><span class="sn">${S.entries.length}</span></div>
-      <div class="stat" onclick="goPage('projekty')"><span class="sic">🛠️</span><span class="st2">Aktivní projekty</span><span class="sn">${act.length}</span></div>
+      <div class="stat" onclick="goPage('denik')"><span class="sic">📓</span><span class="st2">Zápisy v deníku za 30 dní</span><span class="sn">${S.entries.length}</span></div>
+      <div class="stat" onclick="goPage('projekty')"><span class="sic">🛠️</span><span class="st2">Aktivní stavby</span><span class="sn">${act.length}</span></div>
       <div class="stat"><span class="sic">⚠️</span><span class="st2">Dnes bez zápisu</span><span class="sn ${noToday.length ? 'warn' : ''}">${noToday.length}</span></div>
     </div>
     <div class="grid2">
       <div class="card">
-        <h3>⚠️ Kontrola — aktivní projekty bez dnešního zápisu</h3>
+        <h3>⚠️ Kontrola — aktivní stavby bez dnešního zápisu</h3>
         ${noToday.length ? noToday.map(p => `
           <div class="urow" style="cursor:pointer" onclick="S.adminFilter='${p.id}';goPage('denik')">
             <span style="color:var(--red)">🏗</span><b>${esc(p.name)}</b>
             <span class="muted" style="margin-left:auto">poslední: ${entriesOf(p.id)[0] ? fmtISO(entriesOf(p.id)[0].date) : '—'}</span>
-          </div>`).join('') : '<div class="empty">Všechny projekty mají dnešní zápis ✓</div>'}
+          </div>`).join('') : '<div class="empty">Všechny stavby mají dnešní zápis ✓</div>'}
       </div>
       <div class="card">
         <h3>📷 Poslední média ze staveb</h3>
@@ -2038,13 +2057,13 @@ function nastenkaPrehled() {
       </div>
     </div>
     <div class="card">
-      <h3>📓 Poslední záznamy</h3>
+      <h3>📓 Poslední zápisy</h3>
       ${S.entries.slice(0, 5).map(e => { const p = proj(e.pid) || {}; return `
         <div class="urow" style="cursor:pointer" onclick="openDetail('${e.id}')">
           <span class="uav">${(e.author || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}</span>
           <div><b>${esc(p.name || '')}</b> — ${fmtISOFull(e.date)}<br><span class="muted">${esc(e.author)} · ${(e.works || []).length} položek</span></div>
           <span style="margin-left:auto">${sBadge(e.status)}</span>
-        </div>`; }).join('') || '<div class="empty">Zatím žádné záznamy.</div>'}
+        </div>`; }).join('') || '<div class="empty">Zatím žádné zápisy.</div>'}
     </div>
   </main>`;
 }
@@ -2120,7 +2139,7 @@ function nastenkaUkoly() {
 /* ---- Projekty ---- */
 function pgProjekty() {
   return `
-  <div class="strip"><h1>Projekty</h1><span class="sp"></span><button class="btn amber" onclick="projectForm()">➕ PŘIDAT</button></div>
+  <div class="strip"><h1>Stavby</h1><span class="sp"></span><button class="btn amber" onclick="projectForm()">➕ PŘIDAT</button></div>
   <main>
     <div class="tablecard">
       <div style="overflow-x:auto"><table>
@@ -2140,7 +2159,7 @@ function pgProjekty() {
           <td style="min-width:110px">${projProgress(p) != null ? `<div class="prog"><i style="width:${projProgress(p)}%"></i></div>` : ''}<span class="muted" style="font-size:11px">${projProgress(p) != null ? projProgress(p) + ' %' : '—'}${projPhase(p) ? ' · ' + esc(projPhase(p)) : ''}</span></td>
         </tr>`).join('')}
       </table></div>
-      <div class="pagefoot"><span>${S.projects.length} projektů</span></div>
+      <div class="pagefoot"><span>${S.projects.length} staveb</span></div>
     </div>
   </main>`;
 }
@@ -2149,7 +2168,7 @@ function openProj(id) { S.projDetailId = id; S.projDetailTab = 'info'; S.view = 
 function projectForm(id) {
   const p = id ? proj(id) : {};
   S.geoHits = []; S.geoLabel = null;
-  modal(`<h3>${id ? '✏️ Upravit projekt' : '➕ Nový projekt'}</h3>
+  modal(`<h3>${id ? '✏️ Upravit stavbu' : '➕ Nová stavba'}</h3>
       <div><label>Číslo zakázky (CN)</label>
       <div style="display:flex;gap:8px;align-items:stretch">
         <input type="text" id="pf-cn" value="${esc(p.cn || '')}" placeholder="CN20260055"
@@ -2172,10 +2191,10 @@ function projectForm(id) {
     </div>
     <div id="pf-geohits" style="display:none"></div>
     <div class="note" id="pf-geoinfo" style="display:none"></div>
-    <label>Typ projektu</label><input type="text" id="pf-type" value="${esc(p.type || '')}" placeholder="Kompletní rekonstrukce · 3+kk panelák">
+    <label>Typ stavby</label><input type="text" id="pf-type" value="${esc(p.type || '')}" placeholder="Kompletní rekonstrukce · 3+kk panelák">
     <div class="frow">
       <div><label>Zodpovědný</label><input type="text" id="pf-resp" value="${esc(p.resp || 'Zdeno Balúch')}"></div>
-      <div><label>Stav projektu</label><select id="pf-stav">${
+      <div><label>Stav stavby</label><select id="pf-stav">${
         /* "Nabidka" tu byla, ale zakazka ve fazi nabidky jeste neni stavba a do
            deniku nepatri. Kdyby ji nekterá stará zakázka mela zapsanou, necháme
            ji ve výběru — jinak by se pri ulozeni tise prepsala na "Realizace". */
@@ -2190,7 +2209,7 @@ function projectForm(id) {
     ${id ? `<div class="frow">
       <div><label>Fáze</label><input type="text" id="pf-phase" value="${esc(p.phase || '')}" placeholder="Hrubé rozvody"${(p.milestones || []).length ? ' disabled' : ''}></div>
     </div>
-    <div class="note">Průběh (%) se počítá automaticky z harmonogramu — postup nastavíš u milníků v detailu projektu.${(p.milestones || []).length ? ' Fázi teď určuje harmonogram (první nedokončený milník).' : ''}</div>` : ''}
+    <div class="note">Průběh (%) se počítá automaticky z harmonogramu — postup nastavíš u etap v detailu stavby.${(p.milestones || []).length ? ' Fázi teď určuje harmonogram (první nedokončená etapa).' : ''}</div>` : ''}
     <div class="frow">
       <div><label>GPS lat</label><input type="text" id="pf-lat" value="${p.gps ? p.gps.lat : ''}" placeholder="50.0236914" oninput="mapFromInputs()"></div>
       <div><label>GPS lng</label><input type="text" id="pf-lng" value="${p.gps ? p.gps.lng : ''}" placeholder="14.4368684" oninput="mapFromInputs()"></div>
@@ -2291,7 +2310,7 @@ async function nacistZakazku() {
     ['#pf-cmail',  j.email,     'e-mail investora'],
     ['#pf-cphone', j.telefon,   'telefon investora'],
     ['#pf-addr',   j.adresa,    'adresa realizace'],
-    ['#pf-type',   j.typ,       'typ projektu'],
+    ['#pf-type',   j.typ,       'typ stavby'],
     ['#pf-hand',   j.dokonceni, 'plán předání']
   ];
   const doplneno = [], preskoceno = [];
@@ -2393,17 +2412,17 @@ async function saveProject(id) {
   if (id && data.stav === 'Dokončeno' && drivStav !== 'Dokončeno' && drivVidi) {
     if (await potvrd('Stavba „' + name + '" je teď označená jako Dokončeno.\n\n' +
       'Má ji parta přestat vidět? Zmizí ze seznamu, kde si píchá docházku a zakládá zápisy — hotové záznamy a deník zůstanou.\n\n' +
-      'Kdykoli ji vrátíš přepínačem „Vidí parta" v seznamu Projekty.', 'Ano, schovat partě')) {
+      'Kdykoli ji vrátíš přepínačem „Vidí parta" v seznamu Stavby.', 'Ano, schovat partě')) {
       await db.collection('projects').doc(id).update({ active: false }).catch(() => {});
     }
   }
-  closeModal(); toast('Projekt uložen ✓');
+  closeModal(); toast('Stavba uložena ✓');
 }
 
 /* ---- Detail projektu ---- */
 function pgProjDetail() {
   const p = proj(S.projDetailId);
-  if (!p) return '<main><div class="empty">Projekt nenalezen.</div></main>';
+  if (!p) return '<main><div class="empty">Stavba nenalezena.</div></main>';
   const t = S.projDetailTab;
   let body = '';
   if (t === 'info') {
@@ -2426,7 +2445,7 @@ function pgProjDetail() {
       ${sekceKliceProjektu(p)}
       ${kartaPodklady(p)}
       <div class="card">
-        <h3>📍 Pozice projektu (GPS check-in)</h3>
+        <h3>📍 Poloha stavby (GPS check-in)</h3>
         ${p.gps ? `
           <div class="mapreal" data-map="det" data-drag="0" data-lat="${p.gps.lat}" data-lng="${p.gps.lng}"></div>
           <div class="kv" style="margin-top:10px"><span>${esc(p.address || '—')}</span>
@@ -2452,7 +2471,7 @@ function pgProjDetail() {
             <button class="btn amber sm" onclick="navigator.clipboard.writeText('${portalUrl}').then(()=>toast('Odkaz zkopírován ✓'))">📋 Kopírovat odkaz</button>
             <button class="btn ghost sm" onclick="window.open('${portalUrl}','_blank')">👁 Náhled portálu</button>
           </div>
-          <div class="note">Investor vidí jen schválené zápisy a fotky (#31). Odkaz mu pošli e-mailem — bez instalace a hesla.</div>
+          <div class="note">Investor vidí jen schválené zápisy a fotky. Odkaz mu pošli e-mailem — bez instalace a hesla.</div>
           <div class="aprv">
             <button class="btn ghost sm" onclick="novyPortal('${p.id}')">🔄 Vydat nový odkaz</button>
             <button class="btn ghost sm" onclick="zrusPortal('${p.id}')">🗑 Zrušit portál</button>
@@ -2462,23 +2481,23 @@ function pgProjDetail() {
           <div class="aprv"><button class="btn amber" onclick="createPortal('${p.id}')">🔗 Vytvořit portál investora</button></div>`}
       </div>
       <div class="card">
-        <h3>📅 Harmonogram — milníky</h3>
+        <h3>📅 Harmonogram — etapy</h3>
         ${/* Milnik ma postup 0–100 % (milePct). Tlacitka 0/25/50/75/100 jsou na
             telefonu rychlejsi nez posuvnik (zadny jemny tah prstem, jeden tuk).
             Kolecko odskrtava hotovo (100 %) / vraci na 0 %. */''}
         ${(p.milestones || []).map((m, i) => { const pct = milePct(m); const cls = pct === 100 ? 'done' : pct > 0 ? 'now' : 'next'; return `
           <div class="mile ${cls}"><div class="dot" style="cursor:pointer" title="Odškrtnout hotovo / vrátit" onclick="setMilePct('${p.id}',${i},${pct === 100 ? 0 : 100})">${pct === 100 ? '✓' : pct > 0 ? '●' : ''}</div>
           <div style="flex:1">
-            <div style="cursor:pointer" title="Ťukni pro přejmenování" onclick="prejmenujMile('${p.id}',${i})">${cls === 'now' ? '<b>' + esc(m.t) + ' — probíhá</b>' : esc(m.t)}${m.dur ? ' <span class="muted" style="font-size:11px">(' + esc(m.dur) + ')</span>' : ''}</div>
+            <div style="cursor:pointer" title="Ťukni pro přejmenování etapy" onclick="prejmenujMile('${p.id}',${i})">${cls === 'now' ? '<b>' + esc(m.t) + ' — probíhá</b>' : esc(m.t)}${m.dur ? ' <span class="muted" style="font-size:11px">(' + esc(m.dur) + ')</span>' : ''}</div>
             <div style="display:flex;gap:5px;align-items:center;margin-top:5px;flex-wrap:wrap">
               ${[0, 25, 50, 75, 100].map(v => `<button onclick="setMilePct('${p.id}',${i},${v})" style="width:40px;padding:4px 0;border:1px solid var(--line);border-radius:7px;cursor:pointer;font-size:12px;${v === pct ? 'background:var(--amber);font-weight:700' : 'background:var(--int-soft)'}">${v}</button>`).join('')}
               <span class="muted" style="font-size:11px">${pct} %</span>
             </div>
             <div style="margin-top:5px">${mileTerminRadek(p, m, i)}</div>
           </div>
-          <span class="lnk" style="font-size:11px" onclick="delMile('${p.id}',${i})">✕</span></div>`; }).join('') || '<div class="empty">Zatím žádné milníky.</div>'}
-        <div class="aprv"><input type="text" id="mile-t" placeholder="Nový milník…" style="max-width:260px"><button class="btn ghost sm" onclick="addMile('${p.id}')">➕ Přidat</button></div>
-        <div class="note">Postup milníku nastavíš tlačítky, kolečko odškrtne hotovo. Průběh stavby (%) je průměr milníků a fáze = první nedokončený milník. Milníky vidí investor na portálu.<br><b>📅 naplánovat</b> přidá milníku termín a lidi — teprve pak se z něj stane etapa a nakreslí se v sekci <b>Harmonogram</b>.</div>
+          <span class="lnk" style="font-size:11px" onclick="delMile('${p.id}',${i})">✕</span></div>`; }).join('') || '<div class="empty">Zatím žádné etapy.</div>'}
+        <div class="aprv"><input type="text" id="mile-t" placeholder="Nová etapa…" style="max-width:260px"><button class="btn ghost sm" onclick="addMile('${p.id}')">➕ Přidat</button></div>
+        <div class="note">Postup etapy nastavíš tlačítky, kolečkem ji odškrtneš jako hotovou. Průběh stavby (%) se počítá z etap sám a fáze = první nedokončená etapa. Etapy vidí i investor na portálu.<br><b>📅 naplánovat</b> přidá etapě termín a lidi — teprve pak se nakreslí v sekci <b>Harmonogram</b>.</div>
       </div>
     </div></main>`;
   } else if (t === 'media') {
@@ -2494,7 +2513,7 @@ function pgProjDetail() {
       ${docs.map((d, i) => `<div class="urow" style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${jsAttr(d.name)}')"><span>${(d.mime || '').includes('pdf') ? '📄' : '🖼'}</span><b>${esc(d.name)}</b><span class="muted" style="margin-left:auto">zobrazit</span><span class="lnk" style="font-size:11px;margin-left:10px" onclick="event.stopPropagation();delStavbaDoc('${p.id}',${i})">✕</span></div>`).join('') || '<div class="empty">Zatím žádné podklady.</div>'}
       <div class="formsec"><h4>➕ Nahrát soubor (PDF půdorys, vizualizace…)</h4>
         <input type="file" id="sd-file" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple onchange="uploadStavbaDocs('${p.id}',this.files)">
-        <div class="note">${S.uploading ? '<b>Nahrávám…</b> ' : ''}Soubor se uloží do složky zakázky na Drive. Partě se zobrazí přímo v apce ve vestavěném prohlížeči (#36) — listování a zoom, bez stahování, i na telefonu.</div>
+        <div class="note">${S.uploading ? '<b>Nahrávám…</b> ' : ''}Soubor se uloží do složky zakázky na Drive. Partě se zobrazí přímo v apce ve vestavěném prohlížeči — listování a zoom, bez stahování, i na telefonu.</div>
       </div>
       <div class="formsec"><h4>Nebo přidej soubor, který už na Drive je</h4>
         <div class="frow">
@@ -2507,7 +2526,7 @@ function pgProjDetail() {
   } else if (t === 'ukoly') {
     const tk = S.tasks.filter(x => x.pid === p.id && x.stav !== 'sablona');
     body = `<main><div class="card">
-      <h3>📌 Úkoly na projektu (${tk.length})</h3>
+      <h3>📌 Úkoly na stavbě (${tk.length})</h3>
       ${tk.map(x => `<div class="urow"><span>${x.stav === 'hotovo' ? '✅' : isOverdue(x) ? '❗' : '📌'}</span><div><b>${esc(x.title)}</b><br><span class="muted">${esc(respName(x))} · termín ${fmtISO(x.term)}</span></div>
         <span style="margin-left:auto"><span class="badge ${STAVCOLOR[x.stav]}">${STAVY[x.stav]}</span></span></div>`).join('') || '<div class="empty">Žádné úkoly.</div>'}
       <div class="aprv"><button class="btn amber sm" onclick="S.taskFormOpen=true;goPage('ukoly')">➕ Přidat úkol</button></div>
@@ -2539,7 +2558,7 @@ function pgProjDocs(p) {
       <label>Název pro investora</label><input type="text" id="pd-title" placeholder="Smlouva o dílo">
       <label>Drive ID souboru nebo odkaz</label><input type="text" id="pd-id" placeholder="https://drive.google.com/file/d/…">
       <div class="aprv"><button class="btn amber sm" onclick="addPortalDoc('${p.id}')">💾 Přidat na portál</button></div>
-      <div class="note">Smlouva, klientské PDF nabídky, vizualizace… Soubor zůstává na Drive, portál drží jen odkaz (#30). Investor si ho otevře přímo na portálu.</div>
+      <div class="note">Smlouva, klientské PDF nabídky, vizualizace… Soubor zůstává na Drive, portál drží jen odkaz. Investor si ho otevře přímo na portálu.</div>
     </div>
   </div></main>`;
 }
@@ -2688,7 +2707,7 @@ async function zrusPortal(pid) {
   try {
     await smazPortalData(pid);
     toast('Portál zrušen ✓ — odkaz už nefunguje');
-  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
   render();
 }
 async function novyPortal(pid) {
@@ -2699,14 +2718,14 @@ async function novyPortal(pid) {
   try {
     await smazPortalData(pid);
     await createPortal(pid);
-  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
   render();
 }
 async function createPortal(pid) {
   const p = proj(pid);
   /* Dvojklik / druhy admin: novy token by investorovi zneplatnil uz
      poslany odkaz. Kdyz portal existuje, nic se nezaklada. */
-  if (await tokenPortaluAsync(pid)) { toast('Portál už existuje — odkaz je v detailu projektu'); render(); return; }
+  if (await tokenPortaluAsync(pid)) { toast('Portál už existuje — odkaz je v detailu stavby'); render(); return; }
   const token = uid8() + uid8().slice(0, 10);
   await db.collection('portals').doc(token).set({ pid, client: p.client || '', name: p.name, createdAt: FV() });
   /* Token bydli v admin-only /portaly, NE na projektu (S2) — projekt ctou
@@ -2726,7 +2745,7 @@ async function createPortal(pid) {
   /* Hlavicka portalu (adresa, typ, plan predani, milniky) — bez tohohle by
      investor do minuty videl jen jmeno stavby a jmeno sebe sama. */
   await syncPortalHeader(p, token).catch(() => {});
-  toast('Portál vytvořen ✓ — odkaz najdeš v detailu projektu');
+  toast('Portál vytvořen ✓ — odkaz najdeš v detailu stavby');
 }
 function gpsFromHere(pid) {
   if (!navigator.geolocation) { toast('Zařízení nedává polohu'); return; }
@@ -2803,8 +2822,8 @@ async function delMile(pid, i) {
   if (!ms[i]) return;
   /* Doted stacilo jedno tuknuti na krizek — a zmena se hned propsala
      investorovi na portal. Vratit to nejde. */
-  if (!await potvrd('Smazat milník „' + (ms[i].t || '') + '"?\n\n' +
-    'Zmizí i investorovi na portálu a přepočítá se průběh stavby. Vrátit to nejde — jen napsat milník znovu.', 'Ano, smazat')) return;
+  if (!await potvrd('Smazat etapu „' + (ms[i].t || '') + '"?\n\n' +
+    'Zmizí i investorovi na portálu a přepočítá se průběh stavby. Vrátit to nejde — jen napsat etapu znovu.', 'Ano, smazat')) return;
   ms.splice(i, 1);
   await ulozMilniky(pid, ms);
 }
@@ -2813,14 +2832,14 @@ async function delMile(pid, i) {
 async function prejmenujMile(pid, i) {
   const p = proj(pid); const ms = (p.milestones || []).map(m => ({ ...m }));
   if (!ms[i]) return;
-  const t = await zeptejSe('✏️ Přejmenovat milník', 'Název vidí i investor na portálu. Postup milníku zůstane, jak je.', ms[i].t || '');
+  const t = await zeptejSe('✏️ Přejmenovat etapu', 'Název vidí i investor na portálu. Postup etapy zůstane, jak je.', ms[i].t || '');
   if (t === null) return;
   const novy = String(t).trim();
-  if (!novy) { toast('Název milníku nesmí být prázdný'); return; }
+  if (!novy) { toast('Název etapy nesmí být prázdný'); return; }
   if (novy === (ms[i].t || '')) return;
   ms[i].t = novy;
   await ulozMilniky(pid, ms);
-  toast('Milník přejmenován ✓');
+  toast('Etapa přejmenována ✓');
 }
 
 
@@ -3091,7 +3110,7 @@ async function etapaUloz(pid, i) {
     ms[i].p = pct; ms[i].s = pct === 100 ? 'done' : pct > 0 ? 'now' : 'next';
   }
   await ulozMilniky(pid, ms).then(() => { closeModal(); toast(i < 0 ? 'Etapa přidána ✓' : 'Uloženo ✓'); })
-    .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
+    .catch(e => toast('Neuložilo se — ' + dbErrText(e)));
 }
 async function etapaSmaz(pid, i) {
   const p = proj(pid); const ms = (p.milestones || []).map(x => ({ ...x }));
@@ -3100,7 +3119,7 @@ async function etapaSmaz(pid, i) {
     + 'Zmizí i investorovi na portálu a přepočítá se průběh stavby. Vrátit to nejde.', 'Ano, smazat')) return;
   ms.splice(i, 1);
   await ulozMilniky(pid, ms).then(() => { closeModal(); toast('Etapa smazána'); })
-    .catch(e => toast('Nejde smazat: ' + (e.code || e.message)));
+    .catch(e => toast('Nesmazalo se — ' + dbErrText(e)));
 }
 
 async function zrusMileTermin(pid, i) {
@@ -3110,7 +3129,7 @@ async function zrusMileTermin(pid, i) {
     + 'Etapa zůstane i s procentem hotovo, jen zmizí z harmonogramu.', 'Ano, zrušit')) return;
   delete ms[i].od; delete ms[i].do; delete ms[i].kdo;
   await ulozMilniky(pid, ms).then(() => { closeModal(); toast('Naplánování zrušeno'); })
-    .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
+    .catch(e => toast('Neuložilo se — ' + dbErrText(e)));
 }
 /* Radek pod milnikem v detailu projektu — bud termin s lidmi, nebo vyzva. */
 function mileTerminRadek(p, m, i) {
@@ -3659,7 +3678,7 @@ function fgTelo(pid) {
       ${vse.length > limit ? `<button class="btn ghost" onclick="S.fgZobrazeno=${limit + 120};render()">⤓ Zobrazit další (zbývá ${vse.length - limit})</button>` : ''}
       <button class="btn ghost sm" onclick="dotahniZapisy()">${S.dotahuji ? '⏳ načítám…' : '⤓ Načíst starší z databáze'}</button>
     </div>
-    <div class="note">Ťukni na fotku a listuj prstem (na počítači šipkami). Klik na štítek stavu = přepnout ⏳ čeká → ✓ klient → 🔒 interní — k investorovi jde fotka až po schválení (#31).</div>`;
+    <div class="note">Ťukni na fotku a listuj prstem (na počítači šipkami). Klik na štítek stavu = přepnout ⏳ čeká → ✓ klient → 🔒 interní — k investorovi jde fotka až po schválení.</div>`;
 }
 /* Ctvercova dlazdice — jen thumb z pameti + stitek stavu jako u phTile.
    Popisek fotky nezere misto v mrizce, ukaze se az u velke verze. */
@@ -3815,21 +3834,21 @@ function pgDenik() {
   if (q) rows = rows.filter(e => JSON.stringify([e.author, e.works, e.client, (proj(e.pid) || {}).name]).toLowerCase().includes(q));
   const fp = f ? proj(f) : null;
   return `
-  <div class="strip"><h1>Denní záznamy</h1><span class="sp"></span>
+  <div class="strip"><h1>Zápisy v deníku</h1><span class="sp"></span>
     ${fp ? `<div class="proj"><b>${esc(fp.name)}</b><br><small>${esc(fp.cn)}</small></div>` : ''}
     <button class="btn ghost" onclick="S.printOpen=!S.printOpen;render()">🖨 TISK / PDF</button>
     <button class="btn amber" onclick="goPage('novy')">➕ PŘIDAT</button></div>
   <div class="sectabs">
-    <div class="t active">📓 Denní záznamy</div>
+    <div class="t active">📓 Zápisy v deníku</div>
     <div class="t" style="margin-left:auto;color:var(--navy)" onclick="dotahniZapisy()">${S.dotahuji ? '⏳ načítám…' : '⤓ Načíst starší'}</div>
-    ${f ? `<div class="t" onclick="S.adminFilter=null;render()">✕ Zrušit filtr projektu</div>` : ''}
+    ${f ? `<div class="t" onclick="S.adminFilter=null;render()">✕ Zrušit filtr stavby</div>` : ''}
   </div>
   <main>
     ${S.printOpen ? `
     <div class="card">
       <h3>🖨 Tisk / export deníku do PDF</h3>
       <div class="frow">
-        <div><label>Projekt</label><select id="pr-p">${S.projects.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', 'cs')).map(p => `<option value="${p.id}" ${(f || '') === p.id ? 'selected' : ''}>${esc(p.name)} (${esc(p.cn)})</option>`).join('')}</select></div>
+        <div><label>Stavba</label><select id="pr-p">${S.projects.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', 'cs')).map(p => `<option value="${p.id}" ${(f || '') === p.id ? 'selected' : ''}>${esc(p.name)} (${esc(p.cn)})</option>`).join('')}</select></div>
         <div><label>Verze</label><select id="pr-v"><option value="klient">Klientská — jen schválené zápisy</option><option value="komplet">Kompletní — vše včetně interních</option></select></div>
       </div>
       <div class="frow">
@@ -3841,7 +3860,7 @@ function pgDenik() {
     <div class="tablecard">
       <div class="tabletools"><div class="search"><input id="q-denik" placeholder="Hledat v záznamech" value="${esc(S.searchQ)}" oninput="S.searchQ=this.value;render()"></div></div>
       <div style="overflow-x:auto"><table>
-        <tr><th>Datum</th><th>Vytvořeno</th><th>Projekt</th><th>Autor zápisu</th><th>Práce</th><th>Fotky</th><th>Osoby</th><th>Stav (klient)</th></tr>
+        <tr><th>Datum</th><th>Vytvořeno</th><th>Stavba</th><th>Autor zápisu</th><th>Práce</th><th>Fotky</th><th>Osoby</th><th>Stav (klient)</th></tr>
         ${rows.map(e => { const p = proj(e.pid) || {}; return `
         <tr class="click" onclick="openDetail('${e.id}')">
           <td><span class="lnk">${fmtISO(e.date)}</span></td>
@@ -3964,7 +3983,7 @@ function pgDetail() {
     : `<div class="muted">Záznam není podepsán.</div><div class="aprv"><button class="btn ghost sm" onclick="S.signFor='${e.id}';window._sigPaths=[];render()">✍ Podepsat</button></div>`}
         </div>
         <div class="card">
-          <h3>ℹ️ Projekt</h3>
+          <h3>ℹ️ Stavba</h3>
           <div class="kv"><span>Zakázka</span><b>${esc(p.cn || '')}</b></div>
           <div class="kv"><span>Investor</span><span>${esc(p.client || '')}</span></div>
           <div class="kv"><span>Fáze</span><span>${esc(projPhase(p) || '—')} (${projProgress(p) != null ? projProgress(p) + ' %' : 'harmonogram nezadán'})</span></div>
@@ -4022,7 +4041,7 @@ function pgSchvaleni() {
         </div>
       </div>`; }).join('')
     : `<div class="card"><div class="empty">🎉 Nic nečeká na schválení.<br><span class="muted">Nové zápisy pracovníků se objeví tady.</span></div></div>`}
-    <div class="note">Zásada (#31): investor nikdy nevidí nic neschváleného. Fotky 🔒 zůstávají navždy interní.</div>
+    <div class="note">Zásada: investor nikdy nevidí nic neschváleného. Fotky 🔒 zůstávají navždy interní.</div>
   </main>`;
 }
 
@@ -4045,13 +4064,13 @@ async function dotahniProTisk(pid, from) {
     S.dotazenoTisk.push(pid);
   } catch (e) {
     /* bez spojeni radsi tisknout s varovanim nez vubec */
-    await oznam('⚠ Starší zápisy se nepodařilo načíst (' + (e.code || e.message) + ').\n\nTisk obsáhne jen posledních ' + OKNO_DNU + ' dní!');
+    await oznam('⚠ Starší zápisy se nepodařilo načíst (' + dbErrText(e) + ').\n\nTisk obsáhne jen posledních ' + OKNO_DNU + ' dní!');
   }
   S.dotahuji = false; render();
 }
 async function printDenik() {
   const pid = $('#pr-p').value, verze = $('#pr-v').value, from = $('#pr-f').value, to = $('#pr-t').value;
-  const p = proj(pid); if (!p) { toast('Vyber projekt'); return; }
+  const p = proj(pid); if (!p) { toast('Vyber stavbu'); return; }
   /* Nove okno musi otevrit primo klik — po await by ho prohlizec zablokoval. */
   const w = window.open('', '_blank');
   if (!w) { toast('Prohlížeč zablokoval nové okno — povol vyskakovací okna'); return; }
@@ -4112,7 +4131,7 @@ async function printDenik() {
   <table class="info">
     <tr><td>Stavba / adresa</td><td>${esc(p.address || '')}</td></tr>
     <tr><td>Investor</td><td>${esc(p.client || '')}</td></tr>
-    <tr><td>Typ projektu</td><td>${esc(p.type || '')}</td></tr>
+    <tr><td>Typ stavby</td><td>${esc(p.type || '')}</td></tr>
     <tr><td>Období</td><td>${perioda} · ${list.length} denních záznamů</td></tr>
   </table>
   ${bloky}
@@ -4129,7 +4148,7 @@ function pgNovy() {
   <div class="strip"><span class="back" onclick="goPage('denik')">←</span><h1>Nový denní záznam</h1><span class="sp"></span></div>
   <main style="max-width:640px">
     <div class="card">
-      <label>Projekt</label>
+      <label>Stavba</label>
       <select id="np">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)} (${esc(p.cn)})</option>`).join('')}</select>
       <label>Autor zápisu</label>
       <select id="na">${S.users.filter(u => u.active !== false && u.typ && (u.typ.teren || u.typ.kanc || u.typ.sub)).map(u => `<option ${S.me && u.id === S.me.id ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}</select>
@@ -4150,13 +4169,13 @@ async function submitNew() {
   // pocet osob se nezadava — bere se z dochazky (zadani 25. 8.)
   const pid = $('#np').value, author = $('#na').value, txt = $('#nt').value.trim();
   const date = $('#nd') ? ($('#nd').value || isoToday()) : isoToday();
-  if (!pid) { toast('Není vybraný projekt'); return; }
+  if (!pid) { toast('Není vybraná stavba'); return; }
   if (date > isoToday()) { toast('Datum zápisu nemůže být v budoucnosti'); return; }
   if (!txt && !S.draftPhotos.length) { toast('Napiš text nebo přidej fotku'); return; }
   $('#save-entry').disabled = true;
   await addEntry(pid, author, txt, null, date);
   zapomen('nt');
-  goPage('denik'); toast(date === isoToday() ? 'Záznam uložen — čeká na schválení ✓' : 'Záznam za ' + fmtISO(date) + ' uložen — čeká na schválení ✓');
+  goPage('denik'); toast(date === isoToday() ? 'Zápis odeslán ✓ Čeká na schválení.' : 'Zápis za ' + fmtISO(date) + ' odeslán ✓ Čeká na schválení.');
 }
 
 /* ---- Organizace — docházka ---- */
@@ -4194,7 +4213,7 @@ async function attGpsProvereno(id) {
       gpsProvereno: { kdo: fullName(S.me || {}), kdy: new Date().toISOString() }
     });
     toast('Prověřeno ✓');
-  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
 function pgOrganizace() {
   const TOL = CFG.gpsTolerance || 100;
@@ -4265,7 +4284,7 @@ function pgOrganizace() {
       <h3>➕ Přidat pracovní den (ručně — když pracovník zapomene)</h3>
       <div class="frow">
         <div><label>Terénní pracovník</label><select id="at-u">${S.users.filter(u => u.typ && u.typ.teren && u.active !== false).map(u => `<option value="${u.id}">${esc(fullName(u))}</option>`).join('')}</select></div>
-        <div><label>Projekt</label><select id="at-p">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
+        <div><label>Stavba</label><select id="at-p">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
       </div>
       <div class="frow">
         <div><label>Činnost</label><select id="at-a"><option>Příchod</option><option>Odchod</option></select></div>
@@ -4282,8 +4301,8 @@ function pgOrganizace() {
           <option value="">Všichni pracovníci</option>
           ${filtUsers.map(u => `<option value="${u.id}" ${S.orgUser === u.id ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}
         </select></div>
-        <div><label>Filtr — projekt</label><select onchange="S.orgProj=this.value;S.orgZobrazeno=ORG_STRANKA;render()">
-          <option value="">Všechny projekty</option>
+        <div><label>Filtr — stavba</label><select onchange="S.orgProj=this.value;S.orgZobrazeno=ORG_STRANKA;render()">
+          <option value="">Všechny stavby</option>
           ${S.projects.slice().sort((a, b) => (a.name || '').localeCompare(b.name || '', 'cs')).map(p => `<option value="${p.id}" ${S.orgProj === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
         </select></div>
       </div>
@@ -4291,7 +4310,7 @@ function pgOrganizace() {
     </div>
     <div class="tablecard">
       <div style="overflow-x:auto"><table>
-        <tr><th>Terénní pracovník</th><th>Činnost</th><th>Na projektu</th><th>Datum a čas</th><th>GPS odchylka</th><th>Foto</th><th></th></tr>
+        <tr><th>Terénní pracovník</th><th>Činnost</th><th>Na stavbě</th><th>Datum a čas</th><th>GPS odchylka</th><th>Foto</th><th></th></tr>
         ${rows.slice(0, S.orgZobrazeno || ORG_STRANKA).map(a => { const u = userById(a.userDocId) || { jmeno: a.userName || '?', prijmeni: '' }; return `
         <tr${a.gpsProvereno ? ' style="opacity:.62"' : ''}>
           <td><span class="uav" style="margin-right:6px">${ini(u)}</span>${jmenoOdkaz(u)}</td>
@@ -4314,7 +4333,7 @@ function pgOrganizace() {
         ${rows.length > (S.orgZobrazeno || ORG_STRANKA)
           ? `<button class="btn ghost sm" onclick="S.orgZobrazeno=(S.orgZobrazeno||ORG_STRANKA)+ORG_STRANKA;render()">⤓ Zobrazit dalších ${Math.min(ORG_STRANKA, rows.length - (S.orgZobrazeno || ORG_STRANKA))}</button>` : ''}</div>
     </div>
-    <div class="note">GPS nad povolenou odchylku (${TOL} m) se hlásí ⚠ — ale jen tehdy, když telefon polohu opravdu změřil. Když ji jen odhadl ze sítě, píše se „poloha nepřesná" a za podezřelou se to nepočítá. Odchylku, kterou jsi prověřil tlačítkem <b>✓ Prověřeno</b>, zešedne a zmizí z počítadla. Záznam jde <b>✏️ opravit</b> nebo <b>🗑 smazat</b> — u opravy se uloží kdo, kdy a proč, ať je to při sporu o výplatu dohledatelné. Měsíční kontrola hodin Ruslana (#25) = záložka Reporty.</div>
+    <div class="note">GPS nad povolenou odchylku (${TOL} m) se hlásí ⚠ — ale jen tehdy, když telefon polohu opravdu změřil. Když ji jen odhadl ze sítě, píše se „poloha nepřesná" a za podezřelou se to nepočítá. Odchylku, kterou jsi prověřil tlačítkem <b>✓ Prověřeno</b>, zešedne a zmizí z počítadla. Záznam jde <b>✏️ opravit</b> nebo <b>🗑 smazat</b> — u opravy se uloží kdo, kdy a proč, ať je to při sporu o výplatu dohledatelné. Měsíční kontrolu hodin najdeš v záložce Reporty.</div>
   </main>`}`;
 }
 /* POZOR na authUid: rozhoduje o tom, komu se zaznam v mobilu ZOBRAZI.
@@ -4388,7 +4407,7 @@ async function attUlozit(id) {
   try {
     await db.collection('attendance').doc(id).update(zmeny);
     closeModal(); toast('Záznam opraven ✓');
-  } catch (e) { toast('Oprava se nepovedla: ' + (e.code || e.message)); }
+  } catch (e) { toast('Oprava se nepovedla: ' + dbErrText(e)); }
 }
 /* attSchvalit / attZamitnout tu byvaly, ale nemely co schvalovat: zaznam
    dochazky se schvaleno===false uz zadne misto v aplikaci nevyrobi.
@@ -4399,7 +4418,7 @@ async function attSmazat(id) {
   if (!await potvrd('Opravdu smazat tento záznam?\n\n' + (fullName(u) || a.userName || '?') + ' — ' +
                a.akce + ' ' + fmtISO(a.date) + ' ' + a.time + '\n\nSmazání nejde vrátit zpět.')) return;
   try { await db.collection('attendance').doc(id).delete(); toast('Záznam smazán ✓'); }
-  catch (e) { toast('Smazání se nepovedlo: ' + (e.code || e.message)); }
+  catch (e) { toast('Smazání se nepovedlo: ' + dbErrText(e)); }
 }
 
 /* ---- Úkoly ---- */
@@ -4416,10 +4435,10 @@ function pgUkoly() {
     <div class="card">
       <h3>📋 Šablony úkolů</h3>
       ${tpls.map(tp => `<div class="urow"><span>📋</span><b>${esc(tp.title)}</b><span class="muted" style="margin-left:auto">${(tp.items || []).length} úkolů</span><span class="lnk" style="font-size:11px;margin-left:10px" onclick="smazSablonu('${tp.id}')">✕ smazat</span></div>`).join('') || '<div class="muted">Zatím žádné šablony.</div>'}
-      ${tpls.length ? `<div class="formsec"><h4>▶ Aplikovat šablonu na projekt</h4>
+      ${tpls.length ? `<div class="formsec"><h4>▶ Aplikovat šablonu na stavbu</h4>
         <div class="frow">
           <div><label>Šablona</label><select id="tp-s">${tpls.map(tp => `<option value="${tp.id}">${esc(tp.title)}</option>`).join('')}</select></div>
-          <div><label>Projekt</label><select id="tp-p">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
+          <div><label>Stavba</label><select id="tp-p">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
         </div>
         <div class="frow">
           <div><label>Začátek (den 0)</label><input type="date" id="tp-d" value="${isoToday()}"></div>
@@ -4440,7 +4459,7 @@ function pgUkoly() {
       <label>Nadpis *</label><input type="text" id="tk-t" placeholder="Co je potřeba udělat">
       <label>Popis (nepovinný) <span class="muted" style="text-transform:none;font-weight:400">— enter dělá odrážku</span></label><textarea id="tk-popis" placeholder="- podrobnost&#10;- další bod" style="min-height:54px"></textarea>
       <div class="frow">
-        <div><label>Projekt</label><select id="tk-p">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
+        <div><label>Stavba</label><select id="tk-p">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
         <div><label>Odpovědná osoba</label><select id="tk-r">${lideProUkoly().map(u => `<option value="${u.id}">${esc(fullName(u))}</option>`).join('')}</select></div>
       </div>
       <label>Termín</label><input type="date" id="tk-d" value="${shiftISO(isoToday(), 3)}">
@@ -4454,7 +4473,7 @@ function ukolySeznam() {
   const rows = S.tasks.filter(t => t.stav !== 'sablona').sort((a, b) => (a.stav === 'hotovo') - (b.stav === 'hotovo') || (a.term || '').localeCompare(b.term || ''));
   return `<div class="tablecard">
     <div style="overflow-x:auto"><table>
-      <tr><th style="width:30px"></th><th>Název</th><th>Projekt</th><th>Odpovědná osoba</th><th>Stav</th><th>Vytvořeno</th><th>Termín</th><th></th></tr>
+      <tr><th style="width:30px"></th><th>Název</th><th>Stavba</th><th>Odpovědná osoba</th><th>Stav</th><th>Vytvořeno</th><th>Termín</th><th></th></tr>
       ${rows.map(t => `
       <tr style="${isOverdue(t) ? 'background:#fdeceb' : ''}">
         <td><input type="checkbox" ${t.stav === 'hotovo' ? 'checked' : ''} onclick="taskDone('${t.id}')"></td>
@@ -4518,7 +4537,7 @@ async function tplApply() {
     for (const it of (tpl.items || [])) {
       await db.collection('tasks').add({ title: it.title, zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}), pid, respId, resp, created: isoToday(), term: shiftISO(start, it.off || 0), stav: 'nove', res: [resp], src: 'ze šablony ' + tpl.title, createdAt: FV() });
     }
-  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); render(); return; }
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); render(); return; }
   S.tplOpen = false;
   toast('Vytvořeno ' + (tpl.items || []).length + ' úkolů ze šablony ✓');
   render();
@@ -4548,7 +4567,7 @@ async function taskShift(id) {
   try {
     await db.collection('tasks').doc(id).update({ term: novy });
     toast('Termín posunut na ' + fmtISO(novy));
-  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
 /* Sablona se drive mazala jednim kliknutim primo z HTML — bez otazky
    a bez hlasky, kdyz se mazani nepovedlo. Tuknuti vedle na mobilu tak
@@ -4611,14 +4630,14 @@ async function ulozUkol(id) {
       term: $('#ue-d').value || t.term || ''
     });
     closeModal(); toast('Úkol upraven ✓'); render();
-  } catch (e) { toast('Nejde uložit: ' + (e.code || e.message)); }
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
 async function smazSablonu(id) {
   const tp = S.tasks.find(x => x.id === id); if (!tp) return;
   if (!await potvrd('Smazat šablonu?\n\n„' + (tp.title || '') + '" · ' + (tp.items || []).length +
     ' úkolů\n\nÚkoly, které z ní už vznikly, zůstanou. Smazání nejde vrátit zpět.')) return;
   try { await db.collection('tasks').doc(id).delete(); toast('Šablona smazána ✓'); }
-  catch (e) { toast('Nejde smazat: ' + (e.code || e.message)); }
+  catch (e) { toast('Nesmazalo se — ' + dbErrText(e)); }
 }
 async function addTask() {
   const title = $('#tk-t').value.trim();
@@ -4633,7 +4652,7 @@ async function addTask() {
       zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}), pid: $('#tk-p').value, respId, resp: fullName(ru), created: isoToday(),
       term: $('#tk-d').value || shiftISO(isoToday(), 3), stav: 'nove', res: [fullName(ru)], createdAt: FV()
     });
-  } catch (e) { toast('Nepovedlo se uložit: ' + (e.code || e.message)); return; }
+  } catch (e) { toast('Nepovedlo se uložit: ' + dbErrText(e)); return; }
   /* Zapomenout se musi i popis — drive se cistil jen nadpis, takze popis
      predchoziho ukolu se pri dalsim otevreni formulare vratil zpatky
      a odpovedny dostal cizi zadani. */
@@ -4656,7 +4675,7 @@ function pgViceprace() {
       <h3>➕ Nová vícepráce</h3>
       <label>Název *</label><input type="text" id="vp-t" placeholder="Výměna hliníkového vedení v ložnici">
       <div class="frow">
-        <div><label>Projekt</label><select id="vp-p">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
+        <div><label>Stavba</label><select id="vp-p">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
         <div><label>Zdroj</label><select id="vp-z"><option value="stavba">🏗 ze stavby / deníku</option><option value="drive">📁 PDF na Drive</option></select></div>
       </div>
       <label>Popis</label><textarea id="vp-pop" style="min-height:60px"></textarea>
@@ -4671,7 +4690,7 @@ function pgViceprace() {
       <div class="muted">${esc(p.name || '')} · ${esc(p.cn || '')} · zdroj: ${v.zdroj === 'drive' ? `📁 z Drive${v.driveId ? ` — <span class="lnk" onclick="openDriveDoc('${v.driveId}','${jsAttr(v.title)}')">otevřít PDF</span>` : ''}` : '🏗 ze stavby / deníku'}</div>
       <div style="margin:8px 0">${esc(v.popis || '')}</div>
       ${v.cena ? `<div style="font-size:16px;font-weight:800;color:var(--navy)">${kc(v.cena)} Kč <span class="muted" style="font-weight:400;font-size:12px">bez DPH · DPH 12 % jako součást díla</span></div>` : ''}
-      ${v.podpis ? `<div class="note" style="margin-top:8px">✍️ ${esc(v.podpis)} · nezapomeň propsat do listu Vícepráce v CN (#24)</div>` : ''}
+      ${v.podpis ? `<div class="note" style="margin-top:8px">✍️ ${esc(v.podpis)} · nezapomeň propsat do listu Vícepráce v CN</div>` : ''}
       <div class="aprv">
         ${v.stav === 'navrh' ? `<input type="number" id="vpc-${v.id}" placeholder="Cena v Kč" style="max-width:140px" value="${v.cena || ''}"><button class="btn amber sm" onclick="vpNacenit('${v.id}')">💰 Nacenit a poslat investorovi</button>` : ''}
         ${v.stav === 'u_investora' ? `<button class="btn dark sm" onclick="vpPapir('${v.id}')">🖨 Klient bez PC — podpis na stavbě</button>
@@ -4681,7 +4700,7 @@ function pgViceprace() {
         <button class="btn ghost sm" title="Smazat vícepráci" onclick="smazVicepraci('${v.id}')">🗑</button>
       </div>
     </div>`; }).join('') || '<div class="card"><div class="empty">Zatím žádné vícepráce.</div></div>'}
-    <div class="note">Tok (#35): záznam → nacenění → schválení investorem (klik na portálu, nebo papír u klienta bez PC) → propis do listu Vícepráce v CN + PDF do složky zakázky na Drive.</div>
+    <div class="note">Tok: zápis → nacenění → schválení investorem (klik na portálu, nebo papír u klienta bez PC) → propis do listu Vícepráce v CN + PDF do složky zakázky na Drive.</div>
   </main>`;
 }
 async function addVp() {
@@ -4704,7 +4723,7 @@ async function vpNacenit(id) {
     await db.collection('portals').doc(tok).collection('vp').doc(id).set({ title: v.title, popis: v.popis || '', cena: c, stav: 'u_investora' });
     notifyMail('vp', v.pid, v.title + ' — ' + kc(c) + ' Kč');
     toast('Posláno investorovi ke schválení + notifikace 📬');
-  } else toast('Naceněno ✓ — projekt nemá portál, schválení vyřiď papírově');
+  } else toast('Naceněno ✓ — stavba nemá portál, schválení vyřiď papírově');
   render();
 }
 async function vpPapir(id) {
@@ -4715,7 +4734,7 @@ async function vpPapir(id) {
   toast('Označeno jako schválené papírově ✓');
 }
 
-/* ---- Hodinova sazba a jeji historie (#34) ----
+/* ---- Hodinova sazba a jeji historie ----
    Sazba zije v /sazby/{userId} jako { h, c, hist }. Pole h a c jsou POSLEDNI
    (aktualni) sazba — kvuli seznamu uzivatelu a starym datum. hist je pole
    zaznamu { od:'YYYY-MM-DD', h, c, kdo, kdy }.
@@ -4884,7 +4903,7 @@ function pgReporty() {
   const teren = repTerenni();
   const sel = S.repWorkers, selP = S.repProjects;
   return `
-  <div class="strip"><h1>Reporty — Odpracované hodiny na projektu</h1><span class="sp"></span></div>
+  <div class="strip"><h1>Reporty — Odpracované hodiny na stavbě</h1><span class="sp"></span></div>
   <main>
     <div class="card">
       <h3>📋 Přehled odpracovaných hodin</h3>
@@ -4898,7 +4917,7 @@ function pgReporty() {
         </div>
         <div>
           <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap">
-            <label>Projekty (${selP.length} z ${S.projects.length})</label>
+            <label>Stavby (${selP.length} z ${S.projects.length})</label>
             <button class="btn ghost sm" onclick="repVsechnyP()">${S.projects.length && S.projects.every(p => selP.includes(p.id)) ? '✕ Zrušit výběr' : '✓ Vybrat všechny'}</button>
           </div>
           <div class="chipselect">${S.projects.map(p => `<button class="${selP.includes(p.id) ? 'active' : ''}" onclick="repTogP('${p.id}')">${esc(p.name)}</button>`).join('')}</div>
@@ -4918,7 +4937,7 @@ function pgReporty() {
     ${!repObdobiOk() ? `<div class="note" style="color:var(--red)">⚠ <b>Vyplň celé období.</b> Chybí datum „Od" nebo „do", nebo je „Od" později. Report se nenačte — bez období by se do výplat započítalo všechno, co je zrovna v paměti.</div>`
       : S.repFrom < oknoOd() ? `<div class="note">📅 Období sahá před posledních ${OKNO_DNU} dní — starší docházka se dotáhne z databáze při načtení reportu.</div>` : ''}
     ${S.repLoaded ? repTable() : `
-    <div class="card"><div class="empty">ℹ️ Žádný report není načten<br><span class="muted">1. Vyber pracovníky · 2. Vyber projekty · 3. Načíst report</span></div></div>`}
+    <div class="card"><div class="empty">ℹ️ Žádný report není načten<br><span class="muted">1. Vyber pracovníky · 2. Vyber stavby · 3. Načíst report</span></div></div>`}
   </main>`;
 }
 /* Report za starsi obdobi potrebuje data, ktera nemame naživo (viz OKNO_DNU).
@@ -4948,7 +4967,7 @@ async function dotahniZapisy() {
     toast(pribylo
       ? 'Načteno ' + pribylo + ' starších zápisů ✓'
       : 'V období od ' + fmtISO(S.zapisyOd) + ' do ' + fmtISO(shiftISO(zacatek, -1)) + ' nic není — ťukni znovu pro ještě starší.');
-  } catch (e) { toast('Nepovedlo se načíst: ' + (e.code || e.message)); }
+  } catch (e) { toast('Nepovedlo se načíst: ' + dbErrText(e)); }
   S.dotahuji = false; render();
 }
 
@@ -4968,7 +4987,7 @@ async function dotahniZapisyProReport(from, to) {
     archivujDotazene('entries', snap.docs.map(d => ({ id: d.id, ...d.data() })));
     S.dotazenoZapisy.push(klic);
   } catch (e) {
-    toast('Starší zápisy deníku se nepodařilo načíst: ' + (e.code || e.message));
+    toast('Starší zápisy deníku se nepodařilo načíst: ' + dbErrText(e));
   }
 }
 
@@ -5000,7 +5019,7 @@ function repVsechnyP() {
 function repTable() {
   const sel = S.repWorkers, selP = S.repProjects;
   if (!repObdobiOk()) return '<div class="card"><div class="empty">Vyplň celé období.</div></div>';
-  if (!sel.length || !selP.length) return '<div class="card"><div class="empty">Vyber aspoň jednoho pracovníka a projekt.</div></div>';
+  if (!sel.length || !selP.length) return '<div class="card"><div class="empty">Vyber aspoň jednoho pracovníka a stavbu.</div></div>';
   const H = hoursFromAttendance(S.repFrom, S.repTo);
   let totKc = 0, totC = 0, totH = 0, missing = [], anyCista = false, anyIncomplete = false;
   const rows = sel.map(udi => {
@@ -5024,7 +5043,7 @@ function repTable() {
     const diff = rowCista ? rowKc - rowC : 0;
     return `<tr><td><span class="uav" style="margin-right:6px">${ini(u)}</span>${jmenoOdkaz(u)}<br><span class="muted" style="margin-left:34px">${esc(u.role || '')}</span>${rowVice ? '<br><span class="badge b-wait" style="margin-left:34px">sazba se v období měnila</span>' : ''}</td>${cells.join('')}<td style="text-align:center"><b>${kc(rowKc)} Kč${rowBez > 0 ? ' ⚠' : ''}</b>${diff > 0 ? `<br><span class="muted">čistá: ${kc(rowC)} Kč</span><br><span class="badge b-wait">vedoucímu party: ${kc(diff)} Kč</span>` : ''}</td><td style="text-align:center"><b>${fmtH(rowH)}</b></td></tr>`;
   });
-  // křížová kontrola proti deníku (#25)
+  // křížová kontrola proti deníku
   /* Hodiny na stavbach, ktere NEJSOU zaskrtnute. Jedna zapomenuta stavba
      jinak tise ubere hodiny z vyplaty a nikde to nebylo videt. Bere se to
      ze stejneho H jako tabulka, takze i tady plati „jen schvalena dochazka". */
@@ -5041,7 +5060,7 @@ function repTable() {
     });
   });
   const mimoSeznam = Object.keys(mimo).sort((a, b) => mimo[b] - mimo[a]);
-  // křížová kontrola (#25): dny z DOCHÁZKY vs. existence zápisu v deníku pro stejný projekt a den
+  // křížová kontrola: dny z DOCHÁZKY vs. existence zápisu v deníku pro stejný projekt a den
   /* Stejny filtr jako u vypoctu hodin: jen vybrane stavby a jen schvalena
      dochazka. Drive to prochazelo vsechny stavby i neschvalene zaznamy,
      takze tabulka a kontrola mluvily kazda o necem jinem. */
@@ -5070,11 +5089,11 @@ function repTable() {
       Tyhle hodiny se do tabulky ani do exportu nepočítají — pokud tam patří, zaškrtni je nahoře.
     </div>` : ''}
     <div class="card" style="margin-top:12px;background:#f8fafc">
-      <h3>🔎 Křížová kontrola proti deníku (#25)</h3>
+      <h3>🔎 Křížová kontrola proti deníku</h3>
       ${sel.map(udi => { const u = userById(udi); if (!u) return ''; const pairs = [...(attPairs[udi] || [])]; const missing = pairs.filter(k => !entryDaySet.has(k)); const okk = missing.length === 0; return `
         <div class="urow"><span>${okk ? '✅' : '⚠️'}</span><b>${jmenoOdkaz(u)}</b>
         <span class="muted" style="margin-left:auto">docházka: <b>${pairs.length} dní</b> · deník existuje pro <b>${pairs.length - missing.length}</b> z nich${okk ? '' : ` — <b style="color:var(--red)">chybí zápis: ${missing.slice(0, 5).map(k => fmtISO(k.split('|')[0]) + ' (' + esc((proj(k.split('|')[1]) || {}).name || '?') + ')').join(', ')}${missing.length > 5 ? ' +' + (missing.length - 5) + ' dalších' : ''}</b>`}</span></div>`; }).join('')}
-      <div class="note">Kontroluje se: každý den z docházky má mít deníkový zápis na stejném projektu. Chybějící dny prověř před proplacením (#25).</div>
+      <div class="note">Kontroluje se: každý den z docházky má mít zápis v deníku na stejné stavbě. Chybějící dny prověř před proplacením.</div>
     </div>
   </div>`;
 }
@@ -5094,7 +5113,7 @@ function repCsvCislo(n) { return String(n).replace('.', ','); }
 function repExport() {
   if (!repObdobiOk()) { toast('Vyplň celé období.'); return; }
   const H = hoursFromAttendance(S.repFrom, S.repTo);
-  let csv = repCsvRadek(['Pracovnik', 'Projekt', 'Hodiny', 'Dny', 'Neuplne dny', 'Pauza (min)', 'Sazba plati od', 'Sazba hruba', 'Sazba cista', 'Kc hruba', 'Kc cista']);
+  let csv = repCsvRadek(['Pracovnik', 'Stavba', 'Hodiny', 'Dny', 'Neuplne dny', 'Pauza (min)', 'Sazba plati od', 'Sazba hruba', 'Sazba cista', 'Kc hruba', 'Kc cista']);
   let tH = 0, tDni = 0, tNeu = 0, tPauza = 0, tHruba = 0, tCista = 0;
   S.repWorkers.forEach(udi => {
     const u = userById(udi); if (!u) return;
@@ -5266,7 +5285,7 @@ async function vyplatuPrepni(udi, m, den) {
     if (!await potvrd('Zrušit „vyplaceno" u dne ' + fmtISO(den) + '?\n\n'
       + 'Označil(a) to ' + (uz.kdo || '?') + ' ' + fmtISO(uz.kdy) + ' na ' + kc(uz.hruba) + ' Kč.')) { render(); return; }
     await ref.set({ udi, mesic: m, dny: { [den]: firebase.firestore.FieldValue.delete() } }, { merge: true })
-      .catch(e => { toast('Nejde uložit: ' + (e.code || e.message)); render(); });
+      .catch(e => { toast('Neuložilo se — ' + dbErrText(e)); render(); });
     return;
   }
   const dny = osobaDny(udi, mesicPrvni(m), mesicPosledni(m));
@@ -5283,7 +5302,7 @@ async function vyplatuPrepni(udi, m, den) {
   await ref.set({ udi, mesic: m, dny: { [den]: {
     hruba: Math.round(p.hruba), cista: Math.round(p.cista), hod: Math.round(d.h * 100) / 100,
     kdo: fullName(S.me || {}).trim() || 'vedení', kdy: isoToday()
-  } } }, { merge: true }).catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
+  } } }, { merge: true }).catch(e => toast('Neuložilo se — ' + dbErrText(e)));
 }
 /* Hromadne oznaceni: bere jen dny, ktere jeste vyplacene nejsou a maji
    hodiny i sazbu. Uz vyplacene dny nechava byt — jejich castka je zmrazena
@@ -5316,7 +5335,7 @@ async function vyplatitZbytekMesice(udi, m) {
     + (preskoceno ? '\n\nℹ ' + preskoceno + ' neúplných či ještě běžících dnů se přeskočí.' : ''), '✓ Označit')) return;
   await db.collection('vyplaty').doc(vyplataId(udi, m)).set({ udi, mesic: m, dny: zapis }, { merge: true })
     .then(() => toast('Označeno ' + pocet + ' dní ✓'))
-    .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
+    .catch(e => toast('Neuložilo se — ' + dbErrText(e)));
 }
 
 /* ---- poznamky u cloveka ----
@@ -5331,7 +5350,7 @@ async function pozOsobPridat(udi) {
     udi, nadpis: n.trim(), text: t.trim(),
     kdo: fullName(S.me || {}).trim() || 'vedení', kdy: isoToday(), createdAt: FV()
   }).then(() => { S.pozOsobForm = false; render(); zapomen('poz-nadpis', 'poz-novy'); toast('Poznámka uložena ✓'); })
-    .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
+    .catch(e => toast('Neuložilo se — ' + dbErrText(e)));
 }
 async function pozOsobUlozit(id) {
   const n = ($('#poz-n-' + id) || {}).value || '';
@@ -5341,14 +5360,14 @@ async function pozOsobUlozit(id) {
   await db.collection('poznamky_osob').doc(id).update({
     nadpis: n.trim(), text: t.trim(), kdo: fullName(S.me || {}).trim() || 'vedení', kdy: isoToday()
   }).then(() => { S.pozOsobEdit = null; render(); zapomen('poz-n-' + id, 'poz-e-' + id); toast('Uloženo ✓'); })
-    .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
+    .catch(e => toast('Neuložilo se — ' + dbErrText(e)));
 }
 async function pozOsobSmazat(id) {
   const p = (S.pozOsob || []).find(x => x.id === id); if (!p) return;
   if (!await potvrd('Smazat poznámku „' + (p.nadpis || 'bez názvu') + '"?\n\n'
     + String(p.text).slice(0, 160), '🗑 Smazat')) return;
   await db.collection('poznamky_osob').doc(id).delete()
-    .catch(e => toast('Nejde smazat: ' + (e.code || e.message)));
+    .catch(e => toast('Nesmazalo se — ' + dbErrText(e)));
 }
 
 /* ---- otevreni karty ---- */
@@ -5591,7 +5610,7 @@ function pgUzivatele() {
   <div class="strip"><h1>Uživatelé</h1><span class="sp"></span><button class="btn amber" onclick="S.newUserType=null;S.editUserId=null;S.newUserActive=null;goPage('newuser')">➕ PŘIDAT</button></div>
   <main>
     <div class="card">
-      <h3>🔑 Jak fungují práva — jednoduše (#33)</h3>
+      <h3>🔑 Jak fungují práva — jednoduše</h3>
       <div class="urow"><span class="uav">🗂</span><b>Vedení</b><span class="muted" style="margin-left:auto">vše, všude — schvaluje zápisy, fotky, hodiny, vícepráce</span></div>
       <div class="urow"><span class="uav">👷</span><b>Pracovník</b><span class="muted" style="margin-left:auto">zápis, fotky, docházka · ceny nevidí nikdy</span></div>
       <div class="urow"><span class="uav">🔧</span><b>Subdodavatel</b><span class="muted" style="margin-left:auto">jako pracovník · klientské ceny a marže nevidí — hlídá struktura</span></div>
@@ -5628,7 +5647,7 @@ function pgUzivatele() {
       </table></div>
       <div class="pagefoot"><span>${uzFiltrovani().length} z ${S.users.length} uživatelů</span></div>
     </div>
-    <div class="note">Čistá sazba (#34) je citlivý údaj — vidí ji jen Vedení. „Vytvořit přihlášení" založí pracovníkovi PIN pro mobilní přihlášení.</div>
+    <div class="note">Čistá sazba je citlivý údaj — vidí ji jen Vedení. „Vytvořit přihlášení" založí pracovníkovi PIN pro mobilní přihlášení.</div>
     ${jsouJmenovci ? `<div class="note" style="color:var(--red)">⚠ <b>Dva účty se stejným jménem.</b>
       Na přihlašovací obrazovce se nedají rozeznat — kdo si vybere ten druhý, odpracuje si hodiny pod jinou identitou
       a ve výplatách i v deníku pak člověk vypadá, že tam půl měsíce nebyl.<br>
@@ -5769,7 +5788,7 @@ async function resetPin(udi) {
     closeModal();
     toast('Nový PIN nastaven ✓ Starý už neplatí' + (presunuto ? ' · historie přenesena (' + presunuto + ' záznamů)' : '') + '.');
   } catch (e) {
-    toast('Nepovedlo se: ' + (e.code === 'auth/email-already-in-use' ? 'zkus to prosím ještě jednou' : (e.code || e.message)));
+    toast('Nepovedlo se: ' + (e.code === 'auth/email-already-in-use' ? 'zkus to prosím ještě jednou' : dbErrText(e)));
   }
 }
 async function zrusitPrihlaseni(udi) {
@@ -5788,7 +5807,7 @@ async function zrusitPrihlaseni(udi) {
       pinVerze: (u.pinVerze || 1) + 1
     });
     toast('Přihlášení zrušeno ✓ Až mu ho budeš vytvářet znovu, dostane novou adresu.');
-  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
 
 /* ---- mazani (B2) ----
@@ -5801,12 +5820,12 @@ async function delTask(id) {
   const _t = S.tasks.find(x => x.id === id) || {};
   for (const f of (_t.photos || [])) db.collection('fotonahledy').doc(f.id).delete().catch(() => {});
   try { await db.collection('tasks').doc(id).delete(); toast('Úkol smazán ✓'); }
-  catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
 async function delEntry(id) {
   const e = S.entries.find(x => x.id === id); if (!e) return;
   const p = proj(e.pid) || {};
-  if (!await potvrd('Smazat denní záznam?\n\n' + fmtISOFull(e.date) + ' · ' + (p.name || '') + '\nZapsal: ' + (e.author || '') +
+  if (!await potvrd('Smazat zápis z deníku?\n\n' + fmtISOFull(e.date) + ' · ' + (p.name || '') + '\nZapsal: ' + (e.author || '') +
     '\n\nZmizí i z portálu investora. Smazání nejde vrátit zpět.')) return;
   try {
     const tok = await tokenPortaluAsync(e.pid); // token je v admin-only /portaly (S2)
@@ -5820,7 +5839,7 @@ async function delEntry(id) {
     db.collection('entries_interni').doc(id).delete().catch(() => {});
     await db.collection('entries').doc(id).delete();
     S.detail = null; toast('Záznam smazán ✓'); render();
-  } catch (err) { toast('Nepovedlo se: ' + (err.code || err.message)); }
+  } catch (err) { toast('Neuložilo se — ' + dbErrText(err)); }
 }
 async function delProject(pid) {
   const p = proj(pid); if (!p) return;
@@ -5843,7 +5862,7 @@ async function delProject(pid) {
       db.collection('poznamky').where('pid', '==', pid).get()
     ]);
   } catch (e) {
-    await oznam('Nepodařilo se ověřit, co na stavbě visí (' + (e.code || e.message) + ').\n\nBez toho se stavba nemaže — zkus to znovu s připojením.');
+    await oznam('Nepodařilo se ověřit, co na stavbě visí (' + dbErrText(e) + ').\n\nBez toho se stavba nemaže — zkus to znovu s připojením.');
     return;
   }
   const zapisu = ent.size, dochazky = att.size, hlaseni = hls.size, klicu = kli.size, poznamek = pzn.size;
@@ -5899,7 +5918,7 @@ async function delProject(pid) {
     await db.collection('kontakty').doc(kontaktKlicStavby(pid)).delete().catch(() => {});
     await db.collection('projects').doc(pid).delete();
     S.projDetailId = null; goPage('projekty'); toast('Stavba smazána ✓');
-  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
 async function delUser(udi) {
   const u = userById(udi); if (!u) return;
@@ -5918,7 +5937,7 @@ async function delUser(udi) {
       db.collection('klice').where('drzitelId', '==', udi).get()
     ]);
   } catch (e) {
-    await oznam('Nepodařilo se ověřit historii uživatele (' + (e.code || e.message) + ').\n\nBez toho se nemaže — zkus to znovu s připojením.');
+    await oznam('Nepodařilo se ověřit historii uživatele (' + dbErrText(e) + ').\n\nBez toho se nemaže — zkus to znovu s připojením.');
     return;
   }
   const dochazky = new Set([...att.docs, ...attU.docs].map(d => d.id)).size;
@@ -5950,7 +5969,7 @@ async function delUser(udi) {
     for (const t of S.tasks.filter(x => x.respId === udi)) await db.collection('tasks').doc(t.id).update({ respId: '' }).catch(() => {});
     await db.collection('users').doc(udi).delete();
     goPage('uzivatele'); toast('Uživatel smazán ✓');
-  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
 
 /* Role pro prihlaseni se odvozuje JEN tady, aby se createLogin a saveUser
@@ -5978,7 +5997,7 @@ async function smazSazbuOd(udi, od) {
     ? (posl.c ? { h: posl.h, c: posl.c, hist } : { h: posl.h, hist })
     : (s.c ? { h: s.h, c: s.c, hist: [] } : { h: s.h, hist: [] });
   try { await db.collection('sazby').doc(udi).set(nova); toast('Záznam sazby smazán ✓'); }
-  catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
 function pgNewUser() {
   const edit = S.editUserId ? userById(S.editUserId) : null;
@@ -6005,7 +6024,7 @@ function pgNewUser() {
       </div>
       ${t === 'teren' ? `
       <div class="formsec">
-        <h4>⏱ Sazby (#34) — vidí jen Vedení</h4>
+        <h4>⏱ Sazby — vidí jen Vedení</h4>
         <div class="note" style="margin-top:0">Subdodavatel sazbu nemá — hodiny nevykazuje, fakturuje práci.</div>
         <div class="frow">
           <div><label>Hrubá sazba Kč/h *</label><input type="number" id="nu-sh" value="${s && s.h ? s.h : ''}" placeholder="co stojí hodina firmu"></div>
@@ -6174,7 +6193,7 @@ async function saveUser() {
       const hls = await db.collection('hlaseni').where('userDocId', '==', docId).get();
       opraveno += await prepisPole(hls.docs.filter(d => d.data().userName !== noveJmeno), { userName: noveJmeno });
       if (jmenovec && !edit.uid) toast('⚠ Stejné jméno má i někdo další a tenhle člověk nemá přihlášení — starší zápisy jsem raději nepřepisoval, aby se nepřepsaly cizí.');
-    } catch (e) { toast('⚠ Jméno jsem změnil, ale ne všude se to propsalo: ' + (e.code || e.message)); }
+    } catch (e) { toast('⚠ Jméno jsem změnil, ale ne všude se to propsalo: ' + dbErrText(e)); }
     // jmeno srovnat i v rosteru — ale jen u party a subu, vedeni v rosteru byt nema (B6)
     /* update, ne set(merge): kdo v rosteru zaznam nema (nema prihlaseni),
        tomu ho prejmenovani nesmi zalozit — na prihlasovaci obrazovce by se
@@ -6289,12 +6308,12 @@ async function zacitPauzu() {
      Proto potvrzeni — spatne zapnuta pauza ubira hodiny z vyplaty. */
   if (!await potvrd('Začít pauzu?\n\nČas pauzy se odečte od dnešních hodin.')) return;
   try { await zapisPauzu('Pauza', sm.pid); S.pauzaPripomenuto = false; toast('Pauza běží ⏸'); }
-  catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
 async function ukoncitPauzu(tiche) {
   const b = mojePauza(); if (!b) return false;
   try { await zapisPauzu('Konec pauzy', b.pid); if (!tiche) toast('Pauza ukončena ✓'); return true; }
-  catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); return false; }
+  catch (e) { toast('Neuložilo se — ' + dbErrText(e)); return false; }
 }
 
 function ensureMyPos() {
@@ -6563,7 +6582,7 @@ async function prevedKontaktyInvestoru() {
   if (cisto) await db.collection('config').doc('app').set({ kontaktyKlientuPrevedeny: true }, { merge: true }).catch(() => {});
 }
 
-/* Jednorazovy prevod sazeb na historii (#34). Kdo ma sazbu a nema historii,
+/* Jednorazovy prevod sazeb na historii. Kdo ma sazbu a nema historii,
    dostane prvni zaznam s datem „odjakziva" — sazba v /sazby je jedina, jakou
    aplikace kdy znala, a vsechny uz vytistene reporty jsou spocitane s ni.
    Dnesni datum by tuhle pravdu prepsalo: v karte uzivatele by pak stalo
@@ -6802,7 +6821,7 @@ async function novaPoznamka(pid) {
     vidi: v.v.vidi, vidiJmena: v.v.vidiJmena,
     autorId: (S.meAuth && S.meAuth.userDocId) || (S.me && S.me.id) || '',
     autor: fullName(S.me || {}), createdAt: FV() })
-    .catch(e => { toast('Nejde přidat: ' + (e.code || e.message)); return null; });
+    .catch(e => { toast('Nepřidalo se — ' + dbErrText(e)); return null; });
   if (r) { S.poznamkaEdit = r.id; render(); }
 }
 /* Po ulozeni i po zruseni musi pamet formulare (FORMMEM) pustit — jinak by
@@ -6825,7 +6844,7 @@ async function ulozPoznamku(id) {
   try {
     await db.collection('poznamky').doc(id).update({ nadpis: n, text: t,
       vidi: v.vidi, vidiJmena: v.vidiJmena, viditelnost: firebase.firestore.FieldValue.delete() });
-  } catch (e) { toast('Nejde uložit: ' + (e.code || e.message)); return; }
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); return; }
   /* Zapomenout se musi az PO prekresleni. zapomen() vrati policka na
      defaultValue — tedy na stav PRED upravou — a schovatFormulare() na
      zacatku render() si je v tu chvili jeste stihne nacist zpatky do pameti
@@ -6840,7 +6859,7 @@ async function smazPoznamku(id) {
   if (!await potvrd('Smazat poznámku i s komentáři?')) return;
   await db.collection('poznamky').doc(id).delete()
     .then(() => { S.poznamkaEdit = null; toast('Smazáno ✓'); })
-    .catch(e => toast('Nejde smazat: ' + (e.code || e.message)));
+    .catch(e => toast('Nesmazalo se — ' + dbErrText(e)));
 }
 async function komentujPoznamku(id) {
   const inp = $('#pk-' + id); const text = inp.value.trim();
@@ -6848,7 +6867,7 @@ async function komentujPoznamku(id) {
   await db.collection('poznamky').doc(id).update({
     komentare: firebase.firestore.FieldValue.arrayUnion({
       autor: fullName(S.me || {}), text, date: isoToday(), time: nowTime() })
-  }).then(() => { inp.value = ''; }).catch(e => toast('Nejde: ' + (e.code || e.message)));
+  }).then(() => { inp.value = ''; }).catch(e => toast('Neuložilo se — ' + dbErrText(e)));
 }
 
 /* ============ EVIDENCE KLICU ============
@@ -6899,7 +6918,7 @@ async function napojPodklady(pid) {
   if (!m) { toast('V odkazu nevidím ID složky'); return; }
   await db.collection('projects').doc(pid).update({ podkladyFolderId: m[0] })
     .then(() => { toast('Složka napojena ✓'); S.podkladyStav = null; S.podkladyCesta = []; render(); })
-    .catch(e => toast('Nejde uložit: ' + (e.code || e.message)));
+    .catch(e => toast('Neuložilo se — ' + dbErrText(e)));
 }
 
 async function pridatKlic(pid) {
@@ -6907,12 +6926,12 @@ async function pridatKlic(pid) {
   const nazev = await zeptejSe('Přidat klíč', 'Jak se klíč jmenuje.', 'Klíč č. ' + n);
   if (!nazev) return;
   await db.collection('klice').add({ pid, nazev: nazev.trim(), drzitelId: '', drzitelJmeno: '', potvrzeno: true, historie: [], createdAt: FV() })
-    .then(() => toast('Klíč přidán ✓')).catch(e => toast('Nejde přidat: ' + (e.code || e.message)));
+    .then(() => toast('Klíč přidán ✓')).catch(e => toast('Nepřidalo se — ' + dbErrText(e)));
 }
 async function smazatKlic(id) {
   const k = S.klice.find(x => x.id === id); if (!k) return;
   if (!await potvrd('Smazat „' + k.nazev + '" včetně historie předání?')) return;
-  await db.collection('klice').doc(id).delete().catch(e => toast('Nejde smazat: ' + (e.code || e.message)));
+  await db.collection('klice').doc(id).delete().catch(e => toast('Nesmazalo se — ' + dbErrText(e)));
 }
 function predatKlicDialog(id) {
   const k = S.klice.find(x => x.id === id); if (!k) return;
@@ -6945,7 +6964,7 @@ async function predatKlic(id) {
         historie: firebase.firestore.FieldValue.arrayUnion(zpet)
       });
       closeModal(); toast('Klíč je zpátky v kanceláři ✓');
-    } catch (e) { toast('Nejde vrátit: ' + (e.code || e.message)); }
+    } catch (e) { toast('Nejde vrátit: ' + dbErrText(e)); }
     return;
   }
   const ku = userById(komuId); if (!ku) return;
@@ -6957,14 +6976,14 @@ async function predatKlic(id) {
       historie: firebase.firestore.FieldValue.arrayUnion(zapis)
     });
     closeModal(); toast('Předáno — ' + fullName(ku) + ' potvrdí převzetí ✓');
-  } catch (e) { toast('Nejde předat: ' + (e.code || e.message)); }
+  } catch (e) { toast('Nejde předat: ' + dbErrText(e)); }
 }
 async function potvrditKlic(id) {
   const k = S.klice.find(x => x.id === id); if (!k) return;
   const h = [...(k.historie || [])];
   if (h.length) h[h.length - 1] = { ...h[h.length - 1], potvrzeno: true, potvrzenoDate: isoToday(), potvrzenoTime: nowTime() };
   try { await db.collection('klice').doc(id).update({ potvrzeno: true, historie: h }); toast('Převzetí potvrzeno ✓'); }
-  catch (e) { toast('Nejde potvrdit: ' + (e.code || e.message)); }
+  catch (e) { toast('Nejde potvrdit: ' + dbErrText(e)); }
 }
 function historieKlice(id) {
   const k = S.klice.find(x => x.id === id); if (!k) return;
@@ -7143,7 +7162,7 @@ async function subPrichod() {
     });
     zapomen('sh-c');
     toast('Příchod zapsán ✓'); render();
-  } catch (e) { toast('Nepovedlo se zapsat: ' + (e.code || e.message)); }
+  } catch (e) { toast('Nepovedlo se zapsat: ' + dbErrText(e)); }
 }
 
 async function subOdchod() {
@@ -7162,13 +7181,13 @@ async function subOdchod() {
     S.subOdchodOpen = false; S.subZaznam = '';
     zapomen('so-z');
     toast('Odchod zapsán — záznam šel vedení ke schválení ✓'); render();
-  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
 async function subSmazatHlaseni(id) {
   const h = S.hlaseni.find(x => x.id === id); if (!h) return;
   if (!await potvrd('Smazat dnešní hlášení?')) return;
   try { await db.collection('hlaseni').doc(id).delete(); toast('Smazáno ✓'); }
-  catch (e) { toast('Nejde smazat: ' + (e.code || e.message)); }
+  catch (e) { toast('Nesmazalo se — ' + dbErrText(e)); }
 }
 
 /* ---- záložky dole u party a subdodavatelů ----
@@ -7551,7 +7570,7 @@ async function smazatMujUkol(id) {
   if (!await potvrd('Zrušit úkol „' + t.title + '"?\n\nZmizí i tomu, komu jsi ho zadal.')) return;
   for (const f of (t.photos || [])) db.collection('fotonahledy').doc(f.id).delete().catch(() => {});
   try { await db.collection('tasks').doc(id).delete(); toast('Úkol zrušen ✓'); }
-  catch (e) { toast('Nepovedlo se zrušit: ' + (e.code || e.message)); }
+  catch (e) { toast('Nepovedlo se zrušit: ' + dbErrText(e)); }
 }
 
 /* Fotky k ukolu: maly nahled primo v ukolu (at je videt, o co jde) a
@@ -7605,7 +7624,7 @@ async function workerAddTask() {
     S.wtaskOpen = false;
     toast(sobe ? 'Úkol přidán mezi tvoje ✓' : 'Úkol zadán — ' + (ru ? fullName(ru) : '') + ' ✓');
     render();
-  } catch (e) { toast('Nepovedlo se zadat: ' + (e.code || e.message)); }
+  } catch (e) { toast('Nepovedlo se zadat: ' + dbErrText(e)); }
 }
 
 async function workerCheck(akce) {
@@ -7680,7 +7699,7 @@ async function workerCheck(akce) {
         await save(null, selfie);
       }
     }
-  } catch (e) { toast('Zápis se nepovedl: ' + (e.code || e.message)); }
+  } catch (e) { toast('Zápis se nepovedl: ' + dbErrText(e)); }
   S.checking = null; render();
 }
 
@@ -7724,12 +7743,12 @@ async function doplnitOdchod() {
       prichodId: sm.posledni.id, prichodDate: sm.posledni.date, prichodTime: sm.posledni.time,
       poznamka: $('#do-pozn').value.trim(), createdAt: FV()
     });
-    zapis.catch(e => toast('Žádost se neuložila: ' + (e.code || e.message)));
+    zapis.catch(e => toast('Žádost se neuložila: ' + dbErrText(e)));
     await Promise.race([zapis, new Promise(r => setTimeout(r, 1500))]);
     closeModal();
     toast(S.online ? 'Žádost odeslaná vedení ✓ Do hodin se započítá až po schválení.'
                    : 'Žádost uložena — odejde vedení, až bude signál ✓');
-  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
 /* Vedeni zadost schvali -> teprve TED vznikne zaznam dochazky. Zapisuje ho
    vedeni, ale pod uctem pracovnika, aby ho mel videt i on ve svem mobilu. */
@@ -7747,7 +7766,7 @@ async function zadostSchvalit(id) {
       stav: 'schvaleno', vyrizeno: { kdo: fullName(S.me || {}), kdy: new Date().toISOString() }
     });
     toast('Schváleno ✓ Odchod zapsán, hodiny se započítají.');
-  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
 async function zadostZamitnout(id) {
   const z = S.zadosti.find(x => x.id === id); if (!z) return;
@@ -7759,7 +7778,7 @@ async function zadostZamitnout(id) {
       vyrizeno: { kdo: fullName(S.me || {}), kdy: new Date().toISOString() }
     });
     toast('Zamítnuto — den zůstává neuzavřený.');
-  } catch (e) { toast('Nepovedlo se: ' + (e.code || e.message)); }
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
 async function zadostVzitNaVedomi(id) {
   try { await db.collection('zadosti').doc(id).update({ videno: true }); } catch (e) {}
@@ -7814,7 +7833,7 @@ async function workerPrechod() {
     S.workerProject = naTam.id;
     frontaOdeslat();
     toast('Přesun zapsán ✓ Jsi na stavbě ' + naTam.name + (selfie && !S.online ? ' · fotka se odešle, až bude signál' : ''));
-  } catch (e) { toast('Přesun se nepovedl: ' + (e.code || e.message)); }
+  } catch (e) { toast('Přesun se nepovedl: ' + dbErrText(e)); }
   S.checking = null; render();
 }
 
@@ -7967,7 +7986,7 @@ async function seedData() {
       return;
     }
   } catch (e) {
-    await oznam('Nepodařilo se ověřit, jestli je systém prázdný (' + (e.code || e.message) + ').\n\nBez toho se pilotní data nenahrávají — zkus to znovu s připojením.');
+    await oznam('Nepodařilo se ověřit, jestli je systém prázdný (' + dbErrText(e) + ').\n\nBez toho se pilotní data nenahrávají — zkus to znovu s připojením.');
     return;
   }
   if (!await potvrd('Nahrát výchozí data pilotních zakázek (Pecka CN20260055, Šaarová CN20260060)?')) return;
