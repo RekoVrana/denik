@@ -94,6 +94,13 @@ function navodWorker() {
       + 'nebo odchod — takový den se ti do hodin nepočítá, dokud ho vedení nedoplní. '
       + 'Peníze tu nejsou, sazbu vidí jen vedení.')}
 
+    ${CFG.vapidKey ? navodKrok('🔔', 'Ať ti telefon dá vědět',
+        'Dole na téhle stránce je <b>🔔 Zapnout upozornění</b>. Ťukni a povol je. '
+      + 'Pak ti telefon cinkne, když ti někdo zadá <b>nový úkol</b>, a večer připomene, '
+      + 'kdyby ses zapomněl odepsat ze stavby. Nic jiného ti chodit nebude. '
+      + '<b>Na iPhonu to jde jen tehdy, když máš Deník přidaný na ploše</b> — '
+      + 'v Safari jako záložka to Apple nedovolí.') : ''}
+
     ${navodPata()}
     </div>
   </div>`;
@@ -143,6 +150,13 @@ function navodSub() {
 
     ${navodKrok('📓', 'Co se na stavbě dělalo',
         'Záložka <b>📓 Deník</b> dole — nahoře vybereš stavbu, pod tím zápisy i s fotkami.')}
+
+    ${CFG.vapidKey ? navodKrok('🔔', 'Ať ti telefon dá vědět',
+        'Dole na téhle stránce je <b>🔔 Zapnout upozornění</b>. Ťukni a povol je. '
+      + 'Pak ti telefon cinkne, když ti někdo zadá <b>nový úkol</b>, a večer připomene, '
+      + 'kdyby ses zapomněl odepsat ze stavby. Nic jiného ti chodit nebude. '
+      + '<b>Na iPhonu to jde jen tehdy, když máš Deník přidaný na ploše</b> — '
+      + 'v Safari jako záložka to Apple nedovolí.') : ''}
 
     ${navodPata()}
     </div>

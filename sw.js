@@ -52,3 +52,47 @@ self.addEventListener('fetch', e => {
     e.respondWith(caches.match(e.request).then(r => r || fetch(e.request).then(res => { const cp = res.clone(); caches.open(CACHE).then(c => c.put(e.request, cp)); return res; })));
   }
 });
+
+/* ---- UPOZORNĚNÍ ----
+   Tohle je jediná část Deníku, která běží i se zavřenou aplikací — proto
+   upozornění zobrazuje service worker, ne stránka.
+
+   Most posílá schválně JEN data, žádný hotový text k zobrazení. Kdyby
+   posílal hotové upozornění, zobrazil by ho prohlížeč sám po svém a my
+   bychom neuhlídali ani slučování, ani kam ťuknutí vede. */
+self.addEventListener('push', e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (chyba) { d = {}; }
+  const o = d.data || d.notification || d;
+  const titul = o.titul || o.title || 'Deník staveb';
+  const telo = o.telo || o.body || '';
+  /* Upozornění se MUSÍ opravdu zobrazit. Když ho service worker spolkne,
+     prohlížeč to považuje za zneužití a po pár případech nám posílání
+     zakáže úplně — proto se ukáže vždycky, i když je appka zrovna otevřená. */
+  e.waitUntil(self.registration.showNotification(titul, {
+    body: telo,
+    icon: './icon-192.png',
+    badge: './icon-192.png',
+    lang: 'cs',
+    /* Stejná značka = nové upozornění nahradí starší místo toho, aby se
+       vršila. Ze šablony vzniká i dvacet úkolů naráz a bez tohohle by
+       člověku naráz nacinkalo dvacetkrát — a hned si to vypnul. */
+    tag: o.tag || 'denik',
+    renotify: true,
+    data: { url: o.url || './' }
+  }));
+});
+/* Ťuknutí musí otevřít to, čeho se upozornění týká — ne domovskou stránku.
+   A když už Deník někde otevřený je, použije se to okno místo dalšího. */
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const cil = new URL((e.notification.data && e.notification.data.url) || './', self.location.href).href;
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(okna => {
+    for (const o of okna) {
+      if (o.url.startsWith(self.registration.scope) && 'focus' in o) {
+        return ('navigate' in o ? o.navigate(cil).catch(() => o) : Promise.resolve(o)).then(x => (x || o).focus());
+      }
+    }
+    return self.clients.openWindow(cil);
+  }));
+});

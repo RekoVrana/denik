@@ -264,6 +264,8 @@ const S = {
   repWorkers: [], repProjects: [], repLoaded: false, repFrom: isoToday().slice(0, 8) + '01', repTo: isoToday(),
   workerProject: null, draftPhotos: [], draftAtts: [], uploading: 0, signFor: null, tplOpen: false,
   loginMode: 'teren', loginWorker: null, loginHledani: null,
+  pushToken: (function () { try { return localStorage.getItem('vranaPush'); } catch (e) { return null; } })(),
+  pushPracuje: false, pushChyba: '',
   online: navigator.onLine, unsub: [],
   searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false, checking: null, installPrompt: null, swReg: null, updateReady: false, updating: false,
   frontaPocet: 0, frontaSelhalo: [], orgZobrazeno: 40, mobTab: 'dnes', mojeMesic: null, prohlizenaStavba: null
@@ -1704,7 +1706,12 @@ function initAuth() {
           S.meAuth = d.data();
           const me = await ctiSPokusem(() => db.collection('users').doc(S.meAuth.userDocId).get());
           S.me = me.exists ? { id: me.id, ...me.data() } : null;
-          S.authState = 'in'; startData(); render(); return;
+          S.authState = 'in'; startData(); render();
+          /* Adresa zarizeni se casem sama meni. Bez tichého obnoveni pri
+             kazdem spusteni by upozorneni jednoho dne prestala chodit
+             a nikdo by se to nedozvedel. */
+          pushRegistruj(false).catch(e => console.warn('push', e));
+          return;
         } else {
           await auth.signOut();
           S.loginMsg = 'Heslo bylo správně, ale účet nemá přidělená práva. Ať ho vedení otevře v sekci Uživatelé a uloží — práva se tím srovnají.';
@@ -1952,7 +1959,152 @@ async function vpZpetKPreceneni(id) {
     render();
   } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
-function doLogout() { auth.signOut(); }
+/* Adresu zarizeni smazat JESTE PRED odhlasenim — potom uz na to clovek nema
+   pravo a doklad by v databazi zustal viset. Na sdilenem telefonu by pak
+   upozorneni pro predchoziho chodila tomu dalsimu. */
+async function doLogout() {
+  try { await pushZrus(); } catch (e) {}
+  auth.signOut();
+}
+
+/* ============ UPOZORNĚNÍ DO TELEFONU ============
+   Deník je statická stránka — sám nic odeslat neumí. Upozornění posílá most
+   (Apps Script) přes Firebase Cloud Messaging. Tady je jen ta část, co si
+   o ně řekne a uloží adresu TOHOTO zařízení; zobrazení už dělá service
+   worker (viz sw.js), protože ten běží i se zavřenou aplikací.
+
+   Posílají se JEN dvě věci — vědomé rozhodnutí Marca 1. 9. 2026:
+     1) nový úkol pro mě
+     2) večerní připomenutí, že jsem pořád píchnutý na stavbě
+   Víc upozornění znamená, že si je lidi vypnou — a pak jim nedorazí ani to
+   jedno důležité. Přidávat jde kdykoli, couvat z toho špatně.
+
+   Dokud vedení nevyplní vapidKey v config.js, cela funkce se NEUKAZUJE.
+   Radeji neviditelna nez tlacitko, ktere po ťuknutí jen zahlásí chybu. */
+const PUSH_JDE = typeof Notification !== 'undefined'
+  && 'serviceWorker' in navigator && 'PushManager' in window;
+
+/* Stav se POKAZDE DOPOCITA z prohlizece, nedrzi se ulozeny — clovek muze
+   upozorneni zakazat v nastaveni telefonu, aniz by o tom appka vedela. */
+function pushStav() {
+  if (!CFG.vapidKey || !S.me) return 'nenastaveno';
+  /* Apple upozorneni v obycejnem Safari nedovoli vubec. Musi to byt pridane
+     na plochu — a to je jedina vec, kterou s tim clovek muze udelat. */
+  if (JE_IOS && !jeNaPlose()) return 'ios-plocha';
+  if (!PUSH_JDE) return 'nejde';
+  if (Notification.permission === 'denied') return 'zamitnuto';
+  if (Notification.permission === 'granted') return S.pushToken ? 'zapnuto' : 'nedokoncene';
+  return 'vypnuto';
+}
+function pushPopisZarizeni() {
+  if (JE_IOS) return 'iPhone / iPad';
+  if (JE_ANDROID) return 'Android';
+  return 'počítač';
+}
+/* Kus Firebase pro upozorneni se stahuje AZ VE CHVILI, kdy je potreba.
+   Je to 37 kB navic a nastavuje se jednou za zivot telefonu — nema smysl
+   tim brzdit rano prichod na stavbe, kde byva jedna carka signalu. */
+let _pushSdk = null;
+function pushSDK() {
+  if (_pushSdk) return _pushSdk;
+  _pushSdk = new Promise((hotovo, chyba) => {
+    if (window.firebase && firebase.messaging) { hotovo(); return; }
+    const sc = document.createElement('script');
+    sc.src = 'https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js';
+    sc.integrity = 'sha384-HY9kcCUNf5iP55Q7dt4qtyKGMq0L6BbtAwNb4LYA6MXDWUL8DRlsj1xhtwKBZ2BL';
+    sc.crossOrigin = 'anonymous';
+    sc.onload = () => hotovo();
+    /* Pri chybe se slib zahodi, aby sel dalsi pokus — jinak by uz jednou
+       nepovedene stazeni (treba ve vytahu) zablokovalo zapnuti navzdy. */
+    sc.onerror = () => { _pushSdk = null; chyba(new Error('nešlo stáhnout část pro upozornění')); };
+    document.head.appendChild(sc);
+  });
+  return _pushSdk;
+}
+/* Zapise adresu tohoto zarizeni k prihlasenemu cloveku. Vola se i tise pri
+   kazdem spusteni — adresa se casem sama meni a bez obnovy by upozorneni
+   jednoho dne prestala chodit, aniz by se to jakkoli projevilo. */
+async function pushRegistruj(hlasit) {
+  if (!CFG.vapidKey || !S.me || !PUSH_JDE) return null;
+  if (Notification.permission !== 'granted') return null;
+  await pushSDK();
+  const reg = await navigator.serviceWorker.ready;
+  const token = await firebase.messaging().getToken({ vapidKey: CFG.vapidKey, serviceWorkerRegistration: reg });
+  if (!token) throw new Error('zařízení nevrátilo svoji adresu');
+  /* Doklad ma za id primo tu adresu: jedno zarizeni tak nikdy nevznikne
+     dvakrat a prehlaseni na stejnem telefonu jen prepise, komu upozorneni
+     patri — druhy clovek nezdedi upozorneni prvniho. */
+  await db.collection('pushtokeny').doc(token).set({
+    userDocId: S.me.id, jmeno: fullName(S.me),
+    zarizeni: pushPopisZarizeni(), verze: VERZE, kdy: FV()
+  }, { merge: true });
+  S.pushToken = token;
+  try { localStorage.setItem('vranaPush', token); } catch (e) {}
+  if (hlasit) toast('Upozornění zapnuta ✓');
+  return token;
+}
+async function pushZapni() {
+  if (S.pushPracuje) return;
+  if (pushStav() === 'ios-plocha') { pridatNaPlochu(); return; }
+  S.pushPracuje = true; S.pushChyba = ''; render();
+  try {
+    /* O povoleni se MUSI rict primo z ťuknuti — prohlizec zadost mimo
+       gesto uzivatele zahodi bez ptani. */
+    const odpoved = await Notification.requestPermission();
+    if (odpoved !== 'granted') {
+      toast(odpoved === 'denied'
+        ? 'Zakázal jsi je. Vrátit to jde v nastavení prohlížeče u téhle stránky.'
+        : 'Bez povolení to nepůjde.');
+      return;
+    }
+    await pushRegistruj(true);
+  } catch (e) {
+    S.pushChyba = e.message || String(e);
+    toast('Nepovedlo se zapnout — ' + S.pushChyba);
+  } finally { S.pushPracuje = false; render(); }
+}
+/* Uklid adresy. Nesmi spadnout na chybe — vola se i pri odhlaseni, kde je
+   dulezitejsi dokoncit odhlaseni nez uklidit doklad. */
+async function pushZrus() {
+  let t = S.pushToken;
+  if (!t) { try { t = localStorage.getItem('vranaPush'); } catch (e) {} }
+  if (t) { try { await db.collection('pushtokeny').doc(t).delete(); } catch (e) {} }
+  /* SDK se kvuli tomuhle NESTAHUJE. Odhlaseni nesmi cekat na 37 kB ze site
+     — a kdyz uz doklad v databazi neni, most na to zarizeni stejne neposle. */
+  try { if (window.firebase && firebase.messaging) await firebase.messaging().deleteToken(); } catch (e) {}
+  S.pushToken = null;
+  try { localStorage.removeItem('vranaPush'); } catch (e) {}
+}
+async function pushVypni() {
+  if (!await potvrd('Vypnout upozornění na tomhle zařízení?\n\n'
+    + 'Nové úkoly ani večerní připomenutí odchodu ti sem už nedorazí.\n\n'
+    + 'Zapnout to jde kdykoli zpátky.', 'Vypnout')) return;
+  S.pushPracuje = true; render();
+  try { await pushZrus(); toast('Upozornění vypnuta'); }
+  finally { S.pushPracuje = false; render(); }
+}
+function kartaUpozorneni() {
+  const st = pushStav();
+  if (st === 'nenastaveno') return '';
+  if (st === 'nejde') return '<div class="note" style="margin-top:14px">🔕 Tenhle prohlížeč upozornění neumí — nové úkoly uvidíš, až Deník otevřeš.</div>';
+  if (st === 'zapnuto') return `<div class="note" style="margin-top:14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <span>🔔 <b>Upozornění zapnutá</b> na tomhle zařízení (${esc(pushPopisZarizeni())}).</span>
+    <span class="lnk" style="margin-left:auto" onclick="pushVypni()">vypnout</span></div>`;
+  if (st === 'zamitnuto') return `<div class="note" style="margin-top:14px">
+    🔕 <b>Upozornění máš zakázaná.</b> Zapnout se dají už jen v nastavení prohlížeče
+    ${JE_IOS ? '(Nastavení → Deník staveb → Oznámení)' : '(ťukni na zámeček u adresy stránky)'} — z aplikace se na to znovu zeptat nesmím.</div>`;
+  const cekam = S.pushPracuje;
+  return `<button class="instbox" style="margin-top:14px" onclick="pushZapni()" ${cekam ? 'disabled' : ''}>
+    <span class="ic">${cekam ? '⏳' : '🔔'}</span>
+    <span><b>${cekam ? 'Zapínám…' : 'Zapnout upozornění'}</b>
+    <span>${st === 'ios-plocha'
+      ? 'Nejdřív si musíš Deník přidat na plochu — v Safari to Apple nedovolí. Ukážu ti jak.'
+      : st === 'nedokoncene'
+        ? (S.pushChyba ? 'Nepovedlo se: ' + esc(S.pushChyba) + ' Ťukni a zkus to znovu.'
+                       : 'Ještě to není dokončené — ťukni a dokonči to.')
+        : 'Dám ti vědět o novém úkolu a večer připomenu, kdyby ses zapomněl odepsat ze stavby.'}</span></span>
+  </button>`;
+}
 
 /* ============ ADMIN (Vedení) ============ */
 function topbar() {
@@ -2019,6 +2171,9 @@ function viewAdmin() {
 function pgNastenka() {
   const nt = S.nastenkaTab;
   let body = nt === 'dochazka' ? nastenkaDochazka() : nt === 'ukoly' ? nastenkaUkoly() : nt === 'tickety' ? nastenkaTickety() : nastenkaPrehled();
+  /* Vedeni upozorneni potrebuje taky — ukoly dostava jako kazdy jiny.
+     Na prehledu, at to nekouka do cesty pri praci s dochazkou. */
+  if (nt === 'prehled') body = kartaUpozorneni() + body;
   return `
   <div class="strip"><h1>Nástěnka</h1><span class="sp"></span><span class="muted">${fmtISOFull(isoToday())}</span></div>
   <div class="sectabs">
@@ -4622,13 +4777,19 @@ async function ulozUkol(id) {
   try {
     /* Stav ukolu se tady schvalne nemeni — ten resi odskrtnuti (taskDone)
        a sipky na kanbanu. zadalId zustava, kdo ukol zadal se neprepisuje. */
-    await db.collection('tasks').doc(id).update({
+    const zmena = {
       title, popis: ($('#ue-popis') ? ($('#ue-popis').value || '').trim() : ''),
       /* Kdyby stavba v nabidce nebyla (uz neexistuje), zapsalo by se prazdno
          a ukol by se odpojil od zakazky. Radeji nechame puvodni. */
       pid: $('#ue-p').value || t.pid || '', respId, resp: fullName(ru), res: [fullName(ru)],
       term: $('#ue-d').value || t.term || ''
-    });
+    };
+    /* Prehozeni ukolu na nekoho jineho je pro nej stejna novinka jako ukol
+       novy — jenze createdAt se nemeni, takze by o tom most nevedel a v
+       seznamu se to taky neobjevi nahore. Razitko respOd je jediny zaznam
+       o tom, ze se odpovedny prave zmenil. */
+    if (respId !== t.respId) zmena.respOd = FV();
+    await db.collection('tasks').doc(id).update(zmena);
     closeModal(); toast('Úkol upraven ✓'); render();
   } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
@@ -7137,6 +7298,7 @@ function viewSub() {
           <span class="lnk" style="margin-left:auto" onclick="subSmazatHlaseni('${h.id}')">✕</span></div>`).join('')}
       </div>` : ''}
     </div>
+    ${kartaUpozorneni()}
     ` : ''}
     ${tab === 'ukoly' ? kartaUkoly(p) : ''}
     ${tab === 'stavba' ? `
@@ -7459,6 +7621,7 @@ function viewWorker() {
           <ul class="worklist">${(e.works || []).slice(0, 2).map(w => `<li>${esc(w)}</li>`).join('')}${(e.works || []).length > 2 ? `<li class="muted">… +${e.works.length - 2} další</li>` : ''}</ul>
         </div>`).join('') || '<div class="empty">Zatím žádné zápisy.</div>'}
     </div>
+    ${kartaUpozorneni()}
     ` : ''}
     ${tab === 'hodiny' ? kartaMojeHodiny() : ''}
   </main>${mobTaby('worker')}</div></div>`;
