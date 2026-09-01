@@ -2,8 +2,8 @@
    DENÍK STAVEB — odesílatel upozornění do telefonu
    Rekonstrukce Vrána s.r.o.
 
-   ZÁLOŽNÍ KOPIE kódu, který běží v Apps Scriptu (most na Drive).
-   Živá verze: script.google.com → projekt mostu.
+   ZÁLOŽNÍ KOPIE kódu, který běží v Apps Scriptu.
+   Živá verze: script.google.com → projekt „Vrana Upozorneni (denik)".
    Když se změní tam, změň i tady, ať kopie nezastará.
 
    ------------------------------------------------------------
@@ -36,22 +36,42 @@
    všechna najednou a žádné se nezapomene.
 
    ------------------------------------------------------------
-   CO JE POTŘEBA NASTAVIT (Apps Script → Nastavení projektu → Vlastnosti skriptu)
+   PROČ TO JE VLASTNÍ PROJEKT, A NE SOUČÁST MOSTU NA DRIVE
 
-     PROJECT_ID        vrana-denik
-     SERVICE_ACCOUNT   celý obsah JSON klíče servisního účtu
+   Nabízelo by se přidat to k mostu, co už běží. Jenže ten vozí fotky
+   a příloh a má nasazenou webovou adresu, na kterou volá aplikace.
+   Kdyby se do něj sáhlo a něco se rozbilo, přestaly by chodit fotky.
 
-   POZOR: SERVICE_ACCOUNT je opravdový klíč od databáze i od posílání.
-   Nepatří do tohohle souboru, nepatří na GitHub a nepatří do mailu.
-   Jen do Vlastností skriptu.
+   Takhle jsou to dvě oddělené věci: spadne-li jedna, druhá jede dál.
+   Tenhle projekt navíc žádnou webovou adresu nemá a mít nemusí —
+   nikdo ho zvenku nevolá, spouští ho jen hodiny.
 
    ------------------------------------------------------------
-   SPOUŠTĚČE (Apps Script → Spouštěče), obojí je nutné založit ručně:
+   ŽÁDNÝ KLÍČ SE TU NEUKLÁDÁ
 
-     upozorneniUkoly    · časový · po minutách · každých 5 minut
-     upozorneniOdchody  · časový · denně · mezi 19:00 a 20:00
+   Původně to mělo jet na servisním účtu, což by znamenalo uložit sem
+   soukromý klíč od databáze i od posílání — další tajemství navíc,
+   které se musí hlídat.
+
+   Není potřeba. Skript běží pod účtem, který ho založil, a Google mu
+   na požádání dá dočasné oprávnění sám (ScriptApp.getOAuthToken).
+   Co přesně smí, je vypsané v appsscript.json:
+
+     script.external_request   · smí volat ven (UrlFetchApp)
+     script.scriptapp          · smí mít spouštěče
+     datastore                 · smí číst databázi
+     firebase.messaging        · smí posílat upozornění
+
+   Oprávnění jsou v manifestu NAPEVNO. Kdyby se odtud smazala, Apps
+   Script si je domyslí sám a domyslí si míň, než je potřeba.
+
+   ------------------------------------------------------------
+   SPOUŠTĚČE
+   Nastavují se jedním spuštěním funkce nastavSpoustece() z editoru.
+   Klikat je ručně netřeba — a hlavně se tím nedá překlepnout čas.
    ============================================================ */
 
+var PROJEKT = 'vrana-denik';          // Firebase projekt Deníku
 var FS_KORen = 'https://firestore.googleapis.com/v1/projects/';
 var LIMIT_NA_BEH = 40;     // pojistka proti lavině, viz posliDavku_
 
@@ -271,52 +291,13 @@ function rozbal_(fields) {
 }
 
 /* ---------- PŘIHLÁŠENÍ K GOOGLU ---------- */
-/* Servisní účet se prokazuje podepsaným lístkem, za který Google vrátí
-   přístupový token. Token platí hodinu, takže se schová — jinak bychom si
-   o něj říkali při každém z 288 denních běhů zbytečně. */
+/* Žádný klíč, žádné podepisování. Skript běží pod účtem, který ho založil,
+   a Google mu dá dočasné oprávnění sám — v rozsahu, který je vypsaný
+   v appsscript.json. Viz vysvětlení v hlavičce souboru. */
 function pristupovyToken_() {
-  var vl = PropertiesService.getScriptProperties();
-  var ulozeny = vl.getProperty('TOKEN');
-  var plati = Number(vl.getProperty('TOKEN_DO') || 0);
-  /* Pět minut rezervy: token, kterému zbývá pár vteřin, by mohl vypršet
-     zrovna mezi kontrolou a použitím. */
-  if (ulozeny && plati > Date.now() + 300000) return ulozeny;
-
-  var ucet = JSON.parse(vl.getProperty('SERVICE_ACCOUNT') || '{}');
-  if (!ucet.client_email || !ucet.private_key) {
-    throw new Error('Chybí SERVICE_ACCOUNT ve Vlastnostech skriptu.');
-  }
-  var ted = Math.floor(Date.now() / 1000);
-  var hlava = { alg: 'RS256', typ: 'JWT' };
-  var narok = {
-    iss: ucet.client_email,
-    scope: 'https://www.googleapis.com/auth/datastore https://www.googleapis.com/auth/firebase.messaging',
-    aud: 'https://oauth2.googleapis.com/token',
-    iat: ted, exp: ted + 3600
-  };
-  var zaklad = b64_(JSON.stringify(hlava)) + '.' + b64_(JSON.stringify(narok));
-  var podpis = Utilities.computeRsaSha256Signature(zaklad, ucet.private_key);
-  var listek = zaklad + '.' + Utilities.base64EncodeWebSafe(podpis).replace(/=+$/, '');
-
-  var odp = UrlFetchApp.fetch('https://oauth2.googleapis.com/token', {
-    method: 'post',
-    payload: { grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: listek },
-    muteHttpExceptions: true
-  });
-  if (odp.getResponseCode() !== 200) {
-    throw new Error('Přihlášení servisního účtu selhalo: ' + odp.getContentText().slice(0, 300));
-  }
-  var j = JSON.parse(odp.getContentText());
-  vl.setProperties({ TOKEN: j.access_token, TOKEN_DO: String(Date.now() + j.expires_in * 1000) });
-  return j.access_token;
+  return ScriptApp.getOAuthToken();
 }
-
-function b64_(t) {
-  return Utilities.base64EncodeWebSafe(Utilities.newBlob(t).getBytes()).replace(/=+$/, '');
-}
-function projectId_() {
-  return PropertiesService.getScriptProperties().getProperty('PROJECT_ID') || 'vrana-denik';
-}
+function projectId_() { return PROJEKT; }
 
 /* ---------- DROBNOSTI ---------- */
 /* Stejné řazení jako v aplikaci (attCmp): nejdřív podle dne a času píchnutí,
@@ -368,13 +349,36 @@ function pocetUkolu_(n) {
   return n + ' nových úkolů';
 }
 
+/* ---------- ZALOŽENÍ SPOUŠTĚČŮ ----------
+   Spusť jednou z editoru (Spustit → nastavSpoustece). Dá se to spustit
+   klidně opakovaně — staré spouštěče téhle dvojice se nejdřív smažou,
+   takže nikdy nevzniknou dva stejné, co by posílaly všechno dvakrát. */
+function nastavSpoustece() {
+  var moje = ['upozorneniUkoly', 'upozorneniOdchody'];
+  var smazano = 0;
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (moje.indexOf(t.getHandlerFunction()) >= 0) { ScriptApp.deleteTrigger(t); smazano++; }
+  });
+
+  ScriptApp.newTrigger('upozorneniUkoly').timeBased().everyMinutes(5).create();
+  /* Devatenáctá je schválně: parta v tu dobu bývá doma, ale ještě ne v posteli,
+     a odchod si stihne opravit dřív, než se den uzavře. */
+  ScriptApp.newTrigger('upozorneniOdchody').timeBased().atHour(19).everyDays(1)
+    .inTimezone('Europe/Prague').create();
+
+  console.log('Smazáno starých spouštěčů: ' + smazano);
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    console.log('  · ' + t.getHandlerFunction() + ' (' + t.getEventType() + ')');
+  });
+  console.log('Hotovo. Úkoly se kontrolují každých 5 minut, odchody večer v 19:00.');
+}
+
 /* ---------- RUČNÍ ZKOUŠKA ----------
    Spusť z editoru (Spustit → zkouskaUpozorneni) a koukni do logu.
    Nic neposílá — jen ověří, že se most dostane do databáze a že ví,
    kdo má upozornění zapnutá. */
 function zkouskaUpozorneni() {
-  var t = pristupovyToken_();
-  console.log('Přihlášení k Googlu: ' + (t ? 'OK' : 'SELHALO'));
+  console.log('Firebase projekt: ' + PROJEKT);
   var doklady = fsDotaz_('pushtokeny', []);
   console.log('Zařízení se zapnutými upozorněními: ' + doklady.length);
   doklady.forEach(function (d) { console.log('  · ' + (d.jmeno || '?') + ' — ' + (d.zarizeni || '?')); });
