@@ -301,8 +301,8 @@ service cloud.firestore {
       //     rozhodnutí Marca 29. 8. 2026): nadpis, popis, stavbu, komu to patří
       //     a termín. Vypsaná pole odpovídají PŘESNĚ tomu, co ulozUkol zapisuje.
       //     respOd je razítko „kdy se změnil odpovědný" — píše ho aplikace sama
-//     při přehození úkolu a most podle něj pozná, komu má dát vědět.
-//     Co v seznamu ZÁMĚRNĚ není a proč:
+      //     při přehození úkolu a most podle něj pozná, komu má dát vědět.
+      //     Co v seznamu ZÁMĚRNĚ není a proč:
       //       zadalId  — nesmí se od úkolu odepsat a schovat, kdo ho zadal;
       //       stav     — posun stavu má vlastní větev (a) i s hotovoDne;
       //       odpovedi — konverzaci nikdo nemaže ani nepodvrhává;

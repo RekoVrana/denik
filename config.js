@@ -16,7 +16,7 @@ window.VRANA_CONFIG = {
      Firebase konzole → Project settings → Cloud Messaging → Web Push certificates.
      Je VEŘEJNÝ, klidně smí být na GitHubu — sám o sobě nic poslat neumí.
      Dokud je prázdný, aplikace o upozorněních vůbec nemluví. */
-  vapidKey: "",
+  vapidKey: "BOY_fkMgcELS8x86cJbN2EfCr0s1PXgghiZa0sPi6HBuITqBKxfoVgSRV3Fn5Zbuy8LiU9Nerz5WT5zybQ2BRuM",
   firmName: "Rekonstrukce Vrána s.r.o.",
   firmContact: "702 111 001 · info@rekovrana.cz",
   gpsTolerance: 100         // povolená odchylka check-inu v metrech (výchozí)
