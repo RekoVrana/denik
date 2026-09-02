@@ -260,6 +260,11 @@
   .mile.done .dot{background:var(--ok);color:#fff}
   .mile.now .dot{background:var(--amber);color:#132c46}
   .mile.now b{color:var(--amber-d)}
+  /* Prouzek postupu etapy. Ukaze i hodnotu mezi (40 %), coz tlacitka po 25 %
+     neumela — vypadalo to pak jako nenastavene. */
+  .mibar{height:8px;border-radius:99px;background:var(--int-soft);overflow:hidden;max-width:180px;flex:1}
+  .mibar span{display:block;height:100%;background:var(--amber);border-radius:99px}
+  .mile.done .mibar span{background:var(--ok)}
   .hero{background:linear-gradient(135deg,var(--navy),#2a5a8a);color:#fff;border-radius:12px;padding:20px;margin-bottom:14px}
   .hero .hm{color:#a9bfd4;font-size:12.5px}
   .hero .prog{background:rgba(255,255,255,.18);margin:10px 0 6px}
@@ -467,9 +472,9 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js" integrity="sha384-ZaR6mWzmJtrRibZ1Vm7SoHFr8OXjyAuGAXalGDKqbxFT18oi/z+oZLIRFkpeNor1" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" integrity="sha384-I1LYojsZ5RM1cOda44Z2h42Qa6YfsQ1XkXxREnhp4ueYBR/4d1pG1K+NZM537Vsj" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" integrity="sha384-Ke0FJhH7LyRqDxZ0wt+/OXV38yfQVu7g9VPEEGjYmB4RVOY/ta04uecRhsMwT7V3" crossorigin="anonymous"></script>
-<script src="vypocty.js?v=20260831ai"></script>
-<script src="navod.js?v=20260831ai"></script>
-<script src="config.js?v=20260831ai"></script>
-<script src="app.js?v=20260831ai"></script>
+<script src="vypocty.js?v=20260831aj"></script>
+<script src="navod.js?v=20260831aj"></script>
+<script src="config.js?v=20260831aj"></script>
+<script src="app.js?v=20260831aj"></script>
 </body>
 </html>

@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 ai';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 aj';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -2637,22 +2637,29 @@ function pgProjDetail() {
       </div>
       <div class="card">
         <h3>📅 Harmonogram — etapy</h3>
-        ${/* Milnik ma postup 0–100 % (milePct). Tlacitka 0/25/50/75/100 jsou na
-            telefonu rychlejsi nez posuvnik (zadny jemny tah prstem, jeden tuk).
-            Kolecko odskrtava hotovo (100 %) / vraci na 0 %. */''}
+        ${/* Etapa se nastavuje V JEDINEM okne (etapaPanel) — odsud i z harmonogramu.
+            Driv tu byla vlastni tlacitka 0/25/50/75/100 a ta neumela ukazat, co
+            posuvnik v harmonogramu vytvori: pri 40 % se nerozsvitilo zadne,
+            takze to vypadalo jako nenastavene, a tuknuti na nejblizsi skocilo
+            na 50 a puvodni hodnotu prepsalo. Dve obrazovky na tutez vec, jedna
+            z nich slabsi. Ted je tu misto nich prouzek, ktery ukaze i 40 %,
+            a tuknuti otevre to sprave okno.
+            Kolecko zustava: jedno tuknuti = hotovo / zpatky na nulu. */''}
         ${(p.milestones || []).map((m, i) => { const pct = milePct(m); const cls = pct === 100 ? 'done' : pct > 0 ? 'now' : 'next'; return `
           <div class="mile ${cls}"><div class="dot" style="cursor:pointer" title="Odškrtnout hotovo / vrátit" onclick="setMilePct('${p.id}',${i},${pct === 100 ? 0 : 100})">${pct === 100 ? '✓' : pct > 0 ? '●' : ''}</div>
           <div style="flex:1">
-            <div style="cursor:pointer" title="Ťukni pro přejmenování etapy" onclick="prejmenujMile('${p.id}',${i})">${cls === 'now' ? '<b>' + esc(m.t) + ' — probíhá</b>' : esc(m.t)}${m.dur ? ' <span class="muted" style="font-size:11px">(' + esc(m.dur) + ')</span>' : ''}</div>
-            <div style="display:flex;gap:5px;align-items:center;margin-top:5px;flex-wrap:wrap">
-              ${[0, 25, 50, 75, 100].map(v => `<button onclick="setMilePct('${p.id}',${i},${v})" style="width:40px;padding:4px 0;border:1px solid var(--line);border-radius:7px;cursor:pointer;font-size:12px;${v === pct ? 'background:var(--amber);font-weight:700' : 'background:var(--int-soft)'}">${v}</button>`).join('')}
-              <span class="muted" style="font-size:11px">${pct} %</span>
+            <div style="cursor:pointer" title="Ťukni pro nastavení etapy — postup, termín, lidi i popis" onclick="etapaPanel('${p.id}',${i})">
+              <div>${cls === 'now' ? '<b>' + esc(m.t) + ' — probíhá</b>' : esc(m.t)}${m.dur ? ' <span class="muted" style="font-size:11px">(' + esc(m.dur) + ')</span>' : ''}</div>
+              <div style="display:flex;gap:8px;align-items:center;margin-top:5px">
+                <span class="mibar"><span style="width:${pct}%"></span></span>
+                <span class="muted" style="font-size:11px;min-width:34px">${pct} %</span>
+              </div>
             </div>
             <div style="margin-top:5px">${mileTerminRadek(p, m, i)}</div>
           </div>
           <span class="lnk" style="font-size:11px" onclick="delMile('${p.id}',${i})">✕</span></div>`; }).join('') || '<div class="empty">Zatím žádné etapy.</div>'}
         <div class="aprv"><input type="text" id="mile-t" placeholder="Nová etapa…" style="max-width:260px"><button class="btn ghost sm" onclick="addMile('${p.id}')">➕ Přidat</button></div>
-        <div class="note">Postup etapy nastavíš tlačítky, kolečkem ji odškrtneš jako hotovou. Průběh stavby (%) se počítá z etap sám a fáze = první nedokončená etapa. Etapy vidí i investor na portálu.<br><b>📅 naplánovat</b> přidá etapě termín a lidi — teprve pak se nakreslí v sekci <b>Harmonogram</b>.</div>
+        <div class="note">Ťukni na etapu a otevře se její nastavení — postup posuvníkem, termín, kdo na ní bude a popis. Kolečkem vlevo ji rovnou odškrtneš jako hotovou. Průběh stavby (%) se počítá z etap sám a fáze = první nedokončená etapa. Název i postup vidí investor na portálu.<br>Dokud etapa nemá termín, nenakreslí se v sekci <b>Harmonogram</b> — doplníš ho ve stejném okně.</div>
       </div>
     </div></main>`;
   } else if (t === 'media') {
@@ -2984,18 +2991,6 @@ async function delMile(pid, i) {
 }
 /* Preklep v nazvu sel opravit jen tak, ze se milnik smazal a napsal znovu
    — a tim se ztratil i jeho postup. Ted staci klepnout na text. */
-async function prejmenujMile(pid, i) {
-  const p = proj(pid); const ms = (p.milestones || []).map(m => ({ ...m }));
-  if (!ms[i]) return;
-  const t = await zeptejSe('✏️ Přejmenovat etapu', 'Název vidí i investor na portálu. Postup etapy zůstane, jak je.', ms[i].t || '');
-  if (t === null) return;
-  const novy = String(t).trim();
-  if (!novy) { toast('Název etapy nesmí být prázdný'); return; }
-  if (novy === (ms[i].t || '')) return;
-  ms[i].t = novy;
-  await ulozMilniky(pid, ms);
-  toast('Etapa přejmenována ✓');
-}
 
 
 /* ================= HARMONOGRAM =================
