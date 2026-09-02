@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 ak';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 al';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -3519,24 +3519,75 @@ function phTile(ph, clientView, eid) {
 /* Tlacitko "Plne rozliseni (Drive)" jen pro prihlasene: firemni Drive je
    soukromy a investora na portalu by odkaz jen poslal na prihlasovaci
    obrazovku Googlu se zadosti o pristup — nikdy by mu nefungoval. */
+/* Listovani mezi fotkami JEDNOHO dne. Sousedi se berou z DOM — vsechny
+   dlazdice ve stejnem ramecku .photos — takze to funguje ve vsech mistech
+   naraz (zapis u vedeni, zapis u party i portal investora) a zadne z nich
+   nemuselo predavat seznam navic. Sipka pak jen "tukne" na sousedni dlazdici,
+   cimz se spusti JEJI vlastni obsluha — portal si tak dotahne svoji velkou
+   verzi z databaze a vedeni tu svoji z Disku, aniz by o sobe vedely. */
+let _fotoEl = null;
+function fotoSousede() {
+  const box = _fotoEl && _fotoEl.closest && _fotoEl.closest('.photos');
+  if (!box) return { list: [], idx: -1 };
+  /* Jen dlazdice, ktere se DAJI otevrit — rozepsany zapis ma nahledy bez
+     obsluhy (cekaji ve fronte) a listovat na ne nema smysl. */
+  const list = [...box.querySelectorAll('.ph[onclick]')];
+  return { list, idx: list.indexOf(_fotoEl) };
+}
+function fotoKrok(smer) {
+  const { list, idx } = fotoSousede();
+  const n = idx + smer;
+  if (idx < 0 || n < 0 || n >= list.length) return;
+  list[n].click();
+}
+function fotoKlavesy(ev) {
+  if (ev.key === 'Escape' || ev.key === 'Esc') { zavriFoto(); return; }
+  if (ev.key === 'ArrowLeft' || ev.key === 'Left') fotoKrok(-1);
+  else if (ev.key === 'ArrowRight' || ev.key === 'Right') fotoKrok(1);
+}
+function zavriFoto() {
+  document.removeEventListener('keydown', fotoKlavesy);
+  _fotoEl = null; closeDoc();
+}
 function openPhoto(driveId, label, el, origId) {
   const img = el ? el.querySelector('img') : null;
   const src = img ? img.src : '';
+  _fotoEl = el || null;
+  /* Odebrat a zase pridat: listovani otevira dalsi fotku pres openPhoto,
+     bez tohohle by se posluchac nabaloval a jedno tuknuti sipky by preskocilo
+     o tolik fotek, kolikrat uz byl prohlizec otevreny. */
+  document.removeEventListener('keydown', fotoKlavesy);
+  document.addEventListener('keydown', fotoKlavesy);
+  const { list, idx } = fotoSousede();
+  const listovani = list.length > 1 && idx >= 0 ? `
+      <button class="btn ghost sm" title="Předchozí (šipka vlevo)" ${idx === 0 ? 'disabled' : ''} onclick="fotoKrok(-1)">‹</button>
+      <span class="muted" style="font-size:12px;white-space:nowrap;min-width:44px;text-align:center">${idx + 1} / ${list.length}</span>
+      <button class="btn ghost sm" title="Další (šipka vpravo)" ${idx === list.length - 1 ? 'disabled' : ''} onclick="fotoKrok(1)">›</button>` : '';
   /* „Plné rozlišení" otevira prednostne ORIGINAL (origId) — ten nese datum
      porizeni a GPS. Stare fotky original nemaji, tam se otevre prohlizeci
      kopie (driveId) jako driv. */
   const plneId = origId || driveId;
-  $('#viewer').innerHTML = `<div class="viewer" onclick="if(event.target===this)closeDoc()"><div class="vwrap">
+  $('#viewer').innerHTML = `<div class="viewer" onclick="if(event.target===this)zavriFoto()"><div class="vwrap">
     <div class="vhead"><b style="flex:1;min-width:120px">${esc(label)}</b>
+      ${listovani}
       ${/* Plne rozliseni vydava MOST, ne Google — stejne jako u priloh a
             podkladu. Driv to byl primy odkaz na drive.google.com, takze to
             po kazdem chtelo ucet Google (a parta ho nema vubec). Most soubor
-            vyda i cloveku bez uctu a klic pritom neopousti server. */''}
-      ${plneId && !S.portalToken ? `<button class="btn ghost sm" onclick="openDriveDoc('${plneId}','${jsAttr(label)}')">🔍 Plné rozlišení</button>` : '<span class="badge b-int">jen náhled</span>'}
-      <button class="btn dark sm" onclick="closeDoc()">✕ Zavřít</button></div>
+            vyda i cloveku bez uctu a klic pritom neopousti server.
+            Investor na Disk nedosahne vubec, tomu se misto toho doplni
+            tlacitko na ulozeni jeho vlastni kopie — viz otevritFotoPortal. */''}
+      ${plneId && !S.portalToken ? `<button class="btn ghost sm" onclick="openDriveDoc('${plneId}','${jsAttr(label)}')">🔍 Plné rozlišení</button>` : `<span class="badge b-int" id="fv-kvalita">${S.portalToken ? 'načítám plnou verzi…' : 'jen náhled'}</span>`}
+      <button class="btn dark sm" onclick="zavriFoto()">✕ Zavřít</button></div>
     <div class="vbody" style="padding:0;align-items:center"><img src="${src}" style="width:100%;max-height:80vh"></div></div></div>`;
 }
-function closeDoc() { $('#viewer').innerHTML = ''; }
+/* Zavreni JAKEHOKOLI prohlizece uklidi i listovani fotkami. Jinak by po
+   otevreni dokumentu pres fotku zustaly sipky viset na starych dlazdicich
+   a sipka vlevo by nad dokumentem vytahla zpatky fotku. */
+function closeDoc() {
+  document.removeEventListener('keydown', fotoKlavesy);
+  _fotoEl = null;
+  $('#viewer').innerHTML = '';
+}
 /* Fotka se otevre hned z maleho nahledu a lepsi kvalita se doplni vzapeti.
    Poradi zdroju: (a) most vyda velkou verzi z Drive (getPhoto) — nove fotky
    uz stredni verzi v databazi nemaji; (b) /fotonahledy jako zaloha pro stare
@@ -3591,9 +3642,19 @@ async function otevritFotoPortal(fotoId, label, el) {
     const v = $('#viewer');
     const img = v && v.querySelector('.vbody img');
     if (img) img.src = d.data().data;
-    const badge = v && v.querySelector('.vhead .badge');   // "jen nahled" uz neplati
-    if (badge) badge.remove();
-  } catch (e) { /* velka verze nedorazila — zustava maly nahled */ }
+    /* Investor na firemni Disk nedosahne, takze "plne rozliseni" pro nej
+       neexistuje — nejvic, co muze dostat, je tahle zrcadlena kopie (1100 px).
+       Driv se jen tise vymenil obrazek a stitek "jen nahled" zmizel, takze
+       clovek nevedel, ze uz kouka na lepsi verzi, ani jak si ji ulozit. */
+    const stitek = v && v.querySelector('#fv-kvalita');
+    if (stitek) stitek.outerHTML = `<a class="btn ghost sm" href="${d.data().data}"
+      download="${jsAttr((label || 'fotka').replace(/[\\/:*?"<>|]/g, '-'))}.jpg">⬇ Uložit fotku</a>`;
+  } catch (e) {
+    /* Velka verze nedorazila — zustava maly nahled. Rict to nahlas, at clovek
+       nekouka na rozmazanou fotku a nevi proc. */
+    const stitek = $('#viewer') && $('#viewer').querySelector('#fv-kvalita');
+    if (stitek) stitek.textContent = 'jen náhled';
+  }
 }
 /* Priloha muze byt trojiho druhu a kazda se otevira jinak:
    - driveId  -> lezi na Drive
