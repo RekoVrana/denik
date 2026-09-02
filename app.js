@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 ar';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 as';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -4385,6 +4385,18 @@ function pasekDnu() {
       <span class="muted">nižší proužek = víkend · ${pid ? 'jen ' + esc((proj(pid) || {}).name || '') : 'přes všechny stavby'} · ťuknutím na den se vypíšou jen jeho zápisy</span>
     </div>
   </div>`;
+}
+/* Pruh se otevira NA DNESKU, ne na zacatku. Na siroke obrazovce se 30 dni
+   vejde a scrollovat neni co, ale na telefonu ano — a tam by clovek jinak
+   koukal na mesic stary konec.
+   POZOR: tuhle funkci vola pgDenik hned na prvnim radku. Kdyz zmizi,
+   spadne cela stranka deniku na ReferenceError — presne to se stalo
+   2. 9. 2026 pri prepisu pasku. */
+function pasekScrollObnov() {
+  const el = document.getElementById('pasek-scroll'); if (!el) return;
+  if (S.pasekScroll == null) el.scrollLeft = el.scrollWidth;
+  else el.scrollLeft = S.pasekScroll;
+  el.onscroll = () => { S.pasekScroll = el.scrollLeft; };
 }
 /* Pondeli = 1, nedele = 7. Pocita se v UTC stejne jako shiftISO — jinak by
    se pres zmenu letniho casu tyden posunul o den. */
