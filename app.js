@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 an';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 ao';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -860,7 +860,20 @@ function pickGeo(i) {
 }
 
 /* ---------- Drive most (Apps Script) ---------- */
-async function driveCall(payload) {
+/* Akce, ktere jen CTOU — u nich je bezpecne poslat dotaz znovu, kdyz
+   odpoved nedorazi. Zapisujici akce (upload, createFolder, notify) tady
+   ZAMERNE nejsou: kdyby soubor doopravdy nahrany byl a ztratila se jen
+   odpoved, druhy pokus by ho nahral podruhe. */
+const DRIVE_OPAKOVATELNE = ['listPodklady', 'getFile', 'getPhoto', 'readProject', 'findFolder'];
+/* Zjisteno 2. 9. 2026: zhruba kazdy druhy dotaz na most se vratil jako
+   404, a to i kdyz o chvili pozdeji stejny dotaz prosel. Ve vypisu spusteni
+   Apps Scriptu po tech neuspesnych neni ANI JEDEN zaznam — pozadavek se
+   tedy ke skriptu vubec nedostal a nejde o chybu v jeho kodu, ale o cestu
+   k nemu (Google presmerovava /exec na googleusercontent.com a to obcas
+   selze). Fronta fotek si s tim uz poradit umela, ale vypis podkladu ani
+   srovnani slozky pro investora ne — tam to clovek videl jako chybu.
+   Dva tiche pokusy navic to schovaji. */
+async function driveCall(payload, pokus) {
   if (!CFG.scriptUrl) throw new Error('Drive most není nastaven (config.js → scriptUrl)');
   const res = await fetch(CFG.scriptUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) });
   /* Kdyz Google zrovna nestiha nebo se prihlaseni presmeruje, most vrati
@@ -879,6 +892,23 @@ async function driveCall(payload) {
   if (!res.ok) { const err = new Error('most vratil chybu ' + res.status); err.docasne = true; throw err; }
   if (j.error) throw new Error(j.error);
   return j;
+}
+/* Obal kolem driveCall: docasny vypadek zkusi jeste dvakrat, mezi pokusy
+   chvili poceka. Trvalou chybu (most rekl "nemas pravo") vrati hned —
+   opakovat ji nema smysl a jen by to zdrzelo. */
+async function driveCallOpakuj(payload) {
+  const lze = DRIVE_OPAKOVATELNE.indexOf(payload && payload.action) >= 0;
+  let posledni;
+  for (let i = 0; i < (lze ? 3 : 1); i++) {
+    try { return await driveCall(payload); }
+    catch (e) {
+      posledni = e;
+      if (!e.docasne || i === 2) throw e;
+      console.warn('most nedorazil (' + e.message + '), pokus ' + (i + 2) + ' ze 3');
+      await new Promise(r => setTimeout(r, 700 * (i + 1)));
+    }
+  }
+  throw posledni;
 }
 function driveViewUrl(id) { return 'https://drive.google.com/file/d/' + id + '/view'; }
 /* Nazev pro ulozeni souboru z mostu. Odkaz na blob: nejde otevrit do noveho
@@ -1541,7 +1571,7 @@ async function mirrorEntry(e) {
         const klic = S.tajne && S.tajne.mostKlic;
         if (ph.driveId && klic && CFG.scriptUrl && S.online) {
           try {
-            const j = await driveCall({ action: 'getPhoto', fileId: ph.driveId, sirka: 1100, klic });
+            const j = await driveCallOpakuj({ action: 'getPhoto', fileId: ph.driveId, sirka: 1100, klic });
             if (j.ok && j.data) data = await zmensitDataUrl('data:' + (j.mime || 'image/jpeg') + ';base64,' + j.data, 1100, 0.72);
             else console.warn('most getPhoto pro portal', j.error);
           } catch (err2) { console.warn('most getPhoto pro portal', err2); }
@@ -2407,7 +2437,7 @@ async function najdiDriveSlozku(tiche) {
   if (!S.online) { if (!tiche) toast('Hledání potřebuje internet'); return false; }
   driveStav('<span class="spin"></span> Hledám složku na Drive…');
   try {
-    const j = await driveCall({ action: 'findFolder', cn, rootId: CFG.driveRootFolderId });
+    const j = await driveCallOpakuj({ action: 'findFolder', cn, rootId: CFG.driveRootFolderId });
     const nalezene = j.folders || [];
     if (nalezene.length === 1) {
       $('#pf-drive').value = nalezene[0].id;
@@ -2461,7 +2491,7 @@ async function nacistZakazku() {
   const znamaSlozka = ($('#pf-drive') ? $('#pf-drive').value : '').trim();
   hlas('<span class="spin"></span> ' + (znamaSlozka ? 'Čtu složku zakázky…' : 'Hledám na Disku…'));
   let j;
-  try { j = await driveCall({ action: 'readProject', cn, folderId: znamaSlozka, rootId: CFG.driveRootFolderId }); }
+  try { j = await driveCallOpakuj({ action: 'readProject', cn, folderId: znamaSlozka, rootId: CFG.driveRootFolderId }); }
   catch (e) { hlas('Načtení se nepovedlo: ' + esc(e.message || ''), 'var(--red)'); return; }
 
   if (!j.nalezeno) { hlas('⚠ ' + esc(j.duvod || 'Složka nenalezena.'), 'var(--wait)'); return; }
@@ -2813,7 +2843,7 @@ async function synchronizujPortalSlozku(pid, tiche) {
   if (S.portalSync && S.portalSync.bezi) return;      // dvojklik nebo dva renderu za sebou
   S.portalSync = { pid, bezi: true, text: 'čtu složku na Disku…' }; render();
   try {
-    const j = await driveCall({ action: 'listPodklady', folderId: slozka, klic });
+    const j = await driveCallOpakuj({ action: 'listPodklady', folderId: slozka, klic });
     if (!j.ok) throw new Error(j.error || 'Disk složku nevydal');
     const naDisku = (j.files || []).slice(0, 40);     // strop, ať se most neupíše k smrti
     const stare = portalDokumenty(pid);
@@ -2986,7 +3016,7 @@ async function kopieDokNaPortal(tok, docId, driveId) {
   const klic = S.tajne && S.tajne.mostKlic;
   if (!tok || !klic || !CFG.scriptUrl || !S.online) return { ok: false, duvod: 'offline' };
   try {
-    const j = await driveCall({ action: 'getFile', fileId: driveId, klic });
+    const j = await driveCallOpakuj({ action: 'getFile', fileId: driveId, klic });
     if (!j.ok || !j.data) return { ok: false, duvod: j.error || 'Disk soubor nevydal' };
     const kb = Math.round(j.data.length * 3 / 4 / 1024);
     if (kb > MAX_PORTAL_DOK_KB) return { ok: false, duvod: 'velky', kb };
@@ -3799,7 +3829,7 @@ async function otevritFoto(photoId, driveId, label, el, origId) {
     const klic = S.tajne && S.tajne.mostKlic;
     if (driveId && klic && CFG.scriptUrl && S.online) {
       try {
-        const j = await driveCall({ action: 'getPhoto', fileId: driveId, sirka: 1600, klic });
+        const j = await driveCallOpakuj({ action: 'getPhoto', fileId: driveId, sirka: 1600, klic });
         if (j.ok && j.data) {
           /* uzivatel mohl mezitim otevrit jinou fotku nebo prohlizec zavrit */
           if (img.isConnected) img.src = 'data:' + (j.mime || 'image/jpeg') + ';base64,' + j.data;
@@ -3885,7 +3915,7 @@ async function openDriveDoc(driveId, title) {
       <div class="vbody" style="align-items:center;justify-content:center;min-height:30vh">
         <div class="loading"><span class="spin"></span>Stahuji soubor…</div></div></div></div>`;
     try {
-      const j = await driveCall({ action: 'getFile', fileId: driveId, klic });
+      const j = await driveCallOpakuj({ action: 'getFile', fileId: driveId, klic });
       if (j.ok) {
         const bajty = Uint8Array.from(atob(j.data), c => c.charCodeAt(0));
         const url = URL.createObjectURL(new Blob([bajty], { type: j.mime || 'application/octet-stream' }));
@@ -4195,7 +4225,7 @@ async function fgVelka(f) {
     const klic = S.tajne && S.tajne.mostKlic;
     if (f.driveId && klic && CFG.scriptUrl && S.online) {
       try {
-        const j = await driveCall({ action: 'getPhoto', fileId: f.driveId, sirka: 1600, klic });
+        const j = await driveCallOpakuj({ action: 'getPhoto', fileId: f.driveId, sirka: 1600, klic });
         if (j.ok && j.data) return 'data:' + (j.mime || 'image/jpeg') + ';base64,' + j.data;
         console.warn('galerie getPhoto', j.error);
       } catch (e) { console.warn('galerie getPhoto', e); }
