@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 aj';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 ak';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -243,6 +243,10 @@ const S = {
   authUser: null, meAuth: null, me: null, roster: [], appCfg: null,
   users: [], projects: [], entries: [], tasks: [], attendance: [], viceprace: [], sazby: {}, zadosti: [],
   portal: null, portalFeed: [], portalVp: [], portalDocs: [],
+  /* Kolik zapisu portal ukazuje. Na pulrocni stavbe jich je pres sto a
+     investor otevira portal skoro vzdy v telefonu — nekonecny sloupec
+     fotek by zabil i to, kvuli cemu prisel: co je noveho. */
+  portalZobrazeno: 10,
   /* admin-only tajnosti (S2/S4/S5): tokeny portalu, kontakty lidi a interni
      poznamky bydli v samostatnych kolekcich, ktere cte jen vedeni */
   portaly: {}, kontakty: {}, entriesInterni: {},
@@ -8108,12 +8112,20 @@ function viewPortal() {
     </div>` : ''}
     <div class="card">
       <h3>📓 Průběh stavby <span class="muted" style="font-weight:400">— zápisy a fotky</span></h3>
-      ${S.portalFeed.length ? S.portalFeed.map((e, i) => `
+      ${(() => {
+        if (!S.portalFeed.length) return '<div class="empty">Zatím žádné zápisy.</div>';
+        const vidi = S.portalFeed.slice(0, S.portalZobrazeno);
+        const zbyva = S.portalFeed.length - vidi.length;
+        return vidi.map((e, i) => `
         <div style="border:1px solid var(--line);border-radius:9px;padding:11px 13px;margin-bottom:9px">
           <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>${fmtISOFull(e.date)}</b>${i === 0 ? '<span class="badge b-ok">nové</span>' : ''}</div>
           <div style="margin-top:4px">${esc(e.client).replace(/\n/g, '<br>')}</div>
           ${(e.photos || []).length ? `<div class="photos">${e.photos.map(ph => `<div class="ph" onclick="otevritFotoPortal('${ph.fotoId || ''}','${jsAttr(ph.label)}',this)"><img src="${ph.thumb}"><small>${esc(ph.label || '')}</small></div>`).join('')}</div>` : ''}
-        </div>`).join('') : '<div class="empty">Zatím žádné zápisy.</div>'}
+        </div>`).join('')
+        + (zbyva ? `<div class="aprv" style="justify-content:center">
+            <button class="btn ghost sm" onclick="portalStarsi()">⤓ Ukázat starší zápisy <span class="muted">(zbývá ${zbyva})</span></button>
+          </div>` : '');
+      })()}
     </div>
     <div class="card">
       <h3>ℹ️ Vaše stavba</h3>
@@ -8121,6 +8133,13 @@ function viewPortal() {
       <div class="kv"><span>Kontakt</span><span>${CFG.firmContact}</span></div>
     </div>
   </main></div>`;
+}
+/* Kazde tuknuti prida dalsi dvacitku. Sesypat vsechno najednou by na
+   pulrocni stavbe znamenalo stovku zapisu i s fotkami — na mobilnich datech
+   na stavbe pekne dlouhe ticho. */
+function portalStarsi() {
+  S.portalZobrazeno += 20;
+  render();
 }
 async function portalVpAction(vpid, action) {
   if (action === 'approve' && !await potvrd('Schválit vícepráci? Kliknutí platí jako odsouhlasení ceny.')) return;
