@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 al';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 am';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -265,6 +265,8 @@ const S = {
   vyplaty: [], pozOsob: [], pozOsobForm: false, pozOsobEdit: null, uzHledat: '',
   /* galerie fotek (viz sekce GALERIE FOTEK): filtry a kolik dlazdic uz kreslime */
   fgFrom: '', fgTo: '', fgProj: null, fgAutor: '', fgZobrazeno: 60,
+  denikDen: null,          // vybrany den na pasku nad zapisy
+  pasekScroll: null,       // null = otevri na dnesku
   repWorkers: [], repProjects: [], repLoaded: false, repFrom: isoToday().slice(0, 8) + '01', repTo: isoToday(),
   workerProject: null, draftPhotos: [], draftAtts: [], uploading: 0, signFor: null, tplOpen: false,
   loginMode: 'teren', loginWorker: null, loginHledani: null,
@@ -4042,10 +4044,83 @@ function pgFotky() {
 }
 
 /* ---- Stavební deník ---- */
+/* ---- PÁSEK DNŮ nad zápisy ----
+   Deník byl plochá tabulka. Pro vedení je ale nejdůležitější otázka
+   „NECHYBÍ nám zápis?", a tu tabulka neuměla ukázat vůbec — chybějící den
+   se nedá vypsat jako řádek, protože žádný řádek nemá.
+
+   Proto pásek, ne měsíční mřížka: mezery jsou na pruhu vidět na první
+   pohled, kdežto v mřížce mezi řádky zaniknou. A na telefonu se posouvá
+   do stran stejně jako harmonogram.
+
+   ČERVENÁ je celý smysl: někdo si píchl příchod, ale zápis za ten den
+   nikdo nenapsal. Dneska se to nedozvíš — nástěnka hlídá jen dnešek —
+   a přitom je to díra v deníku, která mrzí u kontroly i u soudu. */
+const PASEK_DNU = 60;
+function pasekStavDne(den, pid) {
+  const zapisy = S.entries.filter(e => e.date === den && (!pid || e.pid === pid));
+  if (zapisy.some(e => e.status === 'approved')) return 'ok';
+  if (zapisy.length) return 'ceka';
+  /* Bez zápisu rozhoduje docházka: byl tam někdo vůbec? Pauzy se nepočítají,
+     ty samy o sobě neznamenají odpracovaný den. */
+  const byliTam = S.attendance.some(a => a.date === den && (!pid || a.pid === pid)
+    && (a.akce === 'Příchod' || a.akce === 'Odchod'));
+  return byliTam ? 'chybi' : 'prazdno';
+}
+function pasekDnu() {
+  const pid = S.adminFilter || null;
+  const dnes = isoToday();
+  const dny = [];
+  for (let i = PASEK_DNU - 1; i >= 0; i--) dny.push(shiftISO(dnes, -i));
+  const stavy = dny.map(d => ({ d, st: pasekStavDne(d, pid) }));
+  const chybi = stavy.filter(x => x.st === 'chybi').length;
+  const popis = { ok: 'zápis je', ceka: 'zápis čeká na schválení', chybi: 'byli tam, ale zápis chybí', prazdno: 'nikdo tam nebyl' };
+  return `<div class="card pasek">
+    <h3 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">📅 Posledních ${PASEK_DNU} dní
+      ${chybi ? `<span class="badge b-red">${chybi}× chybí zápis</span>` : '<span class="badge b-ok">nic nechybí</span>'}
+      ${S.denikDen ? `<span class="lnk" style="margin-left:auto;font-size:12px" onclick="denikDen(null)">✕ zrušit výběr dne</span>` : ''}</h3>
+    <div class="pasekbox" id="pasek-scroll">${stavy.map(({ d, st }) => {
+      const [r, m, den] = d.split('-');
+      const prvni = den === '01';
+      return `<div class="pd ${st} ${S.denikDen === d ? 'vyb' : ''}" title="${fmtISOFull(d)} — ${popis[st]}" onclick="denikDen('${d}')">
+        <span class="pdm">${prvni ? mesicZkratka(Number(m)) : ''}</span>
+        <span class="pdd">${Number(den)}</span></div>`;
+    }).join('')}</div>
+    <div class="paseklegenda">
+      <span><i class="pl ok"></i>zápis je</span>
+      <span><i class="pl ceka"></i>čeká na schválení</span>
+      <span><i class="pl chybi"></i>byli tam, zápis chybí</span>
+      <span><i class="pl prazdno"></i>nikdo tam nebyl</span>
+      <span class="muted">${pid ? 'Jen ' + esc((proj(pid) || {}).name || '') + '.' : 'Přes všechny stavby — vyfiltruj si jednu, ať víš, které se to týká.'} Ťuknutím na den se pod tím vypíšou jen jeho zápisy.</span>
+    </div>
+  </div>`;
+}
+/* Pruh se otevira NA DNESKU, ne na zacatku. Nejdulezitejsi jsou posledni
+   dny a bez tohohle by clovek koukal na dva mesice stare prazdno a musel
+   sam odscrollovat doprava. Pamatuje si i vlastni posun, kdyz uz se v nem
+   nekdo rozhlizel — jinak by ho kazde tuknuti na den hodilo zpatky. */
+function pasekScrollObnov() {
+  const el = document.getElementById('pasek-scroll'); if (!el) return;
+  if (S.pasekScroll == null) el.scrollLeft = el.scrollWidth;
+  else el.scrollLeft = S.pasekScroll;
+  el.onscroll = () => { S.pasekScroll = el.scrollLeft; };
+}
+function mesicZkratka(m) {
+  return ['', 'led', 'úno', 'bře', 'dub', 'kvě', 'čvn', 'čvc', 'srp', 'zář', 'říj', 'lis', 'pro'][m] || '';
+}
+function denikDen(d) {
+  /* Druhé ťuknutí na stejný den výběr zruší — jinak by se z něj nedalo
+     odejít jinak než křížkem, který je až nahoře v nadpisu. */
+  S.denikDen = (S.denikDen === d) ? null : d;
+  render();
+}
 function pgDenik() {
+  /* Pruh dnu se po prekresleni vraci tam, kde clovek byl (poprve na dnesek). */
+  setTimeout(pasekScrollObnov, 0);
   const f = S.adminFilter;
   const q = (S.searchQ || '').toLowerCase();
   let rows = S.entries.filter(e => !f || e.pid === f);
+  if (S.denikDen) rows = rows.filter(e => e.date === S.denikDen);
   if (q) rows = rows.filter(e => JSON.stringify([e.author, e.works, e.client, (proj(e.pid) || {}).name]).toLowerCase().includes(q));
   const fp = f ? proj(f) : null;
   return `
@@ -4072,8 +4147,9 @@ function pgDenik() {
       </div>
       <div class="aprv"><button class="btn amber" onclick="printDenik()">🖨 Vygenerovat</button><span class="muted" style="align-self:center">otevře se náhled — ulož jako PDF nebo vytiskni</span></div>
     </div>` : ''}
+    ${pasekDnu()}
     <div class="tablecard">
-      <div class="tabletools"><div class="search"><input id="q-denik" placeholder="Hledat v záznamech" value="${esc(S.searchQ)}" oninput="S.searchQ=this.value;render()"></div></div>
+      <div class="tabletools"><div class="search"><input id="q-denik" placeholder="Hledat v záznamech" value="${esc(S.searchQ)}" oninput="S.searchQ=this.value;render()"></div>${S.denikDen ? `<span class="badge b-int" style="margin-left:8px">jen ${fmtISO(S.denikDen)} · <span class="lnk" onclick="denikDen(null)">zrušit</span></span>` : ''}</div>
       <div style="overflow-x:auto"><table>
         <tr><th>Datum</th><th>Vytvořeno</th><th>Stavba</th><th>Autor zápisu</th><th>Práce</th><th>Fotky</th><th>Osoby</th><th>Stav (klient)</th></tr>
         ${rows.map(e => { const p = proj(e.pid) || {}; return `
