@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 ap';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 aq';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -2873,16 +2873,25 @@ async function odpojPortalSlozku(pid) {
    dvacet vteřin, takže deset souborů naráz by vypadalo jako zamrznutí. */
 async function synchronizujPortalSlozku(pid, tiche) {
   const p = proj(pid);
-  const slozka = portalSlozka(pid);
-  if (!p || !slozka) return;
+  if (!p) return;
   const klic = S.tajne && S.tajne.mostKlic;
   if (!klic || !CFG.scriptUrl) { if (!tiche) toast('Most na Disk není nastavený'); return; }
   if (!S.online) { if (!tiche) toast('Jsi offline — zkus to, až bude signál'); return; }
   if (S.portalSync && S.portalSync.bezi) return;      // dvojklik nebo dva renderu za sebou
   S.portalSync = { pid, bezi: true, text: 'čtu složku na Disku…' }; render();
   try {
-    const j = await driveCallOpakuj({ action: 'listPodklady', folderId: slozka, klic });
+    /* Most si slozku Portal_investora najde v 09_Denik_staveb sam a kdyz
+       jeste neni, zalozi ji (Verze 15 mostu, 2. 9. 2026). Zapamatovane id
+       se pouzije, kdyz uz ho mame — usetri to hledani. */
+    const ulozene = portalSlozka(pid);
+    const j = await driveCallOpakuj(ulozene
+      ? { action: 'listPodklady', folderId: ulozene, klic }
+      : { action: 'listPodklady', projektId: p.driveFolderId || '', cn: p.cn || '', client: p.client || '',
+          rootId: CFG.driveRootFolderId, podslozka: 'Portal_investora', klic });
     if (!j.ok) throw new Error(j.error || 'Disk složku nevydal');
+    if (j.prazdne || !j.id) throw new Error('Stavba nemá na Disku složku zakázky — nejdřív ji vyplň v nastavení stavby');
+    /* Napojeni je tim hotove — priste uz se nehleda. */
+    if (!ulozene) await ulozPortalMeta(pid, { folderId: j.id });
     const naDisku = (j.files || []).slice(0, 40);     // strop, ať se most neupíše k smrti
     const stare = portalDokumenty(pid);
     const naDiskuId = new Set(naDisku.map(f => f.id));
@@ -2970,10 +2979,13 @@ function pgProjDocs(p) {
       || `<div class="empty">${napojeno ? 'Ve složce zatím nic není.' : 'Zatím žádné dokumenty na portálu.'}</div>`}
 
     ${napojeno ? `<div class="note">Odebírá se to tak, že soubor smažeš ve složce na Disku a dáš <b>⟳ Srovnat s Diskem</b>. Přejmenovat dokument pro klienta tady zatím nejde — jméno se bere ze souboru.</div>`
-    : `<div class="formsec"><h4>🔗 Napojit složku na Disku <span class="muted" style="font-weight:400">— doporučeno</span></h4>
-      <div class="note" style="margin-top:0">Založ u zakázky složku <b>09_Denik_staveb / Portal_investora</b> a napoj ji sem. Pak už jen kopíruješ soubory na Disk a investor je vidí — bez klikání tady.<br>
-        <b>Do Podkladů je nedávej</b> — do těch vidí přes aplikaci celá parta i subdodavatelé, takže by jim smlouva a nabídka byly na očích.</div>
-      <div class="aprv"><button class="btn amber sm" onclick="napojPortalSlozku('${p.id}')">🔗 Napojit složku</button></div>
+    : `<div class="formsec"><h4>📁 Složka na Disku <span class="muted" style="font-weight:400">— založí se sama</span></h4>
+      <div class="note" style="margin-top:0">Ťukni na <b>⟳ Srovnat s Diskem</b> a u zakázky vznikne složka
+        <b>09_Denik_staveb / Portal_investora</b>. Co do ní pak dáš, investor uvidí; co odtud smažeš, zmizí i jemu.<br>
+        <b>Do Podkladů dokumenty pro klienta nedávej</b> — do těch vidí přes aplikaci celá parta i subdodavatelé, takže by jim smlouva a nabídka byly na očích.</div>
+      <div class="aprv"><button class="btn amber sm" ${sync && sync.bezi ? 'disabled' : ''} onclick="synchronizujPortalSlozku('${p.id}')">
+        ${sync && sync.bezi ? '<span class="updspin"></span> ' + esc(sync.text || 'pracuji…') : '⟳ Srovnat s Diskem'}</button></div>
+      ${sync && sync.chyba ? `<div class="note" style="border-left:3px solid var(--red)">Nepovedlo se: ${esc(sync.chyba)}</div>` : ''}
     </div>
     <div class="formsec"><h4>➕ Nebo přidat jeden dokument ručně</h4>
       <label>Název pro investora</label><input type="text" id="pd-title" placeholder="Smlouva o dílo">
