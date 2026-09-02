@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 as';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 at';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -268,6 +268,8 @@ const S = {
   portalSync: null,        // prubeh srovnavani slozky pro investora
   denikDen: null,          // vybrany den na pasku nad zapisy
   pasekScroll: null,       // null = otevri na dnesku
+  pasekPosun: 0,           // o kolik dni zpatky je vysek pasku (0 = konci dneskem)
+  pasekNacita: false,
   repWorkers: [], repProjects: [], repLoaded: false, repFrom: isoToday().slice(0, 8) + '01', repTo: isoToday(),
   workerProject: null, draftPhotos: [], draftAtts: [], uploading: 0, signFor: null, tplOpen: false,
   loginMode: 'teren', loginWorker: null, loginHledani: null,
@@ -4339,9 +4341,10 @@ function pasekStavDne(den, pid) {
 }
 function pasekDnu() {
   const pid = S.adminFilter || null;
-  const dnes = isoToday();
+  const posun = S.pasekPosun || 0;
+  const konec = shiftISO(isoToday(), -posun);
   const dny = [];
-  for (let i = PASEK_DNU - 1; i >= 0; i--) dny.push(shiftISO(dnes, -i));
+  for (let i = PASEK_DNU - 1; i >= 0; i--) dny.push(shiftISO(konec, -i));
   /* Zacatek se dorovna na pondeli prazdnymi misty, aby kazdy tyden zacinal
      stejne. Bez toho by popisky dnu (P Ú S Č P S N) nad prvnim tydnem
      ukazovaly na jine dny nez nad ostatnimi. */
@@ -4372,17 +4375,26 @@ function pasekDnu() {
     }
   });
 
+  const nadpis = posun
+    ? `${fmtISO(dny[0])} – ${fmtISO(dny[dny.length - 1])}`
+    : `Posledních ${PASEK_DNU} dní`;
   return `<div class="card pasek">
-    <h3 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">📅 Posledních ${PASEK_DNU} dní
-      ${chybi ? `<span class="badge b-red">${chybi}× chybí zápis</span>` : '<span class="badge b-ok">nic nechybí</span>'}
-      ${S.denikDen ? `<span class="lnk" style="margin-left:auto;font-size:12px" onclick="denikDen(null)">✕ zrušit výběr dne</span>` : ''}</h3>
+    <h3 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">📅 ${nadpis}
+      ${S.pasekNacita ? '<span class="badge b-int"><span class="updspin"></span> načítám starší…</span>'
+        : chybi ? `<span class="badge b-red">${chybi}× chybí zápis</span>` : '<span class="badge b-ok">nic nechybí</span>'}
+      <span class="sp" style="margin-left:auto"></span>
+      ${pasekVyberStavby(pid)}
+      <button class="btn ghost sm" title="O čtyři týdny zpět" onclick="pasekPosun(-1)">‹</button>
+      ${posun ? '<button class="btn ghost sm" onclick="pasekPosun(0)">dnes</button>' : ''}
+      <button class="btn ghost sm" title="O čtyři týdny dál" ${posun ? '' : 'disabled'} onclick="pasekPosun(1)">›</button>
+      ${S.denikDen ? `<span class="lnk" style="font-size:12px" onclick="denikDen(null)">✕ zrušit výběr dne</span>` : ''}</h3>
     <div class="pasekbox" id="pasek-scroll">${tydny.join('')}</div>
     <div class="paseklegenda">
       <span><i class="pl ok"></i>zápis je</span>
       <span><i class="pl ceka"></i>čeká</span>
       <span><i class="pl chybi"></i>byli tam, zápis chybí</span>
       <span><i class="pl prazdno"></i>nikdo</span>
-      <span class="muted">nižší proužek = víkend · ${pid ? 'jen ' + esc((proj(pid) || {}).name || '') : 'přes všechny stavby'} · ťuknutím na den se vypíšou jen jeho zápisy</span>
+      <span class="muted">nižší proužek = víkend · ťuknutím na den se vypíšou jen jeho zápisy</span>
     </div>
   </div>`;
 }
@@ -4397,6 +4409,58 @@ function pasekScrollObnov() {
   if (S.pasekScroll == null) el.scrollLeft = el.scrollWidth;
   else el.scrollLeft = S.pasekScroll;
   el.onscroll = () => { S.pasekScroll = el.scrollLeft; };
+}
+/* Vyber stavby primo nad paskem. Doted se filtr dal nastavit jen oklikou —
+   z detailu stavby pres "Stavebni denik" — a na strance deniku se nedal
+   prepnout vubec, jen zrusit.
+   Nabizeji se AKTIVNI stavby (zadani Marca 2. 9. 2026). Neaktivni se
+   pridá jen tehdy, kdyz je zrovna vybrana, aby z nabidky nezmizela
+   a clovek z ni mohl odejit. */
+function pasekVyberStavby(pid) {
+  const akt = S.projects.filter(p => p.active !== false || p.id === pid)
+    .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'cs'));
+  return `<select style="width:auto;min-width:150px;padding:5px 8px;font-size:12.5px;margin:0"
+    title="Filtrovat na jednu stavbu" onchange="pasekStavba(this.value)">
+    <option value="">Všechny stavby</option>
+    ${akt.map(p => `<option value="${p.id}" ${pid === p.id ? 'selected' : ''}>${esc(p.name || '')}</option>`).join('')}
+  </select>`;
+}
+function pasekStavba(id) {
+  /* Stejny filtr, jaky uz pouziva tabulka pod paskem — takze se prepne
+     obojí najednou a nemuze se rozejit. */
+  S.adminFilter = id || null;
+  S.denikDen = null;
+  render();
+}
+/* Posun po CELYCH CTYRECH TYDNECH, ne po tricitce. Tricet dni neni cely
+   pocet tydnu, takze by se sloupce mezi vysecemi rozjely a clovek by musel
+   pokazde znovu hledat, kde je pondeli. Pri 28 dnech se dva dny prekryvaji,
+   coz je lepsi nez mezera. */
+const PASEK_KROK = 28;
+async function pasekPosun(smer) {
+  const novy = smer === 0 ? 0 : Math.max(0, (S.pasekPosun || 0) + smer * PASEK_KROK);
+  if (novy === (S.pasekPosun || 0)) return;
+  S.pasekPosun = novy;
+  S.pasekScroll = null;          // novy vysek otevrit zase na jeho konci
+  S.denikDen = null;             // vybrany den z jineho obdobi uz nedava smysl
+  render();
+  await pasekDotahni();
+  render();
+}
+/* Vysek starsi nez zive okno by se bez tohohle vykreslil jako prazdno —
+   a to je nejhorsi mozna lez: chybejici zapis by zmizel misto aby zcervenal.
+   Obe funkce si samy pamatuji, co uz stahly, takze druhe listovani tam a
+   zpatky uz do databaze nesaha. */
+async function pasekDotahni() {
+  const konec = shiftISO(isoToday(), -(S.pasekPosun || 0));
+  const zacatek = shiftISO(konec, -(PASEK_DNU - 1));
+  if (zacatek >= oknoOd()) return;
+  S.pasekNacita = true; render();
+  try {
+    await dotahniDochazku(zacatek, konec);
+    await dotahniZapisyProReport(zacatek, konec);
+  } catch (e) { console.warn('pasek: starsi data', e); }
+  S.pasekNacita = false;
 }
 /* Pondeli = 1, nedele = 7. Pocita se v UTC stejne jako shiftISO — jinak by
    se pres zmenu letniho casu tyden posunul o den. */
@@ -4430,7 +4494,10 @@ function pgDenik() {
   <div class="sectabs">
     <div class="t active">📓 Zápisy v deníku</div>
     <div class="t" style="margin-left:auto;color:var(--navy)" onclick="dotahniZapisy()">${S.dotahuji ? '⏳ načítám…' : '⤓ Načíst starší'}</div>
-    ${f ? `<div class="t" onclick="S.adminFilter=null;render()">✕ Zrušit filtr stavby</div>` : ''}
+    ${/* "Zrušit filtr stavby" tady bylo, ale schované na konci lišty a vypadalo
+         jako záložka — Marco 2. 9. 2026: „když tam jdu ze stavby, tak už nemůžu
+         filtrování zrušit." Ruší se teď výběrem nad páskem, který navíc rovnou
+         ukazuje, na co je filtrováno. Jedno místo, ne dvě. */''}
   </div>
   <main>
     ${S.printOpen ? `
