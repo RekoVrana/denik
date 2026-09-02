@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 ao';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 ap';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -1018,6 +1018,32 @@ function jeVypadekSite(e) {
   if (e instanceof TypeError) return true;
   return /failed to fetch|load failed|network|timed? ?out/i.test(String((e && e.message) || ''));
 }
+/* Bez znamé složky na Disku se NENAHRÁVÁ.
+   Most si pro zakázku bez vyplněné složky založí náhradní „<CN>_<klient>_SYSTEM"
+   vedle té správné a soubory se rozutečou do dvou míst. Takhle vzniklo těch
+   sedm složek, co teď leží na Disku. Zadání Marca 2. 9. 2026: složky se
+   zakládají podle master planu, ne samy od sebe.
+
+   Devět z deseti nových zakázek má složku na Disku dávno hotovou, takže ji
+   stačí najít podle čísla CN a zapamatovat u stavby — příště se nehledá.
+   Když se nenajde, řekne se to nahlas a soubor počká ve frontě. Neztratí se. */
+async function slozkaProUpload(cn, pid) {
+  const p = pid ? proj(pid) : (S.projects || []).find(x => (x.cn || '') === cn);
+  if (p && p.driveFolderId) return p.driveFolderId;
+  if (!cn) return '';
+  let nalezene = [];
+  try {
+    const j = await driveCallOpakuj({ action: 'findFolder', cn, rootId: CFG.driveRootFolderId });
+    /* Náhradní složky se ZÁMĚRNĚ přeskakují — jinak bychom se na jednu z nich
+       napojili natrvalo a nepořádek by se tím posvětil. */
+    nalezene = (j.folders || []).filter(f => !/_SYSTEM$/i.test(f.name || ''));
+  } catch (e) { return ''; }
+  if (nalezene.length !== 1) return '';
+  if (p && !p.driveFolderId) {
+    await db.collection('projects').doc(p.id).update({ driveFolderId: nalezene[0].id }).catch(() => {});
+  }
+  return nalezene[0].id;
+}
 async function frontaOdeslat() {
   if (_frontaBezi || !S.online || !CFG.scriptUrl) return;
   /* Zamek MUSI byt driv nez prvni await — jinak dve soucasna volani
@@ -1036,8 +1062,20 @@ async function frontaOdeslat() {
       try {
         let fileId = it.fileId;
         if (!fileId) {
+          const slozka = await slozkaProUpload(it.cn, it.pid);
+          if (!slozka) {
+            /* Radši ať soubor počká, než aby skončil v náhradní složce.
+               Vedení to uvidí v kartě „čeká na odeslání" a po napojení
+               složky ho pošle tlačítkem znovu. */
+            it.selhalo = true;
+            it.chyba = 'Stavba nemá na Disku složku — napoj ji u zakázky a pošli znovu';
+            try { await frontaTx('readwrite', st => st.put(it)); } catch (e2) {}
+            console.warn('fronta: stavba bez slozky na Disku, nenahravam', it.cn || '');
+            zmeskano++;
+            continue;
+          }
           const j = await driveCall({
-            action: 'upload', folderId: it.folderId || '', rootId: CFG.driveRootFolderId,
+            action: 'upload', folderId: slozka, rootId: CFG.driveRootFolderId,
             cn: it.cn, client: it.client, folderName: it.folderName || '', date: it.date, name: it.name,
             druh: it.druh || 'foto',          // most podle toho vybere podsložku v 09_Denik_staveb
             data: String(it.data).split(',')[1], mime: it.mime || 'application/octet-stream'
@@ -1261,7 +1299,7 @@ async function zaraditFotky(p, entryId, den) {
     /* Datum patri ZAPISU, ne dnesku — u zpetne psaneho zapisu se jinak
        fotky na Disku pojmenovaly podle dne odeslani a pri dohledavani
        "co bylo v patek" nesedely. Totez plati pro prilohy. */
-    const spol = { entryId, photoId: id, folderId: (p && p.driveFolderId) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', folderName: nazevSlozkyZakazky(p), date: den || isoToday() };
+    const spol = { entryId, photoId: id, folderId: (p && p.driveFolderId) || '', pid: (p && p.id) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', folderName: nazevSlozkyZakazky(p), date: den || isoToday() };
     /* Kazda polozka ma svuj try. Kdyby byly spolecne a selhala prvni
        (typicky plna pamet telefonu), druha by se uz ani nezkusila. */
     let mamNahled = false;
@@ -1301,7 +1339,7 @@ async function zaraditPrilohy(p, entryId) {
     try {
       await frontaPridat({
         druh: 'priloha', entryId, name: at.name, mime: at.mime || 'application/octet-stream',
-        data: at.data, folderId: (p && p.driveFolderId) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', folderName: nazevSlozkyZakazky(p), date: isoToday()
+        data: at.data, folderId: (p && p.driveFolderId) || '', pid: (p && p.id) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', folderName: nazevSlozkyZakazky(p), date: isoToday()
       });
     } catch (e) { console.warn('fronta priloha', e); toast('⚠ Přílohu ' + at.name + ' se nepodařilo uložit do fronty'); }
   }
@@ -1326,7 +1364,7 @@ async function addAttsToEntry(eid, files) {
     const data = await new Promise(ok => { const r = new FileReader(); r.onload = () => ok(r.result); r.readAsDataURL(f); });
     try {
       await frontaPridat({ druh: 'priloha', entryId: eid, name: f.name, mime: f.type || 'application/octet-stream',
-        data, folderId: p.driveFolderId || '', cn: p.cn || '', client: p.client || '', folderName: nazevSlozkyZakazky(p), date: e.date });
+        data, folderId: p.driveFolderId || '', pid: p.id || '', cn: p.cn || '', client: p.client || '', folderName: nazevSlozkyZakazky(p), date: e.date });
     } catch (err) { console.warn(err); toast('⚠ ' + f.name + ' se nepodařilo uložit do fronty'); }
   }
   toast(S.online ? 'Nahrávám na Drive…' : 'Uloženo — odešle se, až bude signál ✓');
@@ -2952,7 +2990,9 @@ async function uploadStavbaDocs(pid, files) {
     const data = await new Promise(ok => { const r = new FileReader(); r.onload = () => ok(r.result); r.readAsDataURL(f); });
     try {
       S.uploading++; render();
-      const j = await driveCall({ action: 'upload', folderId: p.driveFolderId || '', rootId: CFG.driveRootFolderId, cn: p.cn, client: p.client, date: isoToday(), name: f.name, druh: 'podklad', data: data.split(',')[1], mime: f.type || 'application/octet-stream' });
+      const slozka = await slozkaProUpload(p.cn, pid);
+      if (!slozka) { toast('⚠ Stavba nemá na Disku složku — napoj ji v Nastavení stavby, jinak by se soubory rozutekly'); continue; }
+      const j = await driveCall({ action: 'upload', folderId: slozka, rootId: CFG.driveRootFolderId, cn: p.cn, client: p.client, date: isoToday(), name: f.name, druh: 'podklad', data: data.split(',')[1], mime: f.type || 'application/octet-stream' });
       const cur = (proj(pid).stavbaDocs) || [];
       await db.collection('projects').doc(pid).update({ stavbaDocs: [...cur, { name: f.name, driveId: j.fileId, mime: f.type || '' }] });
     } catch (e) { console.warn(e); toast('⚠ ' + f.name + ' se nenahrál (Drive most)'); }
@@ -8086,7 +8126,7 @@ async function zaraditSelfie(p, attendanceId, foto, akce) {
   try {
     await frontaPridat({
       druh: 'selfie', attendanceId, name: jmeno + '.jpg', mime: 'image/jpeg', data: foto.plna,
-      folderId: (p && p.driveFolderId) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', folderName: nazevSlozkyZakazky(p), date: isoToday()
+      folderId: (p && p.driveFolderId) || '', pid: (p && p.id) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', folderName: nazevSlozkyZakazky(p), date: isoToday()
     });
   } catch (e) { console.warn('fronta selfie', e); }
 }
