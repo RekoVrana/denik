@@ -7,6 +7,14 @@
 //  Živá verze: Firebase konzole → Firestore → Rules
 //  Když se změní tam, změň i tady, ať kopie nezastará.
 //
+//  Poslední změna 2. 9. 2026 (dokumenty pro investora):
+//  21) /projects uz nesmi nest portalDocs ani portalFolderId. Stavby cte
+//      cela parta i externi sub a Firestore vydava CELY dokument — spolu
+//      s nazvem stavby jim chodila Drive ID smlouvy a klientske nabidky.
+//      A protoze klic k mostu (config/tajne) cte taky kazdy prihlaseny,
+//      slo ten soubor u mostu rovnou vyzvednout. Presunuto do admin-only
+//      /portaly. Stejna chyba jako S2 (portalToken) a S4b (kontakty).
+//
 //  Poslední změna 1. 9. 2026 (upozornění do telefonu):
 //  20) Přibyla /pushtokeny/{token} — adresy zařízení pro upozornění.
 //      Číst je nesmí NIKDO z aplikace (list je natvrdo false) — posílá je
@@ -243,18 +251,26 @@ service cloud.firestore {
       // Pozor: podminka smi platit jen pro zakladani a upravu. U mazani
       // zadny "novy dokument" neexistuje a cteni jeho poli by pravidlo
       // shodilo — smazani stavby by prestalo fungovat.
+      //
+      // 21 (2. 9. 2026): pryc jsou i portalDocs a portalFolderId — dokumenty
+      // pro investora (smlouva, klientska nabidka) a slozka Portal_investora
+      // na Disku. Nesly jen "videt": kazdy prihlaseny cte i klic k mostu
+      // (config/tajne — parta ho potrebuje, aby ji most vydal fotky), takze
+      // s Drive ID z portalDocs si sub soubor u mostu proste vyzvednul
+      // a videl, za kolik se prodava jeho vlastni prace. Presunuto do
+      // admin-only /portaly, prevod dela prevedPortalDokumenty().
       allow read: if hasRole();
       allow create: if isAdmin()
-        && !request.resource.data.keys().hasAny(['investorEmail', 'investorPhone']);
+        && !request.resource.data.keys().hasAny(['investorEmail', 'investorPhone', 'portalDocs', 'portalFolderId']);
       // U update dve moznosti: bud po zapisu ta pole na stavbe NEJSOU (to
       // pokryva i prevod, ktery je prave maze), nebo se jich zapis vubec
       // nedotyka. Bez te druhe vetve by pravidlo zablokovalo uplne nevinnou
       // upravu stavby, ktera ta pole jeste nese — a s ni i prepinac
       // „Vidi parta", milniky nebo dokumenty, a to potichu.
       allow update: if isAdmin()
-        && (!request.resource.data.keys().hasAny(['investorEmail', 'investorPhone'])
+        && (!request.resource.data.keys().hasAny(['investorEmail', 'investorPhone', 'portalDocs', 'portalFolderId'])
             || !request.resource.data.diff(resource.data).affectedKeys()
-                  .hasAny(['investorEmail', 'investorPhone']));
+                  .hasAny(['investorEmail', 'investorPhone', 'portalDocs', 'portalFolderId']));
       allow delete: if isAdmin();
     }
 

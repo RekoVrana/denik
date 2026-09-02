@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 am';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 an';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -265,6 +265,7 @@ const S = {
   vyplaty: [], pozOsob: [], pozOsobForm: false, pozOsobEdit: null, uzHledat: '',
   /* galerie fotek (viz sekce GALERIE FOTEK): filtry a kolik dlazdic uz kreslime */
   fgFrom: '', fgTo: '', fgProj: null, fgAutor: '', fgZobrazeno: 60,
+  portalSync: null,        // prubeh srovnavani slozky pro investora
   denikDen: null,          // vybrany den na pasku nad zapisy
   pasekScroll: null,       // null = otevri na dnesku
   repWorkers: [], repProjects: [], repLoaded: false, repFrom: isoToday().slice(0, 8) + '01', repTo: isoToday(),
@@ -597,7 +598,7 @@ function startData() {
      Po odhlaseni admina se pole vyprazdni o kus vys spolu s ostatnimi
      tajnostmi, aby nezustala v pameti pro dalsi prihlaseni jine role. */
   if (role === 'admin') { listen('vyplaty', 'vyplaty', {}); listen('poznamky_osob', 'pozOsob', {}); }
-  if (role === 'admin') { listen('poznamky', 'poznamky', { sort: pzSort }); prevedStarePoznamky(); uklidRosterAdminy(); prevedTajnosti(); prevedKontaktyInvestoru(); uklidTypySubu(); prevedSazbyNaHistorii(); setTimeout(dorovnejPortaly, 6000); }
+  if (role === 'admin') { listen('poznamky', 'poznamky', { sort: pzSort }); prevedStarePoznamky(); uklidRosterAdminy(); prevedTajnosti(); prevedKontaktyInvestoru(); setTimeout(prevedPortalDokumenty, 3000); uklidTypySubu(); prevedSazbyNaHistorii(); setTimeout(dorovnejPortaly, 6000); }
   else {
     const pzMid = (S.meAuth && S.meAuth.userDocId) || '__nikdo__';
     listenPoznamky(role === 'sub' ? ['vsichni', pzMid] : ['vsichni', 'parta', pzMid]);
@@ -2716,18 +2717,202 @@ function pgProjDetail() {
     <div class="t" onclick="S.adminFilter='${p.id}';goPage('denik')">📓 Stavební deník</div>
   </div>${body}`;
 }
+/* ---- DOKUMENTY PRO INVESTORA BYDLÍ V ADMIN-ONLY /portaly ----
+   NESMÍ být na /projects. Stavby čte celá parta i externí subdodavatelé
+   a Firestore vydává vždy CELÝ dokument — takže spolu s názvem stavby
+   chodily subovi do telefonu i Drive ID smlouvy a klientské nabídky.
+   A protože klíč k mostu má z databáze každý přihlášený (parta ho
+   potřebuje, aby jí most vydal fotky), stačilo to ID mostu podstrčit
+   a soubor si vyzvednout. Sub by tak viděl, za kolik se prodává jeho
+   vlastní práce.
+
+   Je to přesně stejná chyba, jaká se tu už dvakrát opravovala —
+   portalToken (S2) a kontakty investora (S4b). Nalezeno 2. 9. 2026 při
+   napojování složky Portal_investora. */
+function portalMeta(pid) { return (S.portaly && S.portaly[pid]) || {}; }
+function portalDokumenty(pid) { return portalMeta(pid).docs || []; }
+function portalSlozka(pid) { return portalMeta(pid).folderId || ''; }
+async function ulozPortalMeta(pid, data) {
+  await db.collection('portaly').doc(pid).set(data, { merge: true });
+}
+/* Jednorázový převod (2. 9. 2026), stejným postupem jako prevedTajnosti:
+   nejdřív se zapíše nové místo, teprve po úspěchu se maže staré pole —
+   při výpadku sítě se nic neztratí a příští přihlášení převod dokončí. */
+async function prevedPortalDokumenty() {
+  const FVD = firebase.firestore.FieldValue;
+  let hotovo = 0;
+  for (const pr of (S.projects || [])) {
+    const stare = pr.portalDocs;
+    if (!stare || !stare.length) continue;
+    try {
+      const cil = await db.collection('portaly').doc(pr.id).get();
+      /* Nepřepisovat, co už je převedené — dva admini najednou ani
+         opakovaný běh nesmí nic zahodit. */
+      if (!cil.exists || !(cil.data().docs || []).length) {
+        await db.collection('portaly').doc(pr.id).set({ docs: stare }, { merge: true });
+      }
+      await db.collection('projects').doc(pr.id).update({ portalDocs: FVD.delete() });
+      hotovo++;
+    } catch (e) { console.warn('prevod dokumentu pro investora, stavba ' + pr.id, e); }
+  }
+  if (hotovo) console.log('dokumenty pro investora presunuty do /portaly: ' + hotovo + ' staveb');
+}
+
+/* ---- SLOŽKA PRO INVESTORA NA DISKU ----
+   Zadání Marca 2. 9. 2026: „chci, aby se podklady pro investora automaticky
+   spárovaly se složkou na Disku." Složka se jmenuje Portal_investora a leží
+   v 09_Denik_staveb té zakázky. Co je v ní, vidí investor. Co není, nevidí.
+
+   PROČ VLASTNÍ SLOŽKA A NE PODKLADY: do Podkladů vidí přes aplikaci celá
+   parta i subdodavatelé. Kdyby tam ležela smlouva a klientská nabídka,
+   viděl by sub, za kolik se prodává jeho vlastní práce. Portal_investora
+   je vedle nich a aplikace se na ni ptá JEN u vedení — parta na Disk nemá
+   přístup vůbec (nemá účty Google, všechno jim vydává most).
+
+   ÚPRAVA MOSTU NEBYLA POTŘEBA: most vydá kteroukoli složku uvnitř
+   09_Denik_staveb, ověřeno 2. 9. 2026 na složce Dochazka. Do mostu, na
+   kterém visí fotodokumentace, se tedy vůbec nesahalo. */
+function nazevProKlienta(jmeno) {
+  return String(jmeno || '').replace(/\.[a-zA-Z0-9]{1,5}$/, '').trim() || 'Dokument';
+}
+async function napojPortalSlozku(pid) {
+  const p = proj(pid); if (!p) return;
+  const vstup = await zeptejSe('Napojit složku pro investora',
+    'Na Disku otevři u téhle zakázky složku 09_Denik_staveb a v ní Portal_investora '
+    + '(když tam není, založ ji). Pak sem zkopíruj odkaz z adresního řádku.', '');
+  if (!vstup) return;
+  const m = String(vstup).match(/[-\w]{25,}/);
+  if (!m) { toast('V odkazu nevidím ID složky'); return; }
+  try {
+    await ulozPortalMeta(pid, { folderId: m[0] });
+    toast('Složka napojena ✓ — synchronizuji');
+    synchronizujPortalSlozku(pid);
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
+}
+async function odpojPortalSlozku(pid) {
+  if (!await potvrd('Odpojit složku?\n\nSeznam dokumentů zůstane, jak je — jen se přestane řídit Diskem '
+    + 'a budeš ho spravovat ručně.', 'Odpojit')) return;
+  await ulozPortalMeta(pid, { folderId: '' })
+    .then(() => { toast('Složka odpojena'); render(); })
+    .catch(e => toast('Neuložilo se — ' + dbErrText(e)));
+}
+/* Srovná seznam pro investora s tím, co je na Disku. Přibylo → přidá,
+   ubylo → smaže i s kopií (rozhodnutí Marca: „když smažu na Disku, zmizí
+   i z portálu" — jinak by klientovi visela stará verze smlouvy).
+
+   Nejdřív se srovná SEZNAM (jedno volání mostu, rychlé) a teprve pak se
+   kopírují obsahy nových souborů jeden po druhém. Most odpovídá klidně
+   dvacet vteřin, takže deset souborů naráz by vypadalo jako zamrznutí. */
+async function synchronizujPortalSlozku(pid, tiche) {
+  const p = proj(pid);
+  const slozka = portalSlozka(pid);
+  if (!p || !slozka) return;
+  const klic = S.tajne && S.tajne.mostKlic;
+  if (!klic || !CFG.scriptUrl) { if (!tiche) toast('Most na Disk není nastavený'); return; }
+  if (!S.online) { if (!tiche) toast('Jsi offline — zkus to, až bude signál'); return; }
+  if (S.portalSync && S.portalSync.bezi) return;      // dvojklik nebo dva renderu za sebou
+  S.portalSync = { pid, bezi: true, text: 'čtu složku na Disku…' }; render();
+  try {
+    const j = await driveCall({ action: 'listPodklady', folderId: slozka, klic });
+    if (!j.ok) throw new Error(j.error || 'Disk složku nevydal');
+    const naDisku = (j.files || []).slice(0, 40);     // strop, ať se most neupíše k smrti
+    const stare = portalDokumenty(pid);
+    const naDiskuId = new Set(naDisku.map(f => f.id));
+    /* Nový seznam je PŘESNĚ to, co leží na Disku. Ručně přejmenovaný titulek
+       se zachová — jinak by se každou synchronizací přepsal zpátky. */
+    const novy = naDisku.map(f => {
+      const uz = stare.find(d => d.driveId === f.id);
+      return { title: (uz && uz.title) || nazevProKlienta(f.name), driveId: f.id, mime: f.mime || '' };
+    });
+    const ubylo = stare.filter(d => !naDiskuId.has(d.driveId));
+    await ulozPortalMeta(pid, { docs: novy });
+
+    const tok = await tokenPortaluAsync(pid);
+    if (!tok) {
+      S.portalSync = null;
+      if (!tiche) toast('Seznam srovnán ✓ — stavba ale nemá portál, investor to zatím neuvidí');
+      render(); return;
+    }
+    /* Co zmizelo z Disku, zmizí i investorovi — i s kopií obsahu vedle. */
+    for (const d of ubylo) {
+      await db.collection('portals').doc(tok).collection('soubory').doc(d.driveId).delete().catch(() => {});
+      await db.collection('portals').doc(tok).collection('docs').doc(d.driveId).delete().catch(() => {});
+      /* Staré ručně přidané dokumenty mají náhodné id, ne id z Disku —
+         ty se musí dohledat podle driveId, jinak by na portálu zůstaly. */
+      const s = await db.collection('portals').doc(tok).collection('docs').where('driveId', '==', d.driveId).get().catch(() => null);
+      if (s) for (const x of s.docs) {
+        await db.collection('portals').doc(tok).collection('soubory').doc(x.id).delete().catch(() => {});
+        await x.ref.delete().catch(() => {});
+      }
+    }
+    /* Zjistit, co se ještě nezkopírovalo. Id dokumentu na portálu = id
+       souboru na Disku, takže se to pozná jedním čtením a kopírování se
+       při druhém spuštění neopakuje. */
+    const chybi = [];
+    for (const d of novy) {
+      const ex = await db.collection('portals').doc(tok).collection('docs').doc(d.driveId).get().catch(() => null);
+      if (!ex || !ex.exists || !ex.data().pripraveno) chybi.push(d);
+    }
+    let hotovo = 0, velke = 0;
+    for (const d of chybi) {
+      S.portalSync = { pid, bezi: true, text: 'kopíruji ' + (hotovo + 1) + ' z ' + chybi.length + ' — ' + d.title };
+      render();
+      await db.collection('portals').doc(tok).collection('docs').doc(d.driveId)
+        .set({ title: d.title, driveId: d.driveId }, { merge: true });
+      const k = await kopieDokNaPortal(tok, d.driveId, d.driveId);
+      if (!k.ok && k.duvod === 'velky') velke++;
+      hotovo++;
+    }
+    S.portalSync = null;
+    if (!tiche) toast(velke
+      ? 'Srovnáno ✓ — ale ' + velke + ' souborů je moc velkých, ty investor neotevře'
+      : 'Srovnáno s Diskem ✓');
+  } catch (e) {
+    S.portalSync = { pid, bezi: false, chyba: e.message || String(e) };
+    if (!tiche) toast('Nepovedlo se — ' + (e.message || e));
+  }
+  render();
+}
 function pgProjDocs(p) {
-  const docs = p.portalDocs || [];
+  const docs = portalDokumenty(p.id);
+  const slozka = portalSlozka(p.id);
+  const napojeno = !!slozka;
+  const sync = (S.portalSync && S.portalSync.pid === p.id) ? S.portalSync : null;
   return `<main><div class="card">
     <h3>📁 Dokumenty viditelné investorovi na portálu</h3>
+
+    ${napojeno ? `
+      <div class="urow" style="background:var(--ok-soft);border-radius:9px;padding:9px 11px">
+        <span>🔗</span>
+        <div style="flex:1"><b>Řídí se složkou na Disku</b><br>
+          <span class="muted" style="font-size:11.5px">09_Denik_staveb / <b>Portal_investora</b> — co do ní dáš, investor uvidí. Co odtud smažeš, zmizí i jemu.</span></div>
+        <a class="btn ghost sm" href="https://drive.google.com/drive/folders/${esc(slozka)}" target="_blank">📂 otevřít</a>
+      </div>
+      <div class="aprv">
+        <button class="btn dark sm" ${sync && sync.bezi ? 'disabled' : ''} onclick="synchronizujPortalSlozku('${p.id}')">
+          ${sync && sync.bezi ? '<span class="updspin"></span> ' + esc(sync.text || 'pracuji…') : '⟳ Srovnat s Diskem'}</button>
+        <span class="lnk" style="font-size:11.5px;margin-left:auto" onclick="odpojPortalSlozku('${p.id}')">odpojit složku</span>
+      </div>
+      ${sync && sync.chyba ? `<div class="note" style="border-left:3px solid var(--red)">Nepovedlo se: ${esc(sync.chyba)}</div>` : ''}
+    ` : ''}
+
     ${docs.map((d, i) => `<div class="urow"><span>${d.mime && d.mime.includes('image') ? '🖼' : '📄'}</span><b>${esc(d.title)}</b>
-      <span class="muted" style="margin-left:auto">Drive</span><span class="lnk" style="font-size:11px" onclick="delPortalDoc('${p.id}',${i})">✕ odebrat</span></div>`).join('') || '<div class="empty">Zatím žádné dokumenty na portálu.</div>'}
-    <div class="formsec"><h4>➕ Přidat dokument (soubor musí být na Drive)</h4>
+      <span class="muted" style="margin-left:auto">${napojeno ? 'z Disku' : 'Drive'}</span>
+      ${napojeno ? '' : `<span class="lnk" style="font-size:11px" onclick="delPortalDoc('${p.id}',${i})">✕ odebrat</span>`}</div>`).join('')
+      || `<div class="empty">${napojeno ? 'Ve složce zatím nic není.' : 'Zatím žádné dokumenty na portálu.'}</div>`}
+
+    ${napojeno ? `<div class="note">Odebírá se to tak, že soubor smažeš ve složce na Disku a dáš <b>⟳ Srovnat s Diskem</b>. Přejmenovat dokument pro klienta tady zatím nejde — jméno se bere ze souboru.</div>`
+    : `<div class="formsec"><h4>🔗 Napojit složku na Disku <span class="muted" style="font-weight:400">— doporučeno</span></h4>
+      <div class="note" style="margin-top:0">Založ u zakázky složku <b>09_Denik_staveb / Portal_investora</b> a napoj ji sem. Pak už jen kopíruješ soubory na Disk a investor je vidí — bez klikání tady.<br>
+        <b>Do Podkladů je nedávej</b> — do těch vidí přes aplikaci celá parta i subdodavatelé, takže by jim smlouva a nabídka byly na očích.</div>
+      <div class="aprv"><button class="btn amber sm" onclick="napojPortalSlozku('${p.id}')">🔗 Napojit složku</button></div>
+    </div>
+    <div class="formsec"><h4>➕ Nebo přidat jeden dokument ručně</h4>
       <label>Název pro investora</label><input type="text" id="pd-title" placeholder="Smlouva o dílo">
       <label>Drive ID souboru nebo odkaz</label><input type="text" id="pd-id" placeholder="https://drive.google.com/file/d/…">
-      <div class="aprv"><button class="btn amber sm" onclick="addPortalDoc('${p.id}')">💾 Přidat na portál</button></div>
-      <div class="note">Smlouva, klientské PDF nabídky, vizualizace… Soubor zůstává na Drive, portál drží jen odkaz. Investor si ho otevře přímo na portálu.</div>
-    </div>
+      <div class="aprv"><button class="btn ghost sm" onclick="addPortalDoc('${p.id}')">💾 Přidat na portál</button></div>
+      <div class="note">Soubor zůstává na Drive, portál si drží vlastní kopii — investor na váš Disk nevidí.</div>
+    </div>`}
   </div></main>`;
 }
 async function uploadStavbaDocs(pid, files) {
@@ -2819,8 +3004,8 @@ async function addPortalDoc(pid) {
   let raw = $('#pd-id').value.trim();
   const m = raw.match(/[-\w]{25,}/);
   if (!title || !m) { toast('Vyplň název a Drive ID/odkaz'); return; }
-  const docs = [...(p.portalDocs || []), { title, driveId: m[0], mime: '' }];
-  await db.collection('projects').doc(pid).update({ portalDocs: docs });
+  const docs = [...portalDokumenty(pid), { title, driveId: m[0], mime: '' }];
+  await ulozPortalMeta(pid, { docs });
   const tok = await tokenPortaluAsync(pid); // token je v admin-only /portaly (S2)
   let hlaska = 'Dokument přidán na portál ✓';
   if (tok) {
@@ -2835,8 +3020,8 @@ async function addPortalDoc(pid) {
 }
 async function delPortalDoc(pid, i) {
   const p = proj(pid);
-  const docs = (p.portalDocs || []).slice(); const rm = docs.splice(i, 1)[0];
-  await db.collection('projects').doc(pid).update({ portalDocs: docs });
+  const docs = portalDokumenty(pid).slice(); const rm = docs.splice(i, 1)[0];
+  await ulozPortalMeta(pid, { docs });
   const tok = await tokenPortaluAsync(pid); // token je v admin-only /portaly (S2)
   if (tok && rm) {
     const s = await db.collection('portals').doc(tok).collection('docs').where('driveId', '==', rm.driveId).get();
@@ -2905,7 +3090,7 @@ async function createPortal(pid) {
   for (const e of entriesOf(pid).filter(x => x.status === 'approved')) {
     await mirrorEntry(e).catch(err => console.warn('zrcadleni pri zalozeni portalu', err));
   }
-  for (const d of (p.portalDocs || [])) {
+  for (const d of portalDokumenty(pid)) {
     const ref = await db.collection('portals').doc(token).collection('docs').add({ title: d.title, driveId: d.driveId });
     /* kopie souboru rovnou s sebou — bez ni si ji investor neotevre */
     await kopieDokNaPortal(token, ref.id, d.driveId);
