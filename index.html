@@ -260,28 +260,37 @@
   .mile.done .dot{background:var(--ok);color:#fff}
   .mile.now .dot{background:var(--amber);color:#132c46}
   .mile.now b{color:var(--amber-d)}
-  /* Pásek dnů nad zápisy. Posouvá se do stran jako harmonogram — na telefonu
-     je to jediný způsob, jak ukázat dva měsíce a nezmenšit dny na neťuknutelné
-     tečky. Dny drží pevnou šířku, ať se pruh nekrčí podle obsahu. */
-  .pasek h3{margin-bottom:8px}
-  .pasekbox{display:flex;gap:3px;overflow-x:auto;padding:2px 0 8px;scrollbar-width:thin}
-  .pd{flex:0 0 26px;height:40px;border-radius:6px;cursor:pointer;display:flex;flex-direction:column;
-      align-items:center;justify-content:flex-end;padding-bottom:3px;border:1px solid transparent;
-      font-size:10px;line-height:1.1;transition:transform .08s}
+  /* Pásek dnů nad zápisy. Po týdnech, ať je vidět rytmus a víkendy —
+     šedesát dnů v jedné řadě byla stěna, ve které signál zanikal.
+     Datum i zkratka dne jsou v pásku vidět (zadání Marca 2. 9. 2026). */
+  .pasek h3{margin-bottom:10px}
+  .pasekbox{display:flex;gap:9px;overflow-x:auto;padding:2px 0 8px;align-items:flex-end}
+  .pt{display:flex;flex-direction:column}
+  .ptd{display:flex;gap:2px;margin-bottom:3px}
+  .ptd span{width:28px;text-align:center;font-size:8.5px;font-weight:700;letter-spacing:.04em;color:#98a4b2}
+  .ptb{display:flex;gap:2px}
+  .ptl{text-align:center;font-size:9.5px;color:var(--ink2);margin-top:4px;letter-spacing:.02em}
+  .pd{width:28px;height:30px;border-radius:5px;cursor:pointer;display:flex;align-items:center;
+      justify-content:center;font-size:11.5px;font-weight:700;background:var(--int-soft);
+      color:#8e9aa7;border:1px solid transparent;transition:transform .08s}
   .pd:hover{transform:translateY(-2px)}
-  .pd .pdm{font-size:8.5px;font-weight:700;letter-spacing:.03em;opacity:.75;height:11px}
-  .pd .pdd{font-weight:700}
-  .pd.ok{background:var(--ok-soft);color:var(--ok)}
-  .pd.ceka{background:var(--wait-soft);color:var(--wait)}
-  .pd.chybi{background:#fdeceb;color:var(--red);border-color:#f3c3bd}
-  .pd.prazdno{background:var(--int-soft);color:var(--int);opacity:.6}
-  .pd.vyb{outline:2px solid var(--navy);outline-offset:1px}
+  /* Víkend ustoupí: většinu prázdna tvoří soboty a neděle a prázdný čtvrtek
+     je úplně jiná zpráva než prázdná neděle. */
+  .pd.vik{height:22px;background:#f2f5f8;color:#b6c0ca;font-weight:500}
+  .pd.mimo{background:none;border-color:transparent;cursor:default;pointer-events:none}
+  .pd.mimo:hover{transform:none}
+  .pd.ok{background:var(--ok);color:#fff}
+  .pd.ceka{background:var(--amber);color:#3d2c05}
+  /* Chybějící zápis je celý smysl pásku — proto plná červená a o kus vyšší,
+     ať na něj oko padne první. */
+  .pd.chybi{background:var(--red);color:#fff;height:36px;box-shadow:0 0 0 2px #fdeceb}
+  .pd.vyb{outline:2px solid var(--navy);outline-offset:2px}
   .paseklegenda{display:flex;gap:14px;flex-wrap:wrap;align-items:center;font-size:11.5px;color:var(--ink2)}
   .paseklegenda span{display:flex;align-items:center;gap:5px}
   .pl{width:11px;height:11px;border-radius:3px;display:inline-block;flex:none}
-  .pl.ok{background:var(--ok-soft);border:1px solid var(--ok)}
-  .pl.ceka{background:var(--wait-soft);border:1px solid var(--wait)}
-  .pl.chybi{background:#fdeceb;border:1px solid var(--red)}
+  .pl.ok{background:var(--ok)}
+  .pl.ceka{background:var(--amber)}
+  .pl.chybi{background:var(--red)}
   .pl.prazdno{background:var(--int-soft);border:1px solid #c3ccd6}
   /* Prouzek postupu etapy. Ukaze i hodnotu mezi (40 %), coz tlacitka po 25 %
      neumela — vypadalo to pak jako nenastavene. */
@@ -495,9 +504,9 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js" integrity="sha384-ZaR6mWzmJtrRibZ1Vm7SoHFr8OXjyAuGAXalGDKqbxFT18oi/z+oZLIRFkpeNor1" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" integrity="sha384-I1LYojsZ5RM1cOda44Z2h42Qa6YfsQ1XkXxREnhp4ueYBR/4d1pG1K+NZM537Vsj" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" integrity="sha384-Ke0FJhH7LyRqDxZ0wt+/OXV38yfQVu7g9VPEEGjYmB4RVOY/ta04uecRhsMwT7V3" crossorigin="anonymous"></script>
-<script src="vypocty.js?v=20260831aq"></script>
-<script src="navod.js?v=20260831aq"></script>
-<script src="config.js?v=20260831aq"></script>
-<script src="app.js?v=20260831aq"></script>
+<script src="vypocty.js?v=20260831ar"></script>
+<script src="navod.js?v=20260831ar"></script>
+<script src="config.js?v=20260831ar"></script>
+<script src="app.js?v=20260831ar"></script>
 </body>
 </html>

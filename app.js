@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 aq';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 ar';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -4323,7 +4323,10 @@ function pgFotky() {
    ČERVENÁ je celý smysl: někdo si píchl příchod, ale zápis za ten den
    nikdo nenapsal. Dneska se to nedozvíš — nástěnka hlídá jen dnešek —
    a přitom je to díra v deníku, která mrzí u kontroly i u soudu. */
-const PASEK_DNU = 60;
+const PASEK_DNU = 30;   // zadani Marca 2. 9. 2026: „staci nam poslednich 30 dni"
+/* Zkratky nad kazdym tydnem. Jednopismenne schvalne — na 13 px sirky se
+   dvoupismenne nevejdou citelne a poloha ve tydnu je stejne jednoznacna. */
+const PASEK_ZKRATKY = ['P', 'Ú', 'S', 'Č', 'P', 'S', 'N'].map(z => '<span>' + z + '</span>').join('');
 function pasekStavDne(den, pid) {
   const zapisy = S.entries.filter(e => e.date === den && (!pid || e.pid === pid));
   if (zapisy.some(e => e.status === 'approved')) return 'ok';
@@ -4339,38 +4342,55 @@ function pasekDnu() {
   const dnes = isoToday();
   const dny = [];
   for (let i = PASEK_DNU - 1; i >= 0; i--) dny.push(shiftISO(dnes, -i));
+  /* Zacatek se dorovna na pondeli prazdnymi misty, aby kazdy tyden zacinal
+     stejne. Bez toho by popisky dnu (P Ú S Č P S N) nad prvnim tydnem
+     ukazovaly na jine dny nez nad ostatnimi. */
+  const prvniDen = denVTydnu(dny[0]);
+  const uvod = prvniDen - 1;
+
   const stavy = dny.map(d => ({ d, st: pasekStavDne(d, pid) }));
   const chybi = stavy.filter(x => x.st === 'chybi').length;
   const popis = { ok: 'zápis je', ceka: 'zápis čeká na schválení', chybi: 'byli tam, ale zápis chybí', prazdno: 'nikdo tam nebyl' };
+
+  const tydny = [];
+  let bunky = [], prvniVTydnu = null;
+  for (let i = 0; i < uvod; i++) bunky.push('<div class="pd mimo"></div>');
+  stavy.forEach(({ d, st }, i) => {
+    if (!prvniVTydnu) prvniVTydnu = d;
+    const w = denVTydnu(d);
+    const vikend = w >= 6 && st === 'prazdno';
+    bunky.push(`<div class="pd ${st}${vikend ? ' vik' : ''}${S.denikDen === d ? ' vyb' : ''}"
+      title="${fmtISOFull(d)} — ${popis[st]}" onclick="denikDen('${d}')">${Number(d.slice(8))}</div>`);
+    if (w === 7 || i === stavy.length - 1) {
+      /* Pod tydnem staci jedno cislo — datum jeho pondeli. Kdyz v tydnu
+         zacina mesic, je uzitecnejsi jeho zkratka. */
+      const mesicZacina = Number(d.slice(8)) <= 7 || Number(prvniVTydnu.slice(8)) <= 7;
+      const pod = mesicZacina ? mesicZkratka(Number(d.slice(5, 7))) : Number(prvniVTydnu.slice(8)) + '.';
+      tydny.push(`<div class="pt"><div class="ptd">${PASEK_ZKRATKY}</div>
+        <div class="ptb">${bunky.join('')}</div><div class="ptl">${pod}</div></div>`);
+      bunky = []; prvniVTydnu = null;
+    }
+  });
+
   return `<div class="card pasek">
     <h3 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">📅 Posledních ${PASEK_DNU} dní
       ${chybi ? `<span class="badge b-red">${chybi}× chybí zápis</span>` : '<span class="badge b-ok">nic nechybí</span>'}
       ${S.denikDen ? `<span class="lnk" style="margin-left:auto;font-size:12px" onclick="denikDen(null)">✕ zrušit výběr dne</span>` : ''}</h3>
-    <div class="pasekbox" id="pasek-scroll">${stavy.map(({ d, st }) => {
-      const [r, m, den] = d.split('-');
-      const prvni = den === '01';
-      return `<div class="pd ${st} ${S.denikDen === d ? 'vyb' : ''}" title="${fmtISOFull(d)} — ${popis[st]}" onclick="denikDen('${d}')">
-        <span class="pdm">${prvni ? mesicZkratka(Number(m)) : ''}</span>
-        <span class="pdd">${Number(den)}</span></div>`;
-    }).join('')}</div>
+    <div class="pasekbox" id="pasek-scroll">${tydny.join('')}</div>
     <div class="paseklegenda">
       <span><i class="pl ok"></i>zápis je</span>
-      <span><i class="pl ceka"></i>čeká na schválení</span>
+      <span><i class="pl ceka"></i>čeká</span>
       <span><i class="pl chybi"></i>byli tam, zápis chybí</span>
-      <span><i class="pl prazdno"></i>nikdo tam nebyl</span>
-      <span class="muted">${pid ? 'Jen ' + esc((proj(pid) || {}).name || '') + '.' : 'Přes všechny stavby — vyfiltruj si jednu, ať víš, které se to týká.'} Ťuknutím na den se pod tím vypíšou jen jeho zápisy.</span>
+      <span><i class="pl prazdno"></i>nikdo</span>
+      <span class="muted">nižší proužek = víkend · ${pid ? 'jen ' + esc((proj(pid) || {}).name || '') : 'přes všechny stavby'} · ťuknutím na den se vypíšou jen jeho zápisy</span>
     </div>
   </div>`;
 }
-/* Pruh se otevira NA DNESKU, ne na zacatku. Nejdulezitejsi jsou posledni
-   dny a bez tohohle by clovek koukal na dva mesice stare prazdno a musel
-   sam odscrollovat doprava. Pamatuje si i vlastni posun, kdyz uz se v nem
-   nekdo rozhlizel — jinak by ho kazde tuknuti na den hodilo zpatky. */
-function pasekScrollObnov() {
-  const el = document.getElementById('pasek-scroll'); if (!el) return;
-  if (S.pasekScroll == null) el.scrollLeft = el.scrollWidth;
-  else el.scrollLeft = S.pasekScroll;
-  el.onscroll = () => { S.pasekScroll = el.scrollLeft; };
+/* Pondeli = 1, nedele = 7. Pocita se v UTC stejne jako shiftISO — jinak by
+   se pres zmenu letniho casu tyden posunul o den. */
+function denVTydnu(iso) {
+  const d = new Date(iso + 'T00:00:00Z').getUTCDay();
+  return d === 0 ? 7 : d;
 }
 function mesicZkratka(m) {
   return ['', 'led', 'úno', 'bře', 'dub', 'kvě', 'čvn', 'čvc', 'srp', 'zář', 'říj', 'lis', 'pro'][m] || '';
