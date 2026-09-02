@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 at';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 au';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -4384,9 +4384,9 @@ function pasekDnu() {
         : chybi ? `<span class="badge b-red">${chybi}× chybí zápis</span>` : '<span class="badge b-ok">nic nechybí</span>'}
       <span class="sp" style="margin-left:auto"></span>
       ${pasekVyberStavby(pid)}
-      <button class="btn ghost sm" title="O čtyři týdny zpět" onclick="pasekPosun(-1)">‹</button>
+      <button class="btn ghost sm" title="O čtyři týdny zpět" onclick="pasekPosun(1)">‹</button>
       ${posun ? '<button class="btn ghost sm" onclick="pasekPosun(0)">dnes</button>' : ''}
-      <button class="btn ghost sm" title="O čtyři týdny dál" ${posun ? '' : 'disabled'} onclick="pasekPosun(1)">›</button>
+      <button class="btn ghost sm" title="O čtyři týdny dál" ${posun ? '' : 'disabled'} onclick="pasekPosun(-1)">›</button>
       ${S.denikDen ? `<span class="lnk" style="font-size:12px" onclick="denikDen(null)">✕ zrušit výběr dne</span>` : ''}</h3>
     <div class="pasekbox" id="pasek-scroll">${tydny.join('')}</div>
     <div class="paseklegenda">
@@ -4437,8 +4437,14 @@ function pasekStavba(id) {
    pokazde znovu hledat, kde je pondeli. Pri 28 dnech se dva dny prekryvaji,
    coz je lepsi nez mezera. */
 const PASEK_KROK = 28;
-async function pasekPosun(smer) {
-  const novy = smer === 0 ? 0 : Math.max(0, (S.pasekPosun || 0) + smer * PASEK_KROK);
+/* POZOR NA ZNAMENKO: S.pasekPosun je POCET DNI ZPATKY, takze cim vetsi,
+   tim starsi obdobi. Parametr se proto jmenuje zpet a ne smer — pri prvnim
+   pokusu bylo obracene a obe sipky byly mrtve (2. 9. 2026).
+   zpet = 1 -> o ctyri tydny do minulosti
+   zpet = -1 -> o ctyri tydny k dnesku
+   zpet = 0 -> rovnou na dnesek */
+async function pasekPosun(zpet) {
+  const novy = zpet === 0 ? 0 : Math.max(0, (S.pasekPosun || 0) + zpet * PASEK_KROK);
   if (novy === (S.pasekPosun || 0)) return;
   S.pasekPosun = novy;
   S.pasekScroll = null;          // novy vysek otevrit zase na jeho konci
