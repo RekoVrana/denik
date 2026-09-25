@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 au';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 av';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -6307,7 +6307,7 @@ function pgUzivatele() {
           <td>${s && s.h ? `<b>${s.h} Kč/h</b>${s.c ? ` / <span style="color:var(--ok);font-weight:700">${s.c} Kč/h</span>` : ''}${sazbaHist(s).length > 1 ? `<br><span class="muted" style="font-size:11px">od ${fmtISO(sazbaHist(s)[sazbaHist(s).length - 1].od)} · ${sazbaHist(s).length}× měněno</span>` : ''}` : (t.teren && !t.kanc ? '<b style="color:var(--red)">⚠ chybí</b>' : '<span class="muted">—</span>')}</td>
           <td>${esc(u.role || '—')}</td>
           <td style="white-space:nowrap">${u.uid
-            ? `<span class="badge b-ok">✓ má účet</span><br><button class="btn ghost sm" style="margin-top:4px" onclick="pinForm('${u.id}')">🔑 nový PIN</button>
+            ? `<span class="badge b-ok">✓ má účet</span>${t.kanc && u.authEmail ? `<br><span class="muted" style="font-size:10.5px;user-select:all" title="Přihlašovací adresa — tuhle zadá v záložce Vedení / kancelář">${esc(u.authEmail)}</span>` : ''}<br><button class="btn ghost sm" style="margin-top:4px" onclick="pinForm('${u.id}')">🔑 nový PIN</button>
                <button class="btn ghost sm" style="margin-top:4px" title="Zrušit přihlášení" onclick="zrusitPrihlaseni('${u.id}')">🚫</button>`
             : (t.inv ? '<span class="muted">portál</span>' : `<button class="btn ghost sm" onclick="loginForm('${u.id}')">🔑 vytvořit</button>`)}</td>
           <td style="white-space:nowrap"><span class="lnk" onclick="editUser('${u.id}')">✏️</span>
@@ -6332,6 +6332,18 @@ function loginForm(udi) {
     <label>PIN (min. 6 číslic)</label><input type="text" id="lf-pin" inputmode="numeric" placeholder="např. 738291">
     <label>Popisek na přihlašovací obrazovce</label><input type="text" id="lf-pop" value="${esc(u.role || '')}">
     <div class="aprv"><button class="btn amber" onclick="createLogin('${udi}')">💾 Vytvořit účet</button><button class="btn ghost" onclick="closeModal()">Zrušit</button></div>`);
+}
+/* Vedeni se neprihlasuje pres seznam na prihlasovaci obrazovce (tam z
+   bezpecnostnich duvodu neni, B6), ale v zalozce „Vedeni / kancelar"
+   e-mailem a heslem. Ta adresa je ale vygenerovana a nikde se neukazovala
+   — novy clovek z kancelare se tak nemel jak prihlasit (Marco, 25. 9. 2026).
+   Tenhle text mu vedeni preda spolu s PINem. */
+function jakSePrihlasi(u, authEmail) {
+  const role = roleOfTypeKey(typeKeyOfUser(u));
+  if (role === 'admin') {
+    return 'Přihlásí se v záložce „Vedení / kancelář":\n\nE-mail:  ' + authEmail + '\nHeslo:  ten PIN, co jsi zadal\n\nAdresu najdeš i u něj v Organizaci.';
+  }
+  return 'Přihlásí se v záložce „Pracovníci" — najde se podle příjmení a zadá PIN.';
 }
 async function createLogin(udi) {
   const pin = $('#lf-pin').value.trim();
@@ -6360,7 +6372,8 @@ async function createLogin(udi) {
       await db.collection('roster').doc(udi).delete().catch(() => {});
     }
     await secondary.auth().signOut();
-    closeModal(); toast('Účet vytvořen ✓ PIN předej pracovníkovi.');
+    closeModal();
+    await oznam('Účet vytvořen ✓\n\n' + jakSePrihlasi(u, authEmail));
   } catch (e) {
     /* Zbyla adresa ze zruseneho prihlaseni (nebo z doby pred cislovanim):
        zvednout pinVerze a nechat vedeni tuknout znovu — druhy pokus uz
@@ -6434,6 +6447,7 @@ async function resetPin(udi) {
     // historie je navazana na ucet — prepnout, jinak by pracovnik videl prazdno
     // (u clovka, ktery je ve firme dele, to par vterin trva — proto hlaska)
     toast('Nový PIN platí ✓ Přenáším historii na nový účet…');
+    if (role === 'admin') await oznam('Pozor, vedení má po novém PINu i NOVOU přihlašovací adresu:\n\n' + authEmail + '\n\nStará už neplatí.');
     let presunuto = 0;
     for (const a of S.attendance.filter(x => x.userDocId === udi && x.authUid !== cred.user.uid)) {
       await db.collection('attendance').doc(a.id).update({ authUid: cred.user.uid }).catch(() => {}); presunuto++;
