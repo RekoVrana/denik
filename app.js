@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 av';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 aw';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -1857,6 +1857,7 @@ function viewLogin() {
         <label>E-mail</label><input type="email" id="li-email" autocomplete="username">
         <label>Heslo</label><input type="password" id="li-pass" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
         <div class="aprv"><button class="btn amber" style="width:100%;justify-content:center" onclick="doLogin()">Přihlásit</button></div>
+        <div class="ls" style="margin-top:8px"><span class="lnk" onclick="zapomenuteHeslo()">Zapomenuté heslo</span></div>
       ` : S.loginWorker ? `
         <div class="urow" style="border:none"><span class="uav">${ini(S.loginWorker)}</span><b>${esc(fullName(S.loginWorker))}</b>
           <span class="lnk" style="margin-left:auto;font-size:12px" onclick="S.loginWorker=null;render()">změnit</span></div>
@@ -6327,9 +6328,17 @@ function pgUzivatele() {
 }
 function loginForm(udi) {
   const u = userById(udi);
+  const vedeni = roleOfTypeKey(typeKeyOfUser(u)) === 'admin';
+  /* Vedeni se prihlasuje OPRAVDOVYM e-mailem (zadani Marca 25. 9. 2026),
+     ne vygenerovanou adresou — ta se nedala nikde opsat a novy clovek
+     z kancelare se nemel jak prihlasit. Predvyplni se z kontaktu, kdyz je. */
   modal(`<h3>🔑 Přihlášení pro: ${esc(fullName(u))}</h3>
-    <div class="note">Pracovník se přihlásí tak, že na úvodní obrazovce klepne na své jméno a zadá PIN.</div>
-    <label>PIN (min. 6 číslic)</label><input type="text" id="lf-pin" inputmode="numeric" placeholder="např. 738291">
+    ${vedeni
+      ? `<div class="note">Vedení se přihlašuje v záložce <b>Vedení / kancelář</b> e-mailem a heslem. Heslo si pak může kdykoli změnit sám odkazem do mailu.</div>
+         <label>E-mail (přihlašovací)</label><input type="email" id="lf-email" value="${esc(kontaktOsoby(udi).email || '')}" placeholder="jmeno@rekovrana.cz" autocomplete="off">
+         <label>Heslo (min. 6 znaků)</label><input type="text" id="lf-pin" placeholder="dočasné, ať si ho změní">`
+      : `<div class="note">Pracovník se přihlásí tak, že na úvodní obrazovce klepne na své jméno a zadá PIN.</div>
+         <label>PIN (min. 6 číslic)</label><input type="text" id="lf-pin" inputmode="numeric" placeholder="např. 738291">`}
     <label>Popisek na přihlašovací obrazovce</label><input type="text" id="lf-pop" value="${esc(u.role || '')}">
     <div class="aprv"><button class="btn amber" onclick="createLogin('${udi}')">💾 Vytvořit účet</button><button class="btn ghost" onclick="closeModal()">Zrušit</button></div>`);
 }
@@ -6341,7 +6350,7 @@ function loginForm(udi) {
 function jakSePrihlasi(u, authEmail) {
   const role = roleOfTypeKey(typeKeyOfUser(u));
   if (role === 'admin') {
-    return 'Přihlásí se v záložce „Vedení / kancelář":\n\nE-mail:  ' + authEmail + '\nHeslo:  ten PIN, co jsi zadal\n\nAdresu najdeš i u něj v Organizaci.';
+    return 'Přihlásí se v záložce „Vedení / kancelář":\n\nE-mail:  ' + authEmail + '\nHeslo:  to, co jsi zadal\n\nHeslo si pak může změnit sám — tlačítkem „Zapomenuté heslo" na přihlašovací obrazovce.';
   }
   return 'Přihlásí se v záložce „Pracovníci" — najde se podle příjmení a zadá PIN.';
 }
@@ -6355,7 +6364,12 @@ async function createLogin(udi) {
      „ucet uz existuje" a clovek by se nedal zapojit zpatky.
      Verze 1 = adresa bez cisla, aby uz zalozene ucty platily dal. */
   const verze = u.pinVerze || 1;
-  const authEmail = 'u' + udi.toLowerCase() + (verze > 1 ? '.v' + verze : '') + '@denik.rekovrana.cz';
+  const vedeni = roleOfTypeKey(typeKeyOfUser(u)) === 'admin';
+  let authEmail = 'u' + udi.toLowerCase() + (verze > 1 ? '.v' + verze : '') + '@denik.rekovrana.cz';
+  if (vedeni) {
+    authEmail = (($('#lf-email') || {}).value || '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(authEmail)) { toast('Zadej platný e-mail'); return; }
+  }
   try {
     const secondary = firebase.apps.find(a => a.name === 'sec') || firebase.initializeApp(CFG.firebase, 'sec');
     const cred = await secondary.auth().createUserWithEmailAndPassword(authEmail, pin);
@@ -6378,7 +6392,9 @@ async function createLogin(udi) {
     /* Zbyla adresa ze zruseneho prihlaseni (nebo z doby pred cislovanim):
        zvednout pinVerze a nechat vedeni tuknout znovu — druhy pokus uz
        sklada jinou adresu a projde. Nic se nemusi migrovat. */
-    if (e.code === 'auth/email-already-in-use') {
+    if (e.code === 'auth/email-already-in-use' && vedeni) {
+      toast('Tenhle e-mail už účet má. Použij jiný, nebo mu pošli obnovu hesla.');
+    } else if (e.code === 'auth/email-already-in-use') {
       await db.collection('users').doc(udi).update({ pinVerze: verze + 1 }).catch(() => {});
       toast('Adresa byla obsazená — ťukni prosím na „Vytvořit účet" ještě jednou.');
     } else toast('Chyba: ' + e.message);
@@ -6392,6 +6408,16 @@ async function createLogin(udi) {
    novy ucet, aby pracovnik neprisel o svou historii a o rozdelanou smenu. */
 function pinForm(udi) {
   const u = userById(udi); if (!u) return;
+  /* Vedeni ma opravdovy e-mail, takze heslo se NEnastavuje tady — posle se
+     mu odkaz na obnovu. Zakladat kvuli tomu novy ucet (jako u party
+     s vygenerovanou adresou) by zbytecne menilo prihlasovaci adresu. */
+  if (roleOfTypeKey(typeKeyOfUser(u)) === 'admin' && u.authEmail && !/@denik\.rekovrana\.cz$/.test(u.authEmail)) {
+    modal(`<h3>🔑 Heslo pro: ${esc(fullName(u))}</h3>
+      <div class="note" style="margin-top:0">Na <b>${esc(u.authEmail)}</b> mu přijde odkaz, kterým si nastaví nové heslo. Staré platí, dokud ho nezmění.</div>
+      <div class="aprv"><button class="btn amber" onclick="poslatObnovuHesla('${jsAttr(u.authEmail)}')">📧 Poslat odkaz na nové heslo</button>
+      <button class="btn ghost" onclick="closeModal()">Zrušit</button></div>`);
+    return;
+  }
   modal(`<h3>🔑 Nový PIN pro: ${esc(fullName(u))}</h3>
     <div class="note" style="margin-top:0">Starý PIN okamžitě přestane platit. Nový mu předej osobně —
       nikde se nedá zpětně zobrazit.</div>
@@ -6423,6 +6449,15 @@ async function prenesNaNovyUcet(staryUid, novyUid) {
     } catch (e) { console.warn('prevod ' + kolekce + ' na novy ucet', e); }
   }
   return n;
+}
+async function zapomenuteHeslo() {
+  const email = (($('#li-email') || {}).value || '').trim();
+  if (!email) { lerr('Napiš nahoře svůj e-mail a ťukni znovu.'); return; }
+  await poslatObnovuHesla(email);
+}
+async function poslatObnovuHesla(email) {
+  try { await auth.sendPasswordResetEmail(email); closeModal(); toast('Odkaz odeslán na ' + email + ' ✓'); }
+  catch (e) { toast('Nepodařilo se odeslat: ' + authErrText(e)); }
 }
 async function resetPin(udi) {
   const pin = ($('#pin-novy').value || '').trim();
