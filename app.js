@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 aw';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 ax';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -6812,7 +6812,11 @@ async function saveUser() {
        i 'teren', aby prosel filtrem "komu jde zadat ukol" — obezlicka, ktera
        delala ze suba pracovnika i tam, kam nepatri (rucni doplneni dochazky,
        seznam dochazky). Seznamy se ted ptaji na suba rovnou. */
-    typ: { kanc: typKey === 'kanc' ? 1 : 0, teren: (typKey === 'kanc' || typKey === 'teren') ? 1 : 0, inv: typKey === 'inv' ? 1 : 0, sub: typKey === 'sub' ? 1 : 0 },
+    /* JEDNA ROLE NA UCET (rozhodnuti Marca 25. 9. 2026). Driv dostavalo
+       vedeni automaticky i teren — vypadalo to pak jako dve role, ale
+       prihlasit se slo jen jednou cestou (vedeni neni v seznamu party),
+       coz matlo pri zakladani: „proc mi ho to nenabizi v Pracovnicich?" */
+    typ: { kanc: typKey === 'kanc' ? 1 : 0, teren: typKey === 'teren' ? 1 : 0, inv: typKey === 'inv' ? 1 : 0, sub: typKey === 'sub' ? 1 : 0 },
     /* prepinac „Aktivni uzivatel" zije jen v pameti a uklada se az tady,
        stejne jako vsechna ostatni policka formulare */
     role: $('#nu-r').value.trim(), active: S.newUserActive != null ? S.newUserActive : (edit ? edit.active !== false : true)
