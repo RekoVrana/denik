@@ -7,6 +7,11 @@
 //  Živá verze: Firebase konzole → Firestore → Rules
 //  Když se změní tam, změň i tady, ať kopie nezastará.
 //
+//  Poslední změna 25. 9. 2026 (fotky ke stavbě):
+//  22) Přibyla /fotky_stavby — fotky u stavby a dne bez zápisu. Autor smí
+//      dopsat jen odkazy na Drive (fronta z jeho telefonu), připojení
+//      k zápisu a mazání cizích je jen vedení.
+//
 //  Poslední změna 2. 9. 2026 (dokumenty pro investora):
 //  21) /projects uz nesmi nest portalDocs ani portalFolderId. Stavby cte
 //      cela parta i externi sub a Firestore vydava CELY dokument — spolu
@@ -210,6 +215,28 @@ service cloud.firestore {
     // jen vedeni. Poznamky ke STAVBE jsou jinde, v /poznamky.
     match /poznamky_osob/{id} {
       allow read, write: if isAdmin();
+    }
+
+    // Fotky ke stavbe BEZ zapisu (25. 9. 2026): stavbyvedouci nafoti pres
+    // tyden a nahraje naraz po dnech. Doklad = jedna fotka (nahled ~20 kB,
+    // odkazy na Drive). Zapis si je jen "vezme" — entryId se doplni potom.
+    // Cist smi kazdy s roli (galerie, nabidka v zapisu). Zakladat smi kazdy
+    // s roli, ale jen pod svym uctem a s malym nahledem. Odkazy na Drive
+    // (driveId, origId) dopisuje fronta z telefonu autora — proto smi autor
+    // menit JEN ta dve pole. Vsechno ostatni (pripojeni k zapisu, mazani)
+    // je na vedeni, aby si parta nemohla fotku "schvalit" do zapisu sama.
+    match /fotky_stavby/{id} {
+      allow read: if hasRole();
+      allow create: if hasRole()
+        && request.resource.data.autorUid == request.auth.uid
+        && request.resource.data.entryId == null
+        && request.resource.data.thumb is string
+        && request.resource.data.thumb.size() < 60000
+        && request.resource.data.keys().hasOnly(['pid', 'date', 'thumb', 'label', 'driveId', 'origId', 'autorUid', 'autor', 'entryId', 'createdAt']);
+      allow update: if isAdmin()
+        || (hasRole() && resource.data.autorUid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['driveId', 'origId']));
+      allow delete: if isAdmin() || (hasRole() && resource.data.autorUid == request.auth.uid);
     }
 
     // Adresy zarizeni pro upozorneni. Id dokumentu JE ta adresa, takze jedno

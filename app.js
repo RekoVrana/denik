@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 ax';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 ay';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -265,6 +265,7 @@ const S = {
   vyplaty: [], pozOsob: [], pozOsobForm: false, pozOsobEdit: null, uzHledat: '',
   /* galerie fotek (viz sekce GALERIE FOTEK): filtry a kolik dlazdic uz kreslime */
   fgFrom: '', fgTo: '', fgProj: null, fgAutor: '', fgZobrazeno: 60,
+  fotkyStavby: [], fsDraft: [], fsPracuje: false,   // fotky ke stavbe bez zapisu
   portalSync: null,        // prubeh srovnavani slozky pro investora
   denikDen: null,          // vybrany den na pasku nad zapisy
   pasekScroll: null,       // null = otevri na dnesku
@@ -585,6 +586,7 @@ function startData() {
      Presne tim tu vznikla chyba: vlozeny blok hlaseni si prisvojil "else"
      a subdodavatelum se ukoly prestaly nacitat uplne. */
   if (role === 'admin') listen('tasks', 'tasks', { sort: taskSort });
+  if (role === 'admin') listen('fotky_stavby', 'fotkyStavby', { where: [['date', '>=', oknoOd()]], sort: (a, b) => (b.date || '').localeCompare(a.date || '') || (((b.createdAt && b.createdAt.seconds) || 0) - ((a.createdAt && a.createdAt.seconds) || 0)) });
   else listenMojeUkoly();
   /* Hlaseni subdodavatelu: vedeni vidi vse (v okne), sub jen svoje. */
   const hlasSort = (a, b) => ((b.date || '') + (b.time || '')).localeCompare((a.date || '') + (a.time || ''));
@@ -1143,6 +1145,13 @@ async function frontaOdeslat() {
   }
 }
 async function frontaZapsatDoZaznamu(it, fileId) {
+  /* Fotka ke stavbe (bez zapisu) ma vlastni doklad — zapisuje se tam, ne do
+     zapisu. Stejne dve pole jako u fotky v zapisu. */
+  if (it.fotkaStavbyId) {
+    const pole = (it.druh === 'foto' && it.original) ? 'origId' : 'driveId';
+    await db.collection('fotky_stavby').doc(it.fotkaStavbyId).update({ [pole]: fileId });
+    return;
+  }
   if (it.druh === 'selfie') {
     if (!it.attendanceId) return;
     await db.collection('attendance').doc(it.attendanceId).update({ selfieDriveId: fileId }).catch(() => {});
@@ -1212,45 +1221,53 @@ const NAHLED_NEDOSTUPNY = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg 
    a prilohy uz dnes jedou s 15 MB — vetsi soubor by pri odesilani stejne
    spadl a donekonecna blokoval frontu. Bezna fotka z iPhonu ma 3-5 MB. */
 const MAX_ORIGINAL_MB = 15;
+/* Z jednoho souboru udela vsechno, co fotka potrebuje: nahled do databaze,
+   prohlizeci kopii a original na Drive. Spolecne pro zapis i pro fotky ke
+   stavbe, at se to nerozjede. Vraci null, kdyz se fotka neda pouzit. */
+async function pripravFotku(f, label) {
+  /* ORIGINAL: bajty presne tak, jak prisly z telefonu. Prekresleni pres
+     platno (scaleJpeg) zahodi datum porizeni, GPS a dalsi metadata — pro
+     denik, ktery muze slouzit jako doklad, se proto original uklada
+     vedle zmensenin a nahraje se na Drive netknuty. */
+  let orig = null;
+  if (f.size > MAX_ORIGINAL_MB * 1024 * 1024) {
+    toast('⚠ ' + (f.name || 'Soubor') + ' má přes ' + MAX_ORIGINAL_MB + ' MB — na Drive půjde jen zmenšená kopie (bez metadat).');
+  } else {
+    try {
+      const data = await new Promise((ok, ne) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => ne(r.error); r.readAsDataURL(f); });
+      orig = { data, mime: f.type || 'application/octet-stream', name: f.name || '' };
+    } catch (e) { console.warn('original fotky se nepodarilo precist', e); }
+  }
+  const nazev = label || (f.name || '').replace(/\.[^.]+$/, '');
+  try {
+    const img = await fileToImage(f);
+    const thumb = scaleJpeg(img, 360, 0.62);
+    /* Stredni verze (1100 px) se nikam neuklada — do databaze nejde
+       (~220 kB na fotku by pri tisicich fotek vycerpalo 1GB limit) a na
+       Drive jde verze 1600 px. Fotky UKOLU maji svou vlastni cestu. */
+    const full = scaleJpeg(img, 1600, 0.82);
+    URL.revokeObjectURL(img.src);
+    return { tmp: uid8(), thumb, full, orig, label: nazev, status: 'pending', driveId: null };
+  } catch (e) {
+    /* Prohlizec fotku nedokazal dekodovat (napr. HEIC na pocitaci).
+       Kdyz mame aspon original, fotka NESMI propadnout: nahraje se on,
+       jen dlazdice zustane bez nahledu a clovek dostane hlasku. */
+    if (orig) {
+      toast('⚠ Náhled fotky ' + (f.name || '') + ' se nepodařilo vyrobit — originál se ale na Drive nahraje.');
+      return { tmp: uid8(), thumb: NAHLED_NEDOSTUPNY, full: null, orig, label: nazev, status: 'pending', driveId: null };
+    }
+    toast('Fotku se nepodařilo načíst: ' + f.name);
+    return null;
+  }
+}
 async function processPhotos(files, label) {
   for (const f of files) {
     if (S.draftPhotos.length >= MAX_FOTEK_ZAZNAMU) {
       oznam('Do jednoho záznamu jde nejvíc ' + MAX_FOTEK_ZAZNAMU + ' fotek — víc by se nevešlo a záznam by se neuložil.\nDalší fotky prosím přidej do nového zápisu.');
       break;
     }
-    /* ORIGINAL: bajty presne tak, jak prisly z telefonu. Prekresleni pres
-       platno (scaleJpeg) zahodi datum porizeni, GPS a dalsi metadata — pro
-       denik, ktery muze slouzit jako doklad, se proto original uklada
-       vedle zmensenin a nahraje se na Drive netknuty. */
-    let orig = null;
-    if (f.size > MAX_ORIGINAL_MB * 1024 * 1024) {
-      toast('⚠ ' + (f.name || 'Soubor') + ' má přes ' + MAX_ORIGINAL_MB + ' MB — na Drive půjde jen zmenšená kopie (bez metadat).');
-    } else {
-      try {
-        const data = await new Promise((ok, ne) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => ne(r.error); r.readAsDataURL(f); });
-        orig = { data, mime: f.type || 'application/octet-stream', name: f.name || '' };
-      } catch (e) { console.warn('original fotky se nepodarilo precist', e); }
-    }
-    try {
-      const img = await fileToImage(f);
-      const thumb = scaleJpeg(img, 360, 0.62);
-      /* Stredni verze (1100 px) se u zapisu uz nikam neuklada — do databaze
-         nejde (~220 kB na fotku by pri tisicich fotek vycerpalo 1GB limit)
-         a na Drive jde verze 1600 px. Nepocitame ji tedy vubec: osm fotek
-         by jinak drzelo v pameti telefonu megabajty navic zbytecne.
-         Fotky UKOLU maji svou vlastni cestu a stredni verzi si dal delaji. */
-      const full = scaleJpeg(img, 1600, 0.82);
-      S.draftPhotos.push({ tmp: uid8(), thumb, full, orig, label: label || f.name.replace(/\.[^.]+$/, ''), status: 'pending', driveId: null });
-      URL.revokeObjectURL(img.src);
-    } catch (e) {
-      /* Prohlizec fotku nedokazal dekodovat (napr. HEIC na pocitaci).
-         Kdyz mame aspon original, fotka NESMI propadnout: nahraje se on,
-         jen dlazdice zustane bez nahledu a clovek dostane hlasku. */
-      if (orig) {
-        S.draftPhotos.push({ tmp: uid8(), thumb: NAHLED_NEDOSTUPNY, full: null, orig, label: label || (f.name || '').replace(/\.[^.]+$/, ''), status: 'pending', driveId: null });
-        toast('⚠ Náhled fotky ' + (f.name || '') + ' se nepodařilo vyrobit — originál se ale na Drive nahraje.');
-      } else toast('Fotku se nepodařilo načíst: ' + f.name);
-    }
+    const ph = await pripravFotku(f, label);
+    if (ph) S.draftPhotos.push(ph);
   }
   render();
 }
@@ -1283,6 +1300,173 @@ function nazevSlozkyZakazky(p) {
   const lokalita = (casti.length > 1 ? casti[0] : zAdresy).trim();
   const prijmeni = (casti.length > 1 ? casti[1] : zKlienta).trim();
   return [String(p.cn || '').trim(), prijmeni, lokalita].filter(Boolean).join('_');
+}
+/* ============ FOTKY KE STAVBĚ (bez zápisu) ============
+   Zadání Marca 25. 9. 2026: stavbyvedoucí nafotí přes týden a nahraje
+   naráz, „třeba za 3 dny zpětně", NE v rámci zápisu. Fotky žijí u stavby
+   a dne samy o sobě; zápis si je jen VEZME, když je chce („nechci, aby se
+   automaticky přidělovaly k zápisu, jen ať mi jsou nabízeny").
+   Na portál investora jdou až přes zápis — investor nemá vidět nic, co
+   vedení neschválilo. */
+
+/* Datum pořízení přímo ze souboru (EXIF, značka DateTimeOriginal). Čte se
+   jen začátek souboru, ne celé 4 MB. Když značka není (WhatsApp a maily ji
+   mažou), zkusí se čas změny souboru — z galerie telefonu to bývá datum
+   focení — ale jen když není „teď": fotka právě vyfocená v aplikaci má čas
+   změny = teď a tam by to nic neřeklo. Když nic nesedí, vrátí null a
+   člověk den vybere sám. Radši se zeptat než zařadit špatně. */
+async function datumZFotky(f) {
+  try {
+    const buf = await f.slice(0, 256 * 1024).arrayBuffer();
+    const v = new DataView(buf);
+    if (v.byteLength > 4 && v.getUint16(0) === 0xFFD8) {
+      let o = 2;
+      while (o + 4 <= v.byteLength) {
+        const marker = v.getUint16(o), len = v.getUint16(o + 2);
+        if (marker === 0xFFDA) break;
+        if (marker === 0xFFE1 && o + 10 < v.byteLength && v.getUint32(o + 4) === 0x45786966) {
+          const t = o + 10;
+          const le = v.getUint16(t) === 0x4949;
+          const g16 = x => v.getUint16(x, le), g32 = x => v.getUint32(x, le);
+          const ifd0 = t + g32(t + 4);
+          if (ifd0 + 2 <= v.byteLength) {
+            const n = g16(ifd0); let exifIfd = 0;
+            for (let i = 0; i < n && ifd0 + 2 + i * 12 + 12 <= v.byteLength; i++) {
+              const e = ifd0 + 2 + i * 12; if (g16(e) === 0x8769) exifIfd = t + g32(e + 8);
+            }
+            if (exifIfd && exifIfd + 2 <= v.byteLength) {
+              const m = g16(exifIfd);
+              for (let i = 0; i < m && exifIfd + 2 + i * 12 + 12 <= v.byteLength; i++) {
+                const e = exifIfd + 2 + i * 12, tag = g16(e);
+                if (tag === 0x9003 || tag === 0x9004 || tag === 0x0132) {
+                  const cnt = g32(e + 4), off = cnt > 4 ? t + g32(e + 8) : e + 8;
+                  let str = ''; for (let k = 0; k < Math.min(cnt, 19) && off + k < v.byteLength; k++) str += String.fromCharCode(v.getUint8(off + k));
+                  const mm = str.match(/^(\d{4}):(\d{2}):(\d{2})/);
+                  if (mm && tag !== 0x0132) return mm[1] + '-' + mm[2] + '-' + mm[3];
+                }
+              }
+            }
+          }
+        }
+        o += 2 + len;
+      }
+    }
+  } catch (e) { /* neni JPEG nebo je poskozeny — jdeme na zalozni cestu */ }
+  if (f.lastModified && Date.now() - f.lastModified > 3600 * 1000) {
+    const d = new Date(f.lastModified);
+    const den = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    if (den <= isoToday()) return den;
+  }
+  return null;
+}
+const MAX_FOTEK_STAVBY_NARAZ = 40;
+async function fotkyStavbyVybrat(pid, files) {
+  const seznam = [...files];
+  if (S.fsDraft.length + seznam.length > MAX_FOTEK_STAVBY_NARAZ) {
+    oznam('Naráz jde nahrát nejvíc ' + MAX_FOTEK_STAVBY_NARAZ + ' fotek. Ulož tuhle dávku a pak přidej další.'); return;
+  }
+  S.fsPracuje = true; render();
+  for (const f of seznam) {
+    const ph = await pripravFotku(f);
+    if (!ph) continue;
+    ph.den = await datumZFotky(f);
+    ph.bezData = !ph.den;
+    S.fsDraft.push(ph);
+    render();   // at clovek vidi, jak pribyvaji — tricet fotek chvili trva
+  }
+  S.fsPracuje = false; render();
+}
+function fsNastavDen(tmp, den) { const ph = S.fsDraft.find(x => x.tmp === tmp); if (ph) { ph.den = den || null; } }
+function fsNastavDenSkupine(puvodni, den) {
+  S.fsDraft.forEach(ph => { if ((ph.den || '') === (puvodni || '')) ph.den = den || null; });
+  render();
+}
+function fsOdebrat(tmp) { S.fsDraft = S.fsDraft.filter(x => x.tmp !== tmp); render(); }
+function fsZahodit() { S.fsDraft = []; render(); }
+/* Ulozi kazdou fotku jako vlastni doklad u stavby a zaradi soubory do
+   fronty. ZADNY zapis nevznika — to je cely smysl. */
+async function fotkyStavbyUlozit(pid) {
+  const p = proj(pid); if (!p) return;
+  const bezDne = S.fsDraft.filter(ph => !ph.den);
+  if (bezDne.length) { toast((bezDne.length === 1 ? 'U jedné fotky' : 'U ' + bezDne.length + (bezDne.length < 5 ? ' fotek' : ' fotek')) + ' chybí den — vyber ho, jinak by se založily špatně.'); return; }
+  if (!S.fsDraft.length) return;
+  S.fsPracuje = true; render();
+  let ulozeno = 0;
+  try {
+    for (const ph of S.fsDraft) {
+      const ref = await db.collection('fotky_stavby').add({
+        pid, date: ph.den, thumb: ph.thumb, label: ph.label || '', driveId: null, origId: null,
+        autorUid: S.authUser.uid, autor: fullName(S.me || {}), entryId: null, createdAt: FV()
+      });
+      await zaraditFotkuStavby(p, ph, ref.id, ph.den);
+      ulozeno++;
+    }
+    S.fsDraft = [];
+    toast(ulozeno + (ulozeno === 1 ? ' fotka uložena' : ulozeno < 5 ? ' fotky uloženy' : ' fotek uloženo') + ' ✓ — na Disk se nahrají na pozadí');
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
+  S.fsPracuje = false; render();
+  frontaOdeslat();
+}
+/* Stejne dve polozky jako u fotky v zapisu (prohlizeci kopie + original),
+   jen ciluji na doklad ve /fotky_stavby misto na zapis. */
+async function zaraditFotkuStavby(p, ph, docId, den) {
+  const jmeno = (S.me && S.me.prijmeni) || fullName(S.me || {}) || 'foto';
+  const spol = { fotkaStavbyId: docId, folderId: (p && p.driveFolderId) || '', pid: (p && p.id) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', folderName: nazevSlozkyZakazky(p), date: den };
+  let mamNahled = false;
+  try { if (ph.full) { await frontaPridat({ druh: 'nahled', name: jmeno + '.jpg', mime: 'image/jpeg', data: ph.full, ...spol }); mamNahled = true; } } catch (e) { console.warn('fronta nahled', e); }
+  try { if (ph.orig) await frontaPridat({ druh: 'foto', original: true, name: jmeno + priponaSouboru(ph.orig.name, ph.orig.mime), mime: ph.orig.mime, data: ph.orig.data, ...spol }); }
+  catch (e) { console.warn('fronta original', e); if (!mamNahled) toast('⚠ Fotku se nepodařilo uložit do fronty — zkus ji přidat znovu.'); }
+}
+async function fotkaStavbySmazat(id) {
+  const f = S.fotkyStavby.find(x => x.id === id); if (!f) return;
+  if (!await potvrd('Smazat fotku' + (f.entryId ? ' — je připojená k zápisu, tam zůstane' : '') + '?\n\nSoubor na Disku zůstane, jen zmizí odsud.', 'Smazat')) return;
+  try { await db.collection('fotky_stavby').doc(id).delete(); toast('Smazáno'); } catch (e) { toast('Nesmazalo se — ' + dbErrText(e)); }
+}
+function fotkyStavbyPodleDnu(pid) {
+  const mapa = {};
+  S.fotkyStavby.filter(f => f.pid === pid).forEach(f => { (mapa[f.date] = mapa[f.date] || []).push(f); });
+  return Object.keys(mapa).sort().reverse().map(d => ({ den: d, fotky: mapa[d] }));
+}
+function pgFotkyStavby(p) {
+  const skupiny = {};
+  S.fsDraft.forEach(ph => { const k = ph.den || ''; (skupiny[k] = skupiny[k] || []).push(ph); });
+  const kliceSkupin = Object.keys(skupiny).sort((a, b) => (a === '' ? 1 : b === '' ? -1 : b.localeCompare(a)));
+  const existujici = fotkyStavbyPodleDnu(p.id);
+  return `<main>
+    <div class="card">
+      <h3>📷 Fotky ke stavbě <span class="muted" style="font-weight:400">— bez zápisu, po dnech</span></h3>
+      <div class="note" style="margin-top:0">Vyber fotky klidně za víc dní naráz. Den se přečte přímo z fotky; kde v ní není, vybereš ho sám.
+        Fotky tu zůstanou u stavby a dne — <b>do zápisu se nepřidají samy</b>, jen se v něm nabídnou.</div>
+      <label class="btn amber" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer;margin-top:8px">📷 Vybrat fotky<input type="file" accept="image/*" multiple hidden onchange="fotkyStavbyVybrat('${p.id}', this.files); this.value=''"></label>
+      ${S.fsPracuje ? '<span class="muted" style="margin-left:10px"><span class="updspin"></span> zpracovávám…</span>' : ''}
+      ${S.fsDraft.length ? `
+        <div style="margin-top:14px">
+          ${kliceSkupin.map(k => `
+          <div style="border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin-bottom:10px${k === '' ? ';border-color:var(--red)' : ''}">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+              <b>${k ? fmtISOFull(k) : '⚠ Bez data — vyber den'}</b>
+              <span class="muted">${skupiny[k].length} ${skupiny[k].length === 1 ? 'fotka' : skupiny[k].length < 5 ? 'fotky' : 'fotek'}</span>
+              <input type="date" value="${k}" max="${isoToday()}" style="margin-left:auto;width:auto" title="Přesunout celou skupinu na jiný den" onchange="fsNastavDenSkupine('${k}', this.value)">
+            </div>
+            <div class="photos">${skupiny[k].map(ph => `<div class="ph"><img src="${ph.thumb}"><span class="del" onclick="fsOdebrat('${ph.tmp}')">✕</span><small>${esc(ph.label)}</small></div>`).join('')}</div>
+          </div>`).join('')}
+          <div class="aprv">
+            <button class="btn amber" ${S.fsPracuje ? 'disabled' : ''} onclick="fotkyStavbyUlozit('${p.id}')">💾 Uložit ${S.fsDraft.length} ${S.fsDraft.length === 1 ? 'fotku' : S.fsDraft.length < 5 ? 'fotky' : 'fotek'}</button>
+            <button class="btn ghost" onclick="fsZahodit()">Zahodit</button>
+          </div>
+        </div>` : ''}
+    </div>
+    <div class="card">
+      <h3>Co už u stavby je <span class="muted" style="font-weight:400">— posledních ${OKNO_DNU} dní</span></h3>
+      ${existujici.length ? existujici.map(g => `
+        <div style="margin-bottom:12px">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><b>${fmtISOFull(g.den)}</b>
+            <span class="muted">${g.fotky.length} ${g.fotky.length === 1 ? 'fotka' : g.fotky.length < 5 ? 'fotky' : 'fotek'}</span>
+            ${g.fotky.some(f => !f.entryId) ? `<span class="badge b-wait">${g.fotky.filter(f => !f.entryId).length} bez zápisu</span>` : '<span class="badge b-ok">v zápisu</span>'}</div>
+          <div class="photos">${g.fotky.map(f => `<div class="ph" onclick="otevritFoto('${f.id}','${f.driveId || ''}','${jsAttr(f.label || '')}',this,'${f.origId || ''}')"><img src="${f.thumb}">${f.driveId ? '' : '<span class="st" title="Ještě se nahrává na Disk">⏳</span>'}<span class="del" onclick="event.stopPropagation();fotkaStavbySmazat('${f.id}')">✕</span><small>${esc(f.label || '')}</small></div>`).join('')}</div>
+        </div>`).join('') : '<div class="empty">Zatím žádné fotky ke stavbě.</div>'}
+    </div>
+  </main>`;
 }
 async function zaraditFotky(p, entryId, den) {
   const out = [];
@@ -2746,6 +2930,8 @@ function pgProjDetail() {
        a bez moznosti dohlednout dal nez mesic. Vsechno, co umela (otevreni
        fotky, prepinani stavu ⏳→✓→🔒), umi galerie taky. */
     body = `<main>${fgTelo(p.id)}</main>`;
+  } else if (t === 'fotkystavby') {
+    body = pgFotkyStavby(p);
   } else if (t === 'podklady') {
     const docs = p.stavbaDocs || [];
     body = `<main><div class="card">
@@ -2780,7 +2966,8 @@ function pgProjDetail() {
   <div class="strip"><span class="back" onclick="goPage('projekty')">←</span><h1>${esc(p.name)}</h1><span class="sp"></span></div>
   <div class="sectabs">
     <div class="t ${t === 'info' ? 'active' : ''}" onclick="S.projDetailTab='info';render()">ℹ️ Základní informace</div>
-    <div class="t ${t === 'media' ? 'active' : ''}" onclick="S.projDetailTab='media';render()">🖼 Fotky</div>
+    <div class="t ${t === 'media' ? 'active' : ''}" onclick="S.projDetailTab='media';render()">🖼 Galerie</div>
+    <div class="t ${t === 'fotkystavby' ? 'active' : ''}" onclick="S.projDetailTab='fotkystavby';render()">📷 Fotky ke stavbě${S.fotkyStavby.filter(f => f.pid === p.id && !f.entryId).length ? ` <span class="badge b-wait">${S.fotkyStavby.filter(f => f.pid === p.id && !f.entryId).length}</span>` : ''}</div>
     <div class="t ${t === 'podklady' ? 'active' : ''}" onclick="S.projDetailTab='podklady';render()">📐 Podklady stavby (${(p.stavbaDocs || []).length})</div>
     <div class="t ${t === 'dokumenty' ? 'active' : ''}" onclick="S.projDetailTab='dokumenty';render()">📁 Dokumenty pro investora</div>
     <div class="t ${t === 'ukoly' ? 'active' : ''}" onclick="S.projDetailTab='ukoly';render()">📌 Úkoly (${S.tasks.filter(x => x.pid === p.id && x.stav !== 'hotovo' && x.stav !== 'sablona').length})</div>
@@ -4073,6 +4260,18 @@ function fotkyVyber(pid) {
       seznam.push({ ...ph, eid: e.id, date: e.date, author: e.author || '', pid: e.pid, veta: fotoVeta(e) });
     });
   });
+  /* Fotky ke stavbe bez zapisu patri do galerie taky — jinak by je vedeni
+     hledalo jen v zalozce stavby. Ty uz pripojene k zapisu jsou v nem
+     (a tedy v seznamu vyse), tak se nepridavaji dvakrat. */
+  S.fotkyStavby.forEach(f => {
+    if (f.entryId || !f.thumb) return;
+    if (pid ? f.pid !== pid : (S.fgProj && f.pid !== S.fgProj)) return;
+    if (od && f.date < od) return;
+    if (do_ && f.date > do_) return;
+    if (S.fgAutor && (f.autor || '') !== S.fgAutor) return;
+    seznam.push({ id: f.id, thumb: f.thumb, label: f.label, driveId: f.driveId, origId: f.origId, status: 'stavba', eid: null, date: f.date, author: f.autor || '', pid: f.pid, veta: 'fotka ke stavbě — bez zápisu' });
+  });
+  seznam.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   return seznam;
 }
 /* Veta ze zapisu pod velkou fotkou: prvni radek zneni pro investora,
