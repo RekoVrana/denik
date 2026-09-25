@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 ay';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 az';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -93,6 +93,27 @@ function updBar() {
     <button class="btn dark sm" onclick="S.updateReady=false;updBar()">Později</button>
   </div>` : '';
 }
+/* Po aktualizaci se aplikace nacte znovu a bez tehle pameti by vzdycky
+   skocila na nastenku (Marco 25. 9. 2026: „rad bych aby me to aktualizovalo
+   jen misto kde se nachazim"). Ulozi se jen to, KDE clovek byl — zadna
+   data. Pamet zije v sessionStorage, tedy jen do zavreni karty, a vezme se
+   jen pro stejneho prihlaseneho cloveka. */
+const MISTO_KLICE = ['view', 'detail', 'projDetailId', 'projDetailTab', 'nastenkaTab', 'osobaId', 'osobaTab',
+  'ukolyView', 'harmoTab', 'harmoPosun', 'orgFilter', 'mobTab', 'workerProject', 'subProject', 'prohlizenaStavba', 'denikDen', 'pasekPosun'];
+function zapamatujMisto() {
+  try {
+    const m = { uid: S.authUser ? S.authUser.uid : null, scrollY: window.scrollY || 0 };
+    MISTO_KLICE.forEach(k => { m[k] = S[k]; });
+    sessionStorage.setItem('vranaMisto', JSON.stringify(m));
+  } catch (e) {}
+}
+function obnovMisto() {
+  let m = null;
+  try { m = JSON.parse(sessionStorage.getItem('vranaMisto') || 'null'); sessionStorage.removeItem('vranaMisto'); } catch (e) {}
+  if (!m || !S.authUser || m.uid !== S.authUser.uid) return;
+  MISTO_KLICE.forEach(k => { if (m[k] !== undefined) S[k] = m[k]; });
+  setTimeout(() => window.scrollTo(0, m.scrollY || 0), 400);
+}
 async function aktualizovatApp() {
   if (S.updating) return;
   S.updating = true; render();
@@ -123,6 +144,7 @@ async function aktualizovatApp() {
       await Promise.all(klice.map(k => caches.delete(k)));
     }
   } catch (e) { /* i kdyz se neco nepovede, stejne zkusime nacist znovu */ }
+  zapamatujMisto();
   // cache-busting parametr — iOS umi byt hodne tvrdohlave
   const u = new URL(location.href);
   u.searchParams.set('v', String(Date.now()).slice(-8));
@@ -1967,7 +1989,7 @@ function initAuth() {
           S.meAuth = d.data();
           const me = await ctiSPokusem(() => db.collection('users').doc(S.meAuth.userDocId).get());
           S.me = me.exists ? { id: me.id, ...me.data() } : null;
-          S.authState = 'in'; startData(); render();
+          S.authState = 'in'; obnovMisto(); startData(); render();
           /* Adresa zarizeni se casem sama meni. Bez tichého obnoveni pri
              kazdem spusteni by upozorneni jednoho dne prestala chodit
              a nikdo by se to nedozvedel. */
@@ -6493,17 +6515,14 @@ function pgUzivatele() {
       <div class="tabletools"><div class="search"><input id="q-uziv" placeholder="Hledat — jméno, e-mail, popis" value="${esc(S.uzHledat || '')}" oninput="S.uzHledat=this.value;render()"></div>
         ${(S.uzHledat || '').trim() ? `<button class="btn ghost sm" onclick="S.uzHledat='';zapomen('q-uziv');render()">✕ Zrušit hledání</button>` : ''}</div>
       <div style="overflow-x:auto"><table>
-        <tr><th></th><th>Jméno</th><th>Email</th><th>Kancelářský</th><th>Terénní</th><th>Investor</th><th>Sub</th><th>Sazba hrubá / čistá</th><th>Popis</th><th>Přihlášení</th><th></th></tr>
+        <tr><th></th><th>Jméno</th><th>Email</th><th>Typ</th><th>Sazba hrubá / čistá</th><th>Popis</th><th>Přihlášení</th><th></th></tr>
         ${uzFiltrovani().map(u => { const t = u.typ || {}; const s = S.sazby[u.id]; return `
         <tr style="${u.active === false ? 'opacity:.5' : ''}">
           <td><span class="uav">${ini(u)}</span></td>
           <td><b class="lnk" style="color:inherit" title="Otevřít kartu — hodiny, výplata, poznámky, záznamy" onclick="otevriOsobu('${u.id}')">${esc(fullName(u))}</b>${(JMENOVCI[jmenoKlic(u)] || 1) > 1
             ? `<br><span class="badge b-red" style="margin-top:3px">⚠ ${JMENOVCI[jmenoKlic(u)] === 2 ? 'Dva účty' : JMENOVCI[jmenoKlic(u)] + (JMENOVCI[jmenoKlic(u)] < 5 ? ' účty' : ' účtů')} se stejným jménem</span>` : ''}</td>
           <td class="muted">${esc(kontaktOsoby(u.id).email || '—')}</td>
-          <td style="text-align:center">${t.kanc ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
-          <td style="text-align:center">${t.teren ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
-          <td style="text-align:center">${t.inv ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
-          <td style="text-align:center">${t.sub ? '<span class="ck on">✓</span>' : '<span class="ck"></span>'}</td>
+          <td style="white-space:nowrap">${typUzivateleText(u)}</td>
           <td>${s && s.h ? `<b>${s.h} Kč/h</b>${s.c ? ` / <span style="color:var(--ok);font-weight:700">${s.c} Kč/h</span>` : ''}${sazbaHist(s).length > 1 ? `<br><span class="muted" style="font-size:11px">od ${fmtISO(sazbaHist(s)[sazbaHist(s).length - 1].od)} · ${sazbaHist(s).length}× měněno</span>` : ''}` : (t.teren && !t.kanc ? '<b style="color:var(--red)">⚠ chybí</b>' : '<span class="muted">—</span>')}</td>
           <td>${esc(u.role || '—')}</td>
           <td style="white-space:nowrap">${u.uid
@@ -6893,6 +6912,11 @@ async function delUser(udi) {
    nemohly rozejit. Drive se pri zmene typu uzivatele role v roster/users_auth
    neprepsala a clovek zustal treba adminem. */
 function roleOfTypeKey(k) { return k === 'kanc' ? 'admin' : k === 'sub' ? 'sub' : 'worker'; }
+/* Ucet ma vzdy jen jednu roli (Marco 25. 9. 2026), takze v tabulce staci
+   jeden sloupec misto ctyr zaskrtavacich — na pocitaci se jinak muselo
+   za tuzkou a kosem posouvat doprava. */
+const TYP_UZIVATELE_TEXT = { kanc: '🗂 Vedení', teren: '👷 Pracovník', sub: '🔧 Subdodavatel', inv: '🏠 Investor' };
+function typUzivateleText(u) { return TYP_UZIVATELE_TEXT[typeKeyOfUser(u)] || '—'; }
 function typeKeyOfUser(u) {
   const t = (u && u.typ) || {};
   return t.kanc ? 'kanc' : t.inv ? 'inv' : t.sub ? 'sub' : 'teren';
