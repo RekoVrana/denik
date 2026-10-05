@@ -56,7 +56,7 @@ function navodWorker() {
     ${navodKrok('✍️', 'Napiš, co jsi dělal',
         'Ve stejné záložce <b>🕐 Dnes</b>, kousek níž, je <b>✍️ Nový zápis do deníku</b>. '
       + 'Piš krátce, každá věta je jedna odrážka. '
-      + 'Pak ťukni <b>📷 Vyfotit / vybrat z galerie</b> a přidej fotky — nejvíc 8, '
+      + 'Pak ťukni <b>📸 Vyfotit</b> (otevře foťák) nebo <b>🖼 Z galerie</b> (víc fotek najednou) a přidej fotky — nejvíc 8, '
       + 'aspoň jedna musí být. '
       + 'Nakonec <b>📤 ODESLAT ZÁPIS</b>.')}
 
@@ -129,7 +129,7 @@ function navodSub() {
       + 'napiš aspoň jednu větu, klidně krátkou.')}
 
     ${navodKrok('📷', 'Přidej fotky',
-        'Ve stejném okně ťukni <b>📷 Vyfotit / vybrat z galerie</b> a přidej fotky toho, '
+        'Ve stejném okně ťukni <b>📸 Vyfotit</b> (otevře foťák) nebo <b>🖼 Z galerie</b> (víc fotek najednou) a přidej fotky toho, '
       + 'co jste udělali — nejvíc 8. <b>Bez fotky odchod zapsat nejde.</b> '
       + 'Podle fotek vedení pozná, že je práce hotová, a ukazuje je zákazníkovi. '
       + 'Nakonec ťukni <b>🏁 ODESLAT A ZAPSAT ODCHOD</b>.')}

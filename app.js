@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 az';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 ba';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -7984,7 +7984,7 @@ function kartaUkoly(p) {
         <label>Stavba</label>
         <select id="wtk-p">${S.projects.filter(x => x.active !== false).map(x => `<option value="${x.id}" ${p && x.id === p.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
         <label>Fotka k úkolu <span class="muted" style="text-transform:none;font-weight:400">— vyfoť nebo přilož · po vyřízení úkolu se fotky smažou</span></label>
-        <label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">📷 Vyfotit / vybrat z galerie<input type="file" accept="image/*" multiple hidden onchange="ukolFotoPridat(this.files)"></label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">📸 Vyfotit<input type="file" accept="image/*" capture="environment" hidden onchange="ukolFotoPridat(this.files)"></label><label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">🖼 Z galerie<input type="file" accept="image/*" multiple hidden onchange="ukolFotoPridat(this.files)"></label></div>
         ${(S.taskFoto || []).length ? `<div class="photos">${S.taskFoto.map((f, i) => `<div class="ph"><img src="${f.thumb}"><span class="del" onclick="S.taskFoto.splice(${i},1);render()">✕</span></div>`).join('')}</div>` : ''}
         <div class="aprv"><button class="btn amber" onclick="workerAddTask()">➕ Zadat úkol</button></div>
       </div>` : ''}
@@ -8053,7 +8053,7 @@ function viewSub() {
           <label>Co jste dnes udělali? *</label>
           <textarea id="so-z" placeholder="Rozvody vody v koupelně hotové, zbývá napojit pračku…">${esc(S.subZaznam || '')}</textarea>
           <label>Fotky toho, co jste udělali</label>
-          <label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">📷 Vyfotit / vybrat z galerie<input type="file" accept="image/*" multiple hidden onchange="S.subZaznam=document.querySelector('#so-z').value;processPhotos(this.files)"></label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap"><label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">📸 Vyfotit<input type="file" accept="image/*" capture="environment" hidden onchange="S.subZaznam=document.querySelector('#so-z').value;processPhotos(this.files)"></label><label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">🖼 Z galerie<input type="file" accept="image/*" multiple hidden onchange="S.subZaznam=document.querySelector('#so-z').value;processPhotos(this.files)"></label></div>
           <div class="photos">${S.draftPhotos.map((ph, i) => `<div class="ph"><img src="${ph.thumb}"><span class="del" onclick="S.draftPhotos.splice(${i},1);render()">✕</span></div>`).join('')}</div>
           <div class="aprv">
             <button class="btn amber velke" onclick="subOdchod()">🏁 ODESLAT A ZAPSAT ODCHOD</button>
@@ -8391,7 +8391,9 @@ function viewWorker() {
       <h3>✍️ Nový zápis do deníku</h3>
       <textarea id="wt" placeholder="Co se dnes dělalo… každá věta = jedna odrážka"></textarea>
       <label>Fotky z dneška</label>
-      <label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">📷 Vyfotit / vybrat z galerie<input type="file" id="wph" accept="image/*" multiple hidden onchange="processPhotos(this.files)"></label>
+      <!-- dve tlacitka schvalne: jeden vyber s povolenym vyberem vice fotek
+           otevre na Androidu rovnou galerii bez fotaku (Marco 5. 10. 2026) -->
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">📸 Vyfotit<input type="file" id="wph" accept="image/*" capture="environment" hidden onchange="processPhotos(this.files)"></label><label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">🖼 Z galerie<input type="file" accept="image/*" multiple hidden onchange="processPhotos(this.files)"></label></div>
       <div class="photos">${S.draftPhotos.map((ph, i) => `<div class="ph"><img src="${ph.thumb}"><span class="del" onclick="S.draftPhotos.splice(${i},1);render()">✕</span><small>${esc(ph.label)}</small></div>`).join('')}</div>
       <div class="aprv"><button class="btn amber" id="w-save" onclick="workerSubmit()">📤 ODESLAT ZÁPIS</button></div>
       <div class="note">Zápis jde vedení ke schválení — investor ho zatím nevidí. ${S.online ? '' : '<b>Jsi offline — text se odešle po připojení, fotky přidej pak.</b>'}</div>
