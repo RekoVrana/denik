@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 ba';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '31. 8. 2026 bb';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -890,7 +890,7 @@ function pickGeo(i) {
    odpoved nedorazi. Zapisujici akce (upload, createFolder, notify) tady
    ZAMERNE nejsou: kdyby soubor doopravdy nahrany byl a ztratila se jen
    odpoved, druhy pokus by ho nahral podruhe. */
-const DRIVE_OPAKOVATELNE = ['listPodklady', 'getFile', 'getPhoto', 'readProject', 'findFolder'];
+const DRIVE_OPAKOVATELNE = ['listPodklady', 'getFile', 'getPhoto', 'readProject', 'findFolder', 'findByKey'];
 /* Zjisteno 2. 9. 2026: zhruba kazdy druhy dotaz na most se vratil jako
    404, a to i kdyz o chvili pozdeji stejny dotaz prosel. Ve vypisu spusteni
    Apps Scriptu po tech neuspesnych neni ANI JEDEN zaznam — pozadavek se
@@ -973,7 +973,17 @@ function frontaTx(mode, fn) {
     t.onerror = () => no(t.error);
   }));
 }
+/* Kazda polozka dostane vlastni klic. Most si ho ulozi k souboru na Disku,
+   a kdyz se odpoved po ceste ztrati (Google obcas misto odpovedi vrati
+   stranku „nenalezeno"), appka se uz na tutez fotku neposila znovu —
+   zepta se mostu podle klice, jestli uz tam neni. Bez toho se jedna fotka
+   objevila na Disku i trikrat a v appce porad „cekala" (Falat, 6.–7. 10. 2026). */
+function frontaKlic() {
+  const b = new Uint8Array(12); crypto.getRandomValues(b);
+  return Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+}
 async function frontaPridat(polozka) {
+  if (!polozka.klic) polozka.klic = frontaKlic();
   await frontaTx('readwrite', st => st.add(polozka));
   await frontaSpocitat();
 }
@@ -1070,6 +1080,16 @@ async function slozkaProUpload(cn, pid) {
   }
   return nalezene[0].id;
 }
+/* Zepta se mostu, jestli uz soubor s timhle klicem ve slozce je. Vraci
+   fileId nebo '' — nikdy nehazi, aby se fronta chovala stejne jako driv,
+   kdyz most tuhle akci (zatim) nezna. */
+async function frontaNajdiPodleKlice(folderId, klic) {
+  if (!klic) return '';
+  try {
+    const j = await driveCallOpakuj({ action: 'findByKey', folderId, klic, rootId: CFG.driveRootFolderId });
+    return (j && j.fileId) || '';
+  } catch (e) { console.warn('fronta: hledani podle klice', e); return ''; }
+}
 async function frontaOdeslat() {
   if (_frontaBezi || !S.online || !CFG.scriptUrl) return;
   /* Zamek MUSI byt driv nez prvni await — jinak dve soucasna volani
@@ -1100,13 +1120,35 @@ async function frontaOdeslat() {
             zmeskano++;
             continue;
           }
-          const j = await driveCall({
-            action: 'upload', folderId: slozka, rootId: CFG.driveRootFolderId,
-            cn: it.cn, client: it.client, folderName: it.folderName || '', date: it.date, name: it.name,
-            druh: it.druh || 'foto',          // most podle toho vybere podsložku v 09_Denik_staveb
-            data: String(it.data).split(',')[1], mime: it.mime || 'application/octet-stream'
-          });
-          fileId = j.fileId;
+          /* Stare polozky (pred zavedenim klice) ho dostanou ted, at se
+             i u nich pozna, co uz na Disku je. */
+          if (!it.klic) { it.klic = frontaKlic(); try { await frontaTx('readwrite', st => st.put(it)); } catch (e2) {} }
+          /* Uz jsme to jednou poslali a odpoved se ztratila? Nejdriv se
+             zeptat podle klice — je to par bajtu misto dalsich 3 MB
+             a hlavne zadny duplikat. */
+          if (it.odeslano) fileId = await frontaNajdiPodleKlice(slozka, it.klic);
+          if (!fileId) {
+            it.odeslano = true;
+            try { await frontaTx('readwrite', st => st.put(it)); } catch (e2) {}
+            let j;
+            try {
+              j = await driveCall({
+                action: 'upload', folderId: slozka, rootId: CFG.driveRootFolderId,
+                cn: it.cn, client: it.client, folderName: it.folderName || '', date: it.date, name: it.name,
+                druh: it.druh || 'foto',          // most podle toho vybere podsložku v 09_Denik_staveb
+                klic: it.klic,
+                data: String(it.data).split(',')[1], mime: it.mime || 'application/octet-stream'
+              });
+            } catch (e) {
+              /* Pozadavek odesel, jen odpoved nedorazila: soubor na Disku
+                 nejspis uz je. Zeptat se podle klice driv, nez to vzdame. */
+              if (!(e && e.docasne)) throw e;
+              const nalezeno = await frontaNajdiPodleKlice(slozka, it.klic);
+              if (!nalezeno) throw e;
+              j = { fileId: nalezeno };
+            }
+            fileId = j.fileId;
+          }
           /* Most odpovedel, ale soubor nezalozil. Opakovani nepomuze a zapis
              `undefined` by Firestore odmitl — polozku proto rovnou vzdame,
              at nedrzi frontu (za ni cekaji dalsi fotky i selfie z dochazky). */
