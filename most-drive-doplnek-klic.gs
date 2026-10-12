@@ -12,6 +12,9 @@
    navíc umí zeptat jen podle klíče (akce `findByKey`), aniž by posílala
    znovu 3 MB dat.
 
+   NASAZENO 12. 10. 2026 jako verze 16 mostu (doplněk je vložený přímo do Kód.gs:
+   větev findByKey v doPost, kontrola klíče v handleUpload, funkce najdiPodleKlice).
+
    JAK NASADIT (ve skriptu mostu, Rozšíření → Apps Script):
    1. Celý tento soubor vložit jako nový soubor skriptu (Soubor → +).
    2. V doPost, hned za rozpoznání akce, přidat tyto dva řádky:

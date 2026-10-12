@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '31. 8. 2026 bb';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '12. 10. 2026';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -1434,6 +1434,12 @@ async function fotkyStavbyVybrat(pid, files) {
     const ph = await pripravFotku(f);
     if (!ph) continue;
     ph.den = await datumZFotky(f);
+    /* Fotka bez data v EXIF (typicky HEIC z galerie iPhonu — appka čte jen
+       JPEG): vezme se čas souboru, ten u fotek z telefonu odpovídá pořízení.
+       Označí se jako odhad, ať si ho člověk zkontroluje — dřív tu bez data
+       uložení vůbec neprošlo a vypadalo to, že „fotky nejdou nahrát". */
+    ph.denOdhad = false;
+    if (!ph.den && f.lastModified) { const d = new Date(f.lastModified); if (!isNaN(d) && d.getTime() < Date.now() + 864e5 && d.getFullYear() > 2015) { ph.den = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); ph.denOdhad = true; } }
     ph.bezData = !ph.den;
     S.fsDraft.push(ph);
     render();   // at clovek vidi, jak pribyvaji — tricet fotek chvili trva
@@ -1499,7 +1505,7 @@ function pgFotkyStavby(p) {
   return `<main>
     <div class="card">
       <h3>📷 Fotky ke stavbě <span class="muted" style="font-weight:400">— bez zápisu, po dnech</span></h3>
-      <div class="note" style="margin-top:0">Vyber fotky klidně za víc dní naráz. Den se přečte přímo z fotky; kde v ní není, vybereš ho sám.
+      <div class="note" style="margin-top:0">Vyber fotky klidně za víc dní naráz. Den se přečte přímo z fotky; kde v ní není (např. HEIC z iPhonu), vezme se čas souboru a skupina je označená „zkontroluj den".
         Fotky tu zůstanou u stavby a dne — <b>do zápisu se nepřidají samy</b>, jen se v něm nabídnou.</div>
       <label class="btn amber" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer;margin-top:8px">📷 Vybrat fotky<input type="file" accept="image/*" multiple hidden onchange="fotkyStavbyVybrat('${p.id}', this.files); this.value=''"></label>
       ${S.fsPracuje ? '<span class="muted" style="margin-left:10px"><span class="updspin"></span> zpracovávám…</span>' : ''}
@@ -1510,6 +1516,7 @@ function pgFotkyStavby(p) {
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
               <b>${k ? fmtISOFull(k) : '⚠ Bez data — vyber den'}</b>
               <span class="muted">${skupiny[k].length} ${skupiny[k].length === 1 ? 'fotka' : skupiny[k].length < 5 ? 'fotky' : 'fotek'}</span>
+              ${k && skupiny[k].some(ph => ph.denOdhad) ? '<span class="badge b-wait" title="Fotka nemá datum pořízení, den je z času souboru">den z času souboru — zkontroluj</span>' : ''}
               <input type="date" value="${k}" max="${isoToday()}" style="margin-left:auto;width:auto" title="Přesunout celou skupinu na jiný den" onchange="fsNastavDenSkupine('${k}', this.value)">
             </div>
             <div class="photos">${skupiny[k].map(ph => `<div class="ph"><img src="${ph.thumb}"><span class="del" onclick="fsOdebrat('${ph.tmp}')">✕</span><small>${esc(ph.label)}</small></div>`).join('')}</div>
