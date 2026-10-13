@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '12. 10. 2026 b';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '13. 10. 2026';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -2047,8 +2047,14 @@ async function cyclePhoto(eid, phid) {
   }
 }
 
-/* ---------- e-mail notifikace přes Apps Script (volitelné) ---------- */
+/* ---------- e-mail notifikace: VYPNUTO (Marco 13. 10. 2026) ----------
+   Aplikace investorům nic neposílá. Dřív odcházel e-mail přes most při
+   schválení zápisu a při nacenění vícepráce; Marco to nikdy nezadal a
+   nechce, aby odcházelo cokoliv. Funkce zůstává jako prázdná, ať volání
+   v kódu nepadají — zapnout by šlo jen jeho výslovným rozhodnutím. */
+const EMAILY_VYPNUTY = true;
 function notifyMail(kind, pid, text) {
+  if (EMAILY_VYPNUTY) return;
   if (!CFG.scriptUrl) return;
   const p = proj(pid); if (!p) return;
   const mail = kontaktStavby(pid).email || '';   // S4b: kontakt uz neni na stavbe
@@ -5764,7 +5770,7 @@ async function vpNacenit(id) {
   if (tok) {
     await db.collection('portals').doc(tok).collection('vp').doc(id).set({ title: v.title, popis: v.popis || '', cena: c, stav: 'u_investora' });
     notifyMail('vp', v.pid, v.title + ' — ' + kc(c) + ' Kč');
-    toast('Posláno investorovi ke schválení + notifikace 📬');
+    toast('Posláno investorovi ke schválení — uvidí to na portálu (e-mail se neposílá)');
   } else toast('Naceněno ✓ — stavba nemá portál, schválení vyřiď papírově');
   render();
 }
