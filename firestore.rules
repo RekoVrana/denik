@@ -7,7 +7,11 @@
 //  Živá verze: Firebase konzole → Firestore → Rules
 //  Když se změní tam, změň i tady, ať kopie nezastará.
 //
-//  Poslední změna 25. 9. 2026 (fotky ke stavbě):
+//  Poslední změna 12. 10. 2026 (fotky ke stavbě → zápis):
+//  23) /fotky_stavby: autor smí nastavit entryId (převzetí do svého zápisu),
+//      jen z null na hodnotu. Nasazeno 12. 10. 2026.
+//
+//  Změna 25. 9. 2026 (fotky ke stavbě):
 //  22) Přibyla /fotky_stavby — fotky u stavby a dne bez zápisu. Autor smí
 //      dopsat jen odkazy na Drive (fronta z jeho telefonu), připojení
 //      k zápisu a mazání cizích je jen vedení.
@@ -233,9 +237,14 @@ service cloud.firestore {
         && request.resource.data.thumb is string
         && request.resource.data.thumb.size() < 60000
         && request.resource.data.keys().hasOnly(['pid', 'date', 'thumb', 'label', 'driveId', 'origId', 'autorUid', 'autor', 'entryId', 'createdAt']);
+      // 12. 10. 2026: autor smi fotku i PREVZIT do sveho zapisu (entryId jen
+      // z prazdna na hodnotu, zpet uz ne) — vedeni ji k zapisu pripojuje dal
+      // bez omezeni. Co investor uvidi, porad rozhoduje schvaleni zapisu.
       allow update: if isAdmin()
         || (hasRole() && resource.data.autorUid == request.auth.uid
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['driveId', 'origId']));
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['driveId', 'origId', 'entryId'])
+            && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['entryId'])
+                || (resource.data.entryId == null && request.resource.data.entryId is string)));
       allow delete: if isAdmin() || (hasRole() && resource.data.autorUid == request.auth.uid);
     }
 
@@ -560,5 +569,29 @@ service cloud.firestore {
         allow read, update, delete: if isAdmin();
       }
     }
+
+    // ===== Elektro editor — blok pravidel pro Firestore (přidáno 7. 10. 2026) =====
+    //   Přístup má JEN uživatel, který má v users_auth/{uid} pole `elektro`:
+    //     ["*"]            = všechny zakázky (správce)
+    //     ["belcicka", …]  = jen vyjmenované zakázky (subdodavatel)
+    //   Role z Deníku (admin/worker/sub) sama o sobě přístup NEDÁVÁ.
+    //   Data Elektra bydlí jen v /elektro_zakazky — do kolekcí Deníku nesahá.
+    function elektroSeznam() {
+      return get(/databases/$(database)/documents/users_auth/$(request.auth.uid)).data.get('elektro', []);
+    }
+    function elektroSmi(jobId) {
+      return request.auth != null && ('*' in elektroSeznam() || jobId in elektroSeznam());
+    }
+    match /elektro_zakazky/{jobId} {
+      allow read: if elektroSmi(jobId);
+      allow write: if request.auth != null && '*' in elektroSeznam();
+      match /stav/{doc} {
+        allow read, write: if elektroSmi(jobId);
+      }
+      match /historie/{doc} {
+        allow read, write: if elektroSmi(jobId);
+      }
+    }
+
   }
 }

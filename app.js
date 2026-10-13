@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '12. 10. 2026';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '12. 10. 2026 b';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -288,6 +288,7 @@ const S = {
   /* galerie fotek (viz sekce GALERIE FOTEK): filtry a kolik dlazdic uz kreslime */
   fgFrom: '', fgTo: '', fgProj: null, fgAutor: '', fgZobrazeno: 60,
   fotkyStavby: [], fsDraft: [], fsPracuje: false,   // fotky ke stavbe bez zapisu
+  fsPick: new Set(), fsPickVse: false,                // fotky ke stavbe vybrane do rozepsaneho zapisu
   portalSync: null,        // prubeh srovnavani slozky pro investora
   denikDen: null,          // vybrany den na pasku nad zapisy
   pasekScroll: null,       // null = otevri na dnesku
@@ -1214,6 +1215,11 @@ async function frontaZapsatDoZaznamu(it, fileId) {
   if (it.fotkaStavbyId) {
     const pole = (it.druh === 'foto' && it.original) ? 'origId' : 'driveId';
     await db.collection('fotky_stavby').doc(it.fotkaStavbyId).update({ [pole]: fileId });
+    /* fotku už mohl převzít zápis — ten potřebuje odkaz taky, jinak by měl navždy jen dlaždici */
+    for (const e of (S.entries || []).filter(x => (x.photos || []).some(ph => ph.fotkaStavbyId === it.fotkaStavbyId))) {
+      try { const fresh = await cerstveFotky(e.id, e.photos); await db.collection('entries').doc(e.id).update({ photos: fresh.map(ph => ph.fotkaStavbyId === it.fotkaStavbyId ? { ...ph, [pole]: fileId } : ph) }); }
+      catch (err) { console.warn('odkaz do zapisu z fotky ke stavbe', err); }
+    }
     return;
   }
   if (it.druh === 'selfie') {
@@ -1326,7 +1332,7 @@ async function pripravFotku(f, label) {
 }
 async function processPhotos(files, label) {
   for (const f of files) {
-    if (S.draftPhotos.length >= MAX_FOTEK_ZAZNAMU) {
+    if (S.draftPhotos.length + S.fsPick.size >= MAX_FOTEK_ZAZNAMU) {
       oznam('Do jednoho záznamu jde nejvíc ' + MAX_FOTEK_ZAZNAMU + ' fotek — víc by se nevešlo a záznam by se neuložil.\nDalší fotky prosím přidej do nového zápisu.');
       break;
     }
@@ -1489,7 +1495,7 @@ async function zaraditFotkuStavby(p, ph, docId, den) {
 }
 async function fotkaStavbySmazat(id) {
   const f = S.fotkyStavby.find(x => x.id === id); if (!f) return;
-  if (!await potvrd('Smazat fotku' + (f.entryId ? ' — je připojená k zápisu, tam zůstane' : '') + '?\n\nSoubor na Disku zůstane, jen zmizí odsud.', 'Smazat')) return;
+  if (!await potvrd('Smazat fotku' + (fsPripojene().has(f.id) ? ' — je připojená k zápisu, tam zůstane' : '') + '?\n\nSoubor na Disku zůstane, jen zmizí odsud.', 'Smazat')) return;
   try { await db.collection('fotky_stavby').doc(id).delete(); toast('Smazáno'); } catch (e) { toast('Nesmazalo se — ' + dbErrText(e)); }
 }
 function fotkyStavbyPodleDnu(pid) {
@@ -1501,7 +1507,7 @@ function pgFotkyStavby(p) {
   const skupiny = {};
   S.fsDraft.forEach(ph => { const k = ph.den || ''; (skupiny[k] = skupiny[k] || []).push(ph); });
   const kliceSkupin = Object.keys(skupiny).sort((a, b) => (a === '' ? 1 : b === '' ? -1 : b.localeCompare(a)));
-  const existujici = fotkyStavbyPodleDnu(p.id);
+  const existujici = fotkyStavbyPodleDnu(p.id); const pripojene = fsPripojene();
   return `<main>
     <div class="card">
       <h3>📷 Fotky ke stavbě <span class="muted" style="font-weight:400">— bez zápisu, po dnech</span></h3>
@@ -1533,15 +1539,15 @@ function pgFotkyStavby(p) {
         <div style="margin-bottom:12px">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><b>${fmtISOFull(g.den)}</b>
             <span class="muted">${g.fotky.length} ${g.fotky.length === 1 ? 'fotka' : g.fotky.length < 5 ? 'fotky' : 'fotek'}</span>
-            ${g.fotky.some(f => !f.entryId) ? `<span class="badge b-wait">${g.fotky.filter(f => !f.entryId).length} bez zápisu</span>` : '<span class="badge b-ok">v zápisu</span>'}</div>
+            ${g.fotky.some(f => !pripojene.has(f.id)) ? `<span class="badge b-wait">${g.fotky.filter(f => !pripojene.has(f.id)).length} bez zápisu</span>` : '<span class="badge b-ok">v zápisu</span>'}</div>
           <div class="photos">${g.fotky.map(f => `<div class="ph" onclick="otevritFoto('${f.id}','${f.driveId || ''}','${jsAttr(f.label || '')}',this,'${f.origId || ''}')"><img src="${f.thumb}">${f.driveId ? '' : '<span class="st" title="Ještě se nahrává na Disk">⏳</span>'}<span class="del" onclick="event.stopPropagation();fotkaStavbySmazat('${f.id}')">✕</span><small>${esc(f.label || '')}</small></div>`).join('')}</div>
         </div>`).join('') : '<div class="empty">Zatím žádné fotky ke stavbě.</div>'}
     </div>
   </main>`;
 }
-async function zaraditFotky(p, entryId, den) {
+async function zaraditFotky(p, entryId, den, seznam = S.draftPhotos) {
   const out = [];
-  for (const ph of S.draftPhotos) {
+  for (const ph of seznam) {
     const id = uid8();
     /* driveId = prohlizeci kopie (jako dosud), origId = puvodni soubor
        s metadaty — obe doplni fronta, az se soubory nahraji na Drive. */
@@ -1580,15 +1586,106 @@ async function zaraditFotky(p, entryId, den) {
     }
     if (!mamNahled && !ph.orig) toast('⚠ Fotku se nepodařilo uložit do fronty — zkus ji přidat znovu.');
   }
-  S.draftPhotos = [];
+  if (seznam === S.draftPhotos) S.draftPhotos = [];
   return out;
+}
+/* ============ FOTKY KE STAVBĚ → ZÁPIS (12. 10. 2026) ============
+   Fotka ke stavbě se do zápisu PŘEVEZME: zápis dostane svou položku
+   s odkazy na Drive (soubory se znovu nenahrávají) a fotka u stavby
+   dostane entryId. Odkaz drží i položka zápisu (fotkaStavbyId), takže
+   „v zápisu" se pozná, i kdyby zápis entryId zapsat nesměl. */
+function fsPripojene() {
+  const out = new Set();
+  (S.fotkyStavby || []).forEach(f => { if (f.entryId) out.add(f.id); });
+  (S.entries || []).forEach(e => (e.photos || []).forEach(ph => { if (ph.fotkaStavbyId) out.add(ph.fotkaStavbyId); }));
+  return out;
+}
+function fsVolne(pid) { const pr = fsPripojene(); return (S.fotkyStavby || []).filter(f => f.pid === pid && f.thumb && !pr.has(f.id)).sort((a, b) => (b.date || '').localeCompare(a.date || '')); }
+function fsToggle(id, strop) {
+  if (S.fsPick.has(id)) S.fsPick.delete(id);
+  else { if ((strop || 0) + S.fsPick.size >= MAX_FOTEK_ZAZNAMU) { oznam('Do jednoho zápisu jde nejvíc ' + MAX_FOTEK_ZAZNAMU + ' fotek — víc by se nevešlo a záznam by se neuložil.'); return; } S.fsPick.add(id); }
+  render();
+}
+/* Nabídka fotek ke stavbě bez zápisu: fotky z toho dne hned, ostatní dny po rozkliknutí. */
+function fsNabidkaHtml(pid, den, strop) {
+  if (!pid) return '';
+  const volne = fsVolne(pid); if (!volne.length) return '';
+  const dnes = volne.filter(f => f.date === den), jine = volne.filter(f => f.date !== den);
+  const ukaz = S.fsPickVse ? volne : dnes;
+  const dlazdice = f => `<div class="ph ${S.fsPick.has(f.id) ? 'picked' : ''}" onclick="fsToggle('${f.id}', ${strop || 0})" title="${S.fsPick.has(f.id) ? 'Odebrat ze zápisu' : 'Přidat do zápisu'}"><img src="${f.thumb}"><span class="st">${S.fsPick.has(f.id) ? '✓' : '＋'}</span><small>${esc(f.label || '')}${f.date !== den ? ' · ' + fmtISO(f.date) : ''}</small></div>`;
+  return `<div class="fsnab" style="margin-top:10px;padding:10px 12px;border:1px dashed var(--line);border-radius:9px">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b>📷 Fotky ke stavbě bez zápisu</b>
+      <span class="muted">${dnes.length ? dnes.length + ' z tohoto dne' : 'z tohoto dne žádné'}${jine.length ? ' · ' + jine.length + ' z jiných dnů' : ''}</span>
+      ${jine.length ? `<span class="lnk" style="margin-left:auto;cursor:pointer;color:var(--amber)" onclick="S.fsPickVse=!S.fsPickVse;render()">${S.fsPickVse ? 'jen tento den' : 'ukázat i jiné dny'}</span>` : ''}</div>
+    <div class="note" style="margin:6px 0 0">Ťukni na fotku a přidá se do zápisu (soubory jsou už na Disku, nic se nenahrává znovu). Vybráno: <b>${S.fsPick.size}</b>.</div>
+    ${ukaz.length ? `<div class="photos" style="margin-top:8px">${ukaz.map(dlazdice).join('')}</div>` : ''}
+  </div>`;
+}
+/* Vybrané fotky ke stavbě jako položky zápisu (stejný tvar jako u fotky nahrané do zápisu). */
+function fsVybraneDoZapisu(pid, status) {
+  return [...S.fsPick].map(id => (S.fotkyStavby || []).find(f => f.id === id)).filter(f => f && f.pid === pid)
+    .map(f => ({ id: uid8(), thumb: f.thumb, label: f.label || '', status: status || 'pending', driveId: f.driveId || null, origId: f.origId || null, fotkaStavbyId: f.id }));
+}
+/* entryId smí zapsat vedení a autor fotky (pravidla); jinému se to tiše
+   nepovede — „v zápisu" se i tak pozná z odkazu v zápisu (fsPripojene). */
+async function fsOznacPripojene(ids, entryId) {
+  for (const id of ids) { try { await db.collection('fotky_stavby').doc(id).update({ entryId }); } catch (e) { console.warn('fotka ke stavbě: entryId', e); } }
+}
+/* ---- Dodatečné fotky k hotovému zápisu (foťák / galerie / fotky ke stavbě) ---- */
+async function addPhotosToEntry(eid, files) {
+  const list = [...files]; if (!list.length) return;
+  const e = S.entries.find(x => x.id === eid); if (!e) return;
+  const p = proj(e.pid) || {};
+  const fresh = await cerstveFotky(eid, e.photos);
+  const pripravene = [];
+  for (const f of list) {
+    if (fresh.length + pripravene.length >= MAX_FOTEK_ZAZNAMU) { oznam('Do jednoho zápisu jde nejvíc ' + MAX_FOTEK_ZAZNAMU + ' fotek — další dej do nového zápisu.'); break; }
+    const ph = await pripravFotku(f); if (ph) pripravene.push(ph);
+  }
+  if (!pripravene.length) return;
+  const nove = await zaraditFotky(p, eid, e.date, pripravene);
+  const jsemVedeni = !!(S.meAuth && S.meAuth.role === 'admin');
+  const photos = [...fresh, ...nove.map(ph => jsemVedeni && e.status === 'approved' ? { ...ph, status: 'approved' } : ph)];
+  try { await db.collection('entries').doc(eid).update({ photos }); } catch (err) { toast('Fotky se nepodařilo přidat — ' + dbErrText(err)); return; }
+  toast(nove.length + (nove.length === 1 ? ' fotka přidána' : nove.length < 5 ? ' fotky přidány' : ' fotek přidáno') + ' ✓' + (S.online ? ' — nahrávám na Drive' : ' — na Drive půjdou, až bude signál'));
+  if (e.status === 'approved') { try { await mirrorEntry({ ...e, photos }); } catch (err) { console.warn('zrcadleni po pridani fotek', err); } }
+  frontaOdeslat();
+}
+async function fsPripojitKZapisu(eid) {
+  const e = S.entries.find(x => x.id === eid); if (!e) return;
+  const jsemVedeni = !!(S.meAuth && S.meAuth.role === 'admin');
+  const nove = fsVybraneDoZapisu(e.pid, jsemVedeni && e.status === 'approved' ? 'approved' : 'pending');
+  if (!nove.length) { toast('Nejdřív ťukni na fotky, které chceš přidat'); return; }
+  const fresh = await cerstveFotky(eid, e.photos);
+  if (fresh.length + nove.length > MAX_FOTEK_ZAZNAMU) { oznam('Do jednoho zápisu jde nejvíc ' + MAX_FOTEK_ZAZNAMU + ' fotek (teď ' + fresh.length + ').'); return; }
+  const photos = [...fresh, ...nove];
+  try { await db.collection('entries').doc(eid).update({ photos }); } catch (err) { toast('Fotky se nepodařilo přidat — ' + dbErrText(err)); return; }
+  S.fsPick = new Set();
+  await fsOznacPripojene(nove.map(x => x.fotkaStavbyId), eid);
+  toast(nove.length + (nove.length === 1 ? ' fotka přidána' : nove.length < 5 ? ' fotky přidány' : ' fotek přidáno') + ' ✓');
+  if (e.status === 'approved') { try { await mirrorEntry({ ...e, photos }); } catch (err) { console.warn('zrcadleni po pridani fotek ke stavbe', err); } }
+  render();
+}
+/* Blok „Přidat fotky" v detailu zápisu — foťák, galerie a fotky ke stavbě. */
+function pridatFotkyHtml(e) {
+  const n = (e.photos || []).length;
+  if (n >= MAX_FOTEK_ZAZNAMU) return `<div class="note" style="margin-top:8px">Zápis má plný počet fotek (${MAX_FOTEK_ZAZNAMU}). Další fotky dej do nového zápisu.</div>`;
+  return `<div style="margin-top:10px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">📸 Vyfotit<input type="file" accept="image/*" capture="environment" hidden onchange="addPhotosToEntry('${e.id}', this.files); this.value=''"></label>
+      <label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">🖼 Z galerie<input type="file" accept="image/*" multiple hidden onchange="addPhotosToEntry('${e.id}', this.files); this.value=''"></label>
+      <span class="muted" style="align-self:center">${n} z ${MAX_FOTEK_ZAZNAMU}${e.status === 'approved' ? ' · u schváleného zápisu jde nová fotka investorovi ' + ((S.meAuth && S.meAuth.role === 'admin') ? 'hned' : 'po schválení (⏳ → ✓)') : ''}</span>
+    </div>
+    ${fsNabidkaHtml(e.pid, e.date, n)}
+    ${S.fsPick.size ? `<div class="aprv"><button class="btn amber sm" onclick="fsPripojitKZapisu('${e.id}')">➕ Přidat vybrané fotky ke stavbě (${S.fsPick.size})</button></div>` : ''}
+  </div>`;
 }
 /* Zruseni rozepsaneho zapisu. Fotky se musi zahodit spolu s textem —
    kdyby zustaly v pameti, splnily by o den pozdeji podminku „aspon jedna
    fotka" a pripnuly by se k uplne jinemu zapisu, klidne na jine stavbe. */
 function zrusitRozepsanyZapis() {
   S.subOdchodOpen = false; S.subZaznam = '';
-  S.draftPhotos = []; S.draftAtts = [];
+  S.draftPhotos = []; S.draftAtts = []; S.fsPick = new Set();
   render();
 }
 async function zaraditPrilohy(p, entryId) {
@@ -1698,6 +1795,7 @@ async function addEntry(pid, author, txt, persons, date) {
   const d = date || isoToday();
   const ref = db.collection('entries').doc();
   const photos = await zaraditFotky(p, ref.id, d);
+  const zeStavby = fsVybraneDoZapisu(pid); photos.push(...zeStavby); S.fsPick = new Set(); S.fsPickVse = false;
   await zaraditPrilohy(p, ref.id);
   ref.set({
     pid, date: d, createdAt: FV(), author, authorUid: S.authUser.uid,
@@ -1716,6 +1814,7 @@ async function addEntry(pid, author, txt, persons, date) {
        a odesle sam, az bude signal. */
     if (S.online) oznam('⚠ Záznam se NEPODAŘILO uložit (' + (e.code || e.message || e) + ').\nZkus to prosím znovu, případně s méně fotkami.');
   });
+  if (zeStavby.length) fsOznacPripojene(zeStavby.map(x => x.fotkaStavbyId), ref.id);
   frontaOdeslat();
   fetchWeather(p, d).then(w => { if (w) ref.update({ weather: w }).catch(() => {}); });
 }
@@ -3038,7 +3137,7 @@ function pgProjDetail() {
   <div class="sectabs">
     <div class="t ${t === 'info' ? 'active' : ''}" onclick="S.projDetailTab='info';render()">ℹ️ Základní informace</div>
     <div class="t ${t === 'media' ? 'active' : ''}" onclick="S.projDetailTab='media';render()">🖼 Galerie</div>
-    <div class="t ${t === 'fotkystavby' ? 'active' : ''}" onclick="S.projDetailTab='fotkystavby';render()">📷 Fotky ke stavbě${S.fotkyStavby.filter(f => f.pid === p.id && !f.entryId).length ? ` <span class="badge b-wait">${S.fotkyStavby.filter(f => f.pid === p.id && !f.entryId).length}</span>` : ''}</div>
+    <div class="t ${t === 'fotkystavby' ? 'active' : ''}" onclick="S.projDetailTab='fotkystavby';render()">📷 Fotky ke stavbě${fsVolne(p.id).length ? ` <span class="badge b-wait">${S.fotkyStavby.filter(f => f.pid === p.id && !f.entryId).length}</span>` : ''}</div>
     <div class="t ${t === 'podklady' ? 'active' : ''}" onclick="S.projDetailTab='podklady';render()">📐 Podklady stavby (${(p.stavbaDocs || []).length})</div>
     <div class="t ${t === 'dokumenty' ? 'active' : ''}" onclick="S.projDetailTab='dokumenty';render()">📁 Dokumenty pro investora</div>
     <div class="t ${t === 'ukoly' ? 'active' : ''}" onclick="S.projDetailTab='ukoly';render()">📌 Úkoly (${S.tasks.filter(x => x.pid === p.id && x.stav !== 'hotovo' && x.stav !== 'sablona').length})</div>
@@ -4334,8 +4433,9 @@ function fotkyVyber(pid) {
   /* Fotky ke stavbe bez zapisu patri do galerie taky — jinak by je vedeni
      hledalo jen v zalozce stavby. Ty uz pripojene k zapisu jsou v nem
      (a tedy v seznamu vyse), tak se nepridavaji dvakrat. */
+  const pripojene = fsPripojene();
   S.fotkyStavby.forEach(f => {
-    if (f.entryId || !f.thumb) return;
+    if (pripojene.has(f.id) || !f.thumb) return;
     if (pid ? f.pid !== pid : (S.fgProj && f.pid !== S.fgProj)) return;
     if (od && f.date < od) return;
     if (do_ && f.date > do_) return;
@@ -4881,6 +4981,7 @@ function pgDetail() {
         <div class="card">
           <h3>📷 Média na záznamu <span class="muted" style="font-weight:400">— klik na štítek: ⏳ čeká → ✓ klient → 🔒 interní</span></h3>
           ${(e.photos || []).length ? `<div class="photos">${e.photos.map(ph => phTile(ph, false, e.id)).join('')}</div>` : '<div class="muted" style="margin-top:8px">Média na záznamu: 0</div>'}
+          ${pridatFotkyHtml(e)}
         </div>
       </div>
       <div>
@@ -5083,15 +5184,16 @@ function pgNovy() {
   <main style="max-width:640px">
     <div class="card">
       <label>Stavba</label>
-      <select id="np">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)} (${esc(p.cn)})</option>`).join('')}</select>
+      <select id="np" onchange="S.fsPick=new Set();render()">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)} (${esc(p.cn)})</option>`).join('')}</select>
       <label>Autor zápisu</label>
       <select id="na">${S.users.filter(u => u.active !== false && u.typ && (u.typ.teren || u.typ.kanc || u.typ.sub)).map(u => `<option ${S.me && u.id === S.me.id ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}</select>
-      <label>Datum zápisu</label><input type="date" id="nd" value="${isoToday()}" max="${isoToday()}">
+      <label>Datum zápisu</label><input type="date" id="nd" value="${isoToday()}" max="${isoToday()}" onchange="render()">
       <label>Provedené práce</label>
       <textarea id="nt" placeholder="Každá věta / řádek = jedna odrážka zápisu…"></textarea>
       <label>Fotky</label>
       <input type="file" id="nph" accept="image/*" multiple onchange="processPhotos(this.files)">
       <div class="photos">${S.draftPhotos.map((p, i) => `<div class="ph"><img src="${p.thumb}"><span class="del" onclick="S.draftPhotos.splice(${i},1);render()">✕</span><small>${esc(p.label)}</small></div>`).join('')}</div>
+      ${fsNabidkaHtml(($('#np') && $('#np').value) || (S.projects.filter(p => p.active)[0] || {}).id, ($('#nd') && $('#nd').value) || isoToday(), S.draftPhotos.length)}
       <label>Přílohy (PDF, dokumenty)</label>
       <input type="file" id="natt" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" multiple onchange="processAtts(this.files)">
       ${(S.draftAtts || []).length ? `<div style="margin-top:6px">${S.draftAtts.map((a, i) => `<div class="urow"><span>📎</span><b>${esc(a.name)}</b><span class="lnk" style="margin-left:auto" onclick="S.draftAtts.splice(${i},1);render()">✕</span></div>`).join('')}</div>` : ''}
@@ -5105,7 +5207,7 @@ async function submitNew() {
   const date = $('#nd') ? ($('#nd').value || isoToday()) : isoToday();
   if (!pid) { toast('Není vybraná stavba'); return; }
   if (date > isoToday()) { toast('Datum zápisu nemůže být v budoucnosti'); return; }
-  if (!txt && !S.draftPhotos.length) { toast('Napiš text nebo přidej fotku'); return; }
+  if (!txt && !S.draftPhotos.length && !S.fsPick.size) { toast('Napiš text nebo přidej fotku'); return; }
   $('#save-entry').disabled = true;
   await addEntry(pid, author, txt, null, date);
   zapomen('nt');
@@ -8104,6 +8206,7 @@ function viewSub() {
           <label>Fotky toho, co jste udělali</label>
           <div style="display:flex;gap:8px;flex-wrap:wrap"><label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">📸 Vyfotit<input type="file" accept="image/*" capture="environment" hidden onchange="S.subZaznam=document.querySelector('#so-z').value;processPhotos(this.files)"></label><label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">🖼 Z galerie<input type="file" accept="image/*" multiple hidden onchange="S.subZaznam=document.querySelector('#so-z').value;processPhotos(this.files)"></label></div>
           <div class="photos">${S.draftPhotos.map((ph, i) => `<div class="ph"><img src="${ph.thumb}"><span class="del" onclick="S.draftPhotos.splice(${i},1);render()">✕</span></div>`).join('')}</div>
+          ${fsNabidkaHtml(otevrena.pid, isoToday(), S.draftPhotos.length)}
           <div class="aprv">
             <button class="btn amber velke" onclick="subOdchod()">🏁 ODESLAT A ZAPSAT ODCHOD</button>
             <button class="btn ghost" onclick="zrusitRozepsanyZapis()">Zpět</button>
@@ -8177,7 +8280,7 @@ async function subOdchod() {
   const text = $('#so-z').value.trim();
   if (!text) { toast('Sepiš aspoň větu, co jste udělali'); return; }
   /* Fotka je u odchodu subdodavatele povinna stejne jako u party. */
-  if (!S.draftPhotos.length) { toast('📷 Přidej aspoň jednu fotku — bez ní odchod zapsat nejde'); return; }
+  if (!S.draftPhotos.length && !S.fsPick.size) { toast('📷 Přidej aspoň jednu fotku — bez ní odchod zapsat nejde'); return; }
   try {
     /* zaznam + fotky jdou do deniku ke schvaleni stejne jako od party;
        pocet osob = kolik jich sub nahlasil pri prichodu (sub nema dochazku,
@@ -8371,7 +8474,7 @@ function viewWorker() {
         <div class="zamcena"><span class="zam">🔒</span>${esc((proj(sm.pid) || {}).name || 'neznámá stavba')}</div>
         <div class="muted" style="margin-top:6px;font-size:12px">Stavbu jde změnit až po odchodu — nebo tlačítkem „Přejít na jinou stavbu".</div>
       ` : `
-        <select id="w-proj" style="font-size:16px" onchange="S.workerProject=this.value;S.draftPhotos=[];S.draftAtts=[];render()">
+        <select id="w-proj" style="font-size:16px" onchange="S.workerProject=this.value;S.draftPhotos=[];S.draftAtts=[];S.fsPick=new Set();render()">
           ${workerProjectList().map(it => `<option value="${it.p.id}" ${it.p.id === S.workerProject ? 'selected' : ''}>${esc(it.p.name)}${
             it.last ? ' · naposledy' : ''}${it.dist != null ? ' · ' + fmtDist(it.dist) : it.p.gps ? '' : ' · bez GPS'}</option>`).join('')}
         </select>
@@ -8444,6 +8547,7 @@ function viewWorker() {
            otevre na Androidu rovnou galerii bez fotaku (Marco 5. 10. 2026) -->
       <div style="display:flex;gap:8px;flex-wrap:wrap"><label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">📸 Vyfotit<input type="file" id="wph" accept="image/*" capture="environment" hidden onchange="processPhotos(this.files)"></label><label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">🖼 Z galerie<input type="file" accept="image/*" multiple hidden onchange="processPhotos(this.files)"></label></div>
       <div class="photos">${S.draftPhotos.map((ph, i) => `<div class="ph"><img src="${ph.thumb}"><span class="del" onclick="S.draftPhotos.splice(${i},1);render()">✕</span><small>${esc(ph.label)}</small></div>`).join('')}</div>
+      ${fsNabidkaHtml(S.workerProject, isoToday(), S.draftPhotos.length)}
       <div class="aprv"><button class="btn amber" id="w-save" onclick="workerSubmit()">📤 ODESLAT ZÁPIS</button></div>
       <div class="note">Zápis jde vedení ke schválení — investor ho zatím nevidí. ${S.online ? '' : '<b>Jsi offline — text se odešle po připojení, fotky přidej pak.</b>'}</div>
     </div>
@@ -8890,7 +8994,7 @@ async function workerSubmit() {
      fotodokumentace. Vedeni ma vlastni formular bez teto podminky —
      doplnuje zapisy z kancelare, kde fotit neni co. */
   if (!txt) { toast('Napiš, co jste dnes dělali'); return; }
-  if (!S.draftPhotos.length) { toast('📷 Přidej aspoň jednu fotku — bez ní zápis odeslat nejde'); return; }
+  if (!S.draftPhotos.length && !S.fsPick.size) { toast('📷 Přidej aspoň jednu fotku — bez ní zápis odeslat nejde'); return; }
   $('#w-save').disabled = true;
   /* Pocet osob pracovnik nezadava — kdo byl na stavbe, je videt z dochazky
      a rucni cislo bylo jen dalsi udaj, ktery mohl byt spatne. */
