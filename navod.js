@@ -132,7 +132,7 @@ function navodSub() {
     ${navodKrok('📷', 'Přidej fotky',
         'Ve stejném okně ťukni <b>📸 Vyfotit</b> (otevře foťák) nebo <b>🖼 Z galerie</b> (víc fotek najednou) a přidej fotky toho, '
       + 'co jste udělali — nejvíc 20. <b>Bez fotky odchod zapsat nejde.</b> '
-      + 'Fotky, které jsi dřív nahrál přes <b>Fotky ke stavbě</b>, se ti pod fotkami nabídnou — ťukni na ně a přidají se do zápisu bez dalšího nahrávání. '
+      + 'Fotky, které už někdo nahrál ke stavbě bez zápisu (u stavby v záložce <b>📷 Fotky</b>), se ti pod fotkami nabídnou — ťukni na ně a přidají se do zápisu bez dalšího nahrávání. '
       + 'Podle fotek vedení pozná, že je práce hotová, a ukazuje je zákazníkovi. '
       + 'Nakonec ťukni <b>🏁 ODESLAT A ZAPSAT ODCHOD</b>.')}
 

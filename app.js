@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '13. 10. 2026 c';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '13. 10. 2026 d';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -1516,12 +1516,11 @@ function pgFotkyStavby(p) {
   const skupiny = {};
   S.fsDraft.forEach(ph => { const k = ph.den || ''; (skupiny[k] = skupiny[k] || []).push(ph); });
   const kliceSkupin = Object.keys(skupiny).sort((a, b) => (a === '' ? 1 : b === '' ? -1 : b.localeCompare(a)));
-  const existujici = fotkyStavbyPodleDnu(p.id); const pripojene = fsPripojene();
   return `<main>
     <div class="card">
-      <h3>📷 Fotky ke stavbě <span class="muted" style="font-weight:400">— bez zápisu, po dnech</span></h3>
+      <h3>📷 Nahrát fotky ke stavbě <span class="muted" style="font-weight:400">— bez zápisu, po dnech · všechny fotky stavby jsou níž</span></h3>
       <div class="note" style="margin-top:0">Vyber fotky klidně za víc dní naráz. Den se přečte přímo z fotky; kde v ní není (např. HEIC z iPhonu), vezme se čas souboru a skupina je označená „zkontroluj den".
-        Fotky tu zůstanou u stavby a dne — <b>do zápisu se nepřidají samy</b>, jen se v něm nabídnou.</div>
+        Fotky tu zůstanou u stavby a dne — <b>do zápisu se nepřidají samy</b>, jen se v něm nabídnou. V přehledu níž je u nich štítek <b>＋ do zápisu</b>, kterým je do zápisu toho dne dáš rovnou.</div>
       <label class="btn amber" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer;margin-top:8px">📷 Vybrat fotky<input type="file" accept="image/*" multiple hidden onchange="fotkyStavbyVybrat('${p.id}', this.files); this.value=''"></label>
       ${S.fsPracuje ? '<span class="muted" style="margin-left:10px"><span class="updspin"></span> zpracovávám…</span>' : ''}
       ${S.fsDraft.length ? `
@@ -1542,16 +1541,7 @@ function pgFotkyStavby(p) {
           </div>
         </div>` : ''}
     </div>
-    <div class="card">
-      <h3>Co už u stavby je <span class="muted" style="font-weight:400">— posledních ${OKNO_DNU} dní</span></h3>
-      ${existujici.length ? existujici.map(g => `
-        <div style="margin-bottom:12px">
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><b>${fmtISOFull(g.den)}</b>
-            <span class="muted">${g.fotky.length} ${g.fotky.length === 1 ? 'fotka' : g.fotky.length < 5 ? 'fotky' : 'fotek'}</span>
-            ${g.fotky.some(f => !pripojene.has(f.id)) ? `<span class="badge b-wait">${g.fotky.filter(f => !pripojene.has(f.id)).length} bez zápisu</span>` : '<span class="badge b-ok">v zápisu</span>'}</div>
-          <div class="photos">${g.fotky.map(f => `<div class="ph" onclick="otevritFoto('${f.id}','${f.driveId || ''}','${jsAttr(f.label || '')}',this,'${f.origId || ''}')"><img src="${f.thumb}">${f.driveId ? '' : '<span class="st" title="Ještě se nahrává na Disk">⏳</span>'}<span class="del" onclick="event.stopPropagation();fotkaStavbySmazat('${f.id}')">✕</span><small>${esc(f.label || '')}</small></div>`).join('')}</div>
-        </div>`).join('') : '<div class="empty">Zatím žádné fotky ke stavbě.</div>'}
-    </div>
+    ${fgTelo(p.id)}
   </main>`;
 }
 async function zaraditFotky(p, entryId, den, seznam = S.draftPhotos) {
@@ -3111,13 +3101,11 @@ function pgProjDetail() {
         <div class="note">Ťukni na etapu a otevře se její nastavení — postup posuvníkem, termín, kdo na ní bude a popis. Kolečkem vlevo ji rovnou odškrtneš jako hotovou. Průběh stavby (%) se počítá z etap sám a fáze = první nedokončená etapa. Název i postup vidí investor na portálu.<br>Dokud etapa nemá termín, nenakreslí se v sekci <b>Harmonogram</b> — doplníš ho ve stejném okně.</div>
       </div>
     </div></main>`;
-  } else if (t === 'media') {
-    /* Stara zalozka "Média" (plochy seznam malych dlazdic) je NAHRAZENA
-       galerii — ukazovala stejna data, jen hur: bez filtru, bez listovani
-       a bez moznosti dohlednout dal nez mesic. Vsechno, co umela (otevreni
-       fotky, prepinani stavu ⏳→✓→🔒), umi galerie taky. */
-    body = `<main>${fgTelo(p.id)}</main>`;
-  } else if (t === 'fotkystavby') {
+  } else if (t === 'fotky' || t === 'media' || t === 'fotkystavby') {
+    /* 13. 10. 2026: Galerie stavby a Fotky ke stavbě sloučené do jedné záložky
+       „Fotky" — nahoře nahrávání bez zápisu, pod tím všechny fotky stavby po
+       dnech (ze zápisů i bez zápisu) s filtry a s možností dát fotku bez
+       zápisu do zápisu toho dne. Staré názvy záložek vedou sem. */
     body = pgFotkyStavby(p);
   } else if (t === 'podklady') {
     const docs = p.stavbaDocs || [];
@@ -3153,8 +3141,7 @@ function pgProjDetail() {
   <div class="strip"><span class="back" onclick="goPage('projekty')">←</span><h1>${esc(p.name)}</h1><span class="sp"></span></div>
   <div class="sectabs">
     <div class="t ${t === 'info' ? 'active' : ''}" onclick="S.projDetailTab='info';render()">ℹ️ Základní informace</div>
-    <div class="t ${t === 'media' ? 'active' : ''}" onclick="S.projDetailTab='media';render()">🖼 Galerie</div>
-    <div class="t ${t === 'fotkystavby' ? 'active' : ''}" onclick="S.projDetailTab='fotkystavby';render()">📷 Fotky ke stavbě${fsVolne(p.id).length ? ` <span class="badge b-wait">${S.fotkyStavby.filter(f => f.pid === p.id && !f.entryId).length}</span>` : ''}</div>
+    <div class="t ${t === 'fotky' ? 'active' : ''}" onclick="S.projDetailTab='fotky';render()">📷 Fotky${fsVolne(p.id).length ? ` <span class="badge b-wait" title="fotek bez zápisu">${fsVolne(p.id).length}</span>` : ''}</div>
     <div class="t ${t === 'podklady' ? 'active' : ''}" onclick="S.projDetailTab='podklady';render()">📐 Podklady stavby (${(p.stavbaDocs || []).length})</div>
     <div class="t ${t === 'dokumenty' ? 'active' : ''}" onclick="S.projDetailTab='dokumenty';render()">📁 Dokumenty pro investora</div>
     <div class="t ${t === 'ukoly' ? 'active' : ''}" onclick="S.projDetailTab='ukoly';render()">📌 Úkoly (${S.tasks.filter(x => x.pid === p.id && x.stav !== 'hotovo' && x.stav !== 'sablona').length})</div>
@@ -4553,11 +4540,15 @@ function fgTelo(pid) {
     ${skupiny.map(sk => {
       const p = proj(sk.pid) || {};
       const autori = [...new Set(sk.fotky.map(x => x.f.author).filter(Boolean))];
+      const bezZapisu = sk.fotky.map(x => x.f).filter(f => f.status === 'stavba');
+      const volba = S.fsVolbaZapisu && S.fsVolbaZapisu.pid === sk.pid && S.fsVolbaZapisu.den === sk.date ? S.entries.filter(e => e.pid === sk.pid && e.date === sk.date) : null;
       return `<div class="fgday">
         <div class="fghead"><b>${fmtISOFull(sk.date)}</b>
           ${pid ? '' : `<span class="pn">🛠 ${esc(p.name || '')}</span>`}
           <span class="n">${esc(autori.join(', '))}${autori.length ? ' · ' : ''}${sk.fotky.length} ${sk.fotky.length === 1 ? 'fotka' : sk.fotky.length <= 4 ? 'fotky' : 'fotek'}</span>
+          ${bezZapisu.length ? `<span class="badge b-wait" style="cursor:pointer" title="Dát všechny fotky bez zápisu z tohoto dne do zápisu" onclick="fsDoZapisu('${sk.pid}','${sk.date}',${jsAttr(JSON.stringify(bezZapisu.map(f => f.id)))})">＋ ${bezZapisu.length} bez zápisu → do zápisu</span>` : (pid ? '<span class="badge b-ok">v zápisu</span>' : '')}
         </div>
+        ${volba ? `<div class="note" style="margin:0 0 8px">Ten den má víc zápisů — do kterého fotky patří? ${volba.map(e => `<button class="btn ghost sm" onclick="S.fsVolbaZapisu=null;fsPripojitKZapisu('${e.id}')">${esc(e.author || '')} · ${esc(fotoVeta(e) || '')}</button>`).join(' ')} <button class="btn ghost sm" onclick="S.fsVolbaZapisu=null;S.fsPick=new Set();render()">Zrušit</button></div>` : ''}
         <div class="fgrid">${sk.fotky.map(x => fgDlazdice(x.f, x.i)).join('')}</div>
       </div>`;
     }).join('') || `<div class="card"><div class="empty">📷 Žádné fotky${(S.fgFrom || S.fgTo || S.fgAutor || (!pid && S.fgProj)) ? ' pro zvolené filtry' : ' za posledních ' + OKNO_DNU + ' dní'}.<br><span class="muted">Zkus „⤓ Načíst starší" nebo uprav filtry.</span></div></div>`}
@@ -4570,10 +4561,29 @@ function fgTelo(pid) {
 /* Ctvercova dlazdice — jen thumb z pameti + stitek stavu jako u phTile.
    Popisek fotky nezere misto v mrizce, ukaze se az u velke verze. */
 function fgDlazdice(f, i) {
+  if (f.status === 'stavba') return `<div class="fg" onclick="fgOpen(${i})">
+    <img src="${f.thumb}" alt="">
+    <span class="st fgbez" title="Fotka ke stavbě bez zápisu — ťukni a dej ji do zápisu toho dne" onclick="event.stopPropagation();fsDoZapisu('${f.pid}','${f.date}',['${f.id}'])">＋ do zápisu</span>
+    ${f.driveId ? '' : '<span class="st" style="top:auto;bottom:5px" title="Ještě se nahrává na Disk">⏳</span>'}
+    <span class="del" title="Smazat fotku ke stavbě" onclick="event.stopPropagation();fotkaStavbySmazat('${f.id}')">✕</span>
+  </div>`;
   return `<div class="fg" onclick="fgOpen(${i})">
     <img src="${f.thumb}" alt="">
     <span class="st" title="Přepnout stav" onclick="event.stopPropagation();cyclePhoto('${f.eid}','${f.id}')">${f.status === 'approved' ? '✓' : f.status === 'pending' ? '⏳' : '🔒'}</span>
   </div>`;
+}
+/* Fotky bez zápisu → zápis toho dne. Jeden zápis: rovnou. Víc zápisů: výběr
+   v hlavičce dne. Žádný: vedení jde založit nový zápis s předvyplněným dnem
+   a vybranými fotkami. */
+async function fsDoZapisu(pid, den, ids) {
+  S.fsPick = new Set(ids);
+  const zapisy = S.entries.filter(e => e.pid === pid && e.date === den);
+  if (zapisy.length === 1) return fsPripojitKZapisu(zapisy[0].id);
+  if (zapisy.length > 1) { S.fsVolbaZapisu = { pid, den }; render(); return; }
+  const jsemVedeni = !!(S.meAuth && S.meAuth.role === 'admin');
+  if (!jsemVedeni) { toast('Za ' + fmtISO(den) + ' zápis není — založit ho může jen vedení'); return; }
+  S.novyDen = den; S.novyPid = pid; goPage('novy');
+  toast('Za ' + fmtISO(den) + ' zápis není — založ ho, vybrané fotky jsou v něm přichystané');
 }
 
 /* ---- prohlizec pres celou obrazovku ----
@@ -5215,16 +5225,16 @@ function pgNovy() {
   <main style="max-width:640px">
     <div class="card">
       <label>Stavba</label>
-      <select id="np" onchange="S.fsPick=new Set();render()">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)} (${esc(p.cn)})</option>`).join('')}</select>
+      <select id="np" onchange="S.novyPid=this.value;S.fsPick=new Set();render()">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}" ${p.id === S.novyPid ? 'selected' : ''}>${esc(p.name)} (${esc(p.cn)})</option>`).join('')}</select>
       <label>Autor zápisu</label>
       <select id="na">${S.users.filter(u => u.active !== false && u.typ && (u.typ.teren || u.typ.kanc || u.typ.sub)).map(u => `<option ${S.me && u.id === S.me.id ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}</select>
-      <label>Datum zápisu</label><input type="date" id="nd" value="${isoToday()}" max="${isoToday()}" onchange="render()">
+      <label>Datum zápisu</label><input type="date" id="nd" value="${S.novyDen || isoToday()}" max="${isoToday()}" onchange="S.novyDen=this.value;render()">
       <label>Provedené práce</label>
       <textarea id="nt" placeholder="Každá věta / řádek = jedna odrážka zápisu…"></textarea>
       <label>Fotky</label>
       <input type="file" id="nph" accept="image/*" multiple onchange="processPhotos(this.files)">
       <div class="photos">${S.draftPhotos.map((p, i) => `<div class="ph"><img src="${p.thumb}"><span class="del" onclick="S.draftPhotos.splice(${i},1);render()">✕</span><small>${esc(p.label)}</small></div>`).join('')}</div>
-      ${fsNabidkaHtml(($('#np') && $('#np').value) || (S.projects.filter(p => p.active)[0] || {}).id, ($('#nd') && $('#nd').value) || isoToday(), S.draftPhotos.length)}
+      ${fsNabidkaHtml(($('#np') && $('#np').value) || S.novyPid || (S.projects.filter(p => p.active)[0] || {}).id, ($('#nd') && $('#nd').value) || S.novyDen || isoToday(), S.draftPhotos.length)}
       <label>Přílohy (PDF, dokumenty)</label>
       <input type="file" id="natt" accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg" multiple onchange="processAtts(this.files)">
       ${(S.draftAtts || []).length ? `<div style="margin-top:6px">${S.draftAtts.map((a, i) => `<div class="urow"><span>📎</span><b>${esc(a.name)}</b><span class="lnk" style="margin-left:auto" onclick="S.draftAtts.splice(${i},1);render()">✕</span></div>`).join('')}</div>` : ''}
@@ -5241,7 +5251,7 @@ async function submitNew() {
   if (!txt && !S.draftPhotos.length && !S.fsPick.size) { toast('Napiš text nebo přidej fotku'); return; }
   $('#save-entry').disabled = true;
   await addEntry(pid, author, txt, null, date);
-  zapomen('nt');
+  zapomen('nt'); S.novyDen = null; S.novyPid = null;
   goPage('denik'); toast(date === isoToday() ? 'Zápis odeslán ✓ Čeká na schválení.' : 'Zápis za ' + fmtISO(date) + ' odeslán ✓ Čeká na schválení.');
 }
 
