@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '13. 10. 2026 d';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '13. 10. 2026 e';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -2630,6 +2630,7 @@ function nastenkaPrehled() {
   const lastPhotos = S.entries.flatMap(e => (e.photos || []).map(ph => ({ ...ph, pn: (proj(e.pid) || {}).name }))).slice(0, 6);
   return `<main>
     ${kartaFrontaSelhala()}
+    ${kartaKlice()}
     <div class="stats">
       <div class="stat" onclick="goPage('schvaleni')"><span class="sic">⏳</span><span class="st2">Čeká na schválení</span><span class="sn ${n ? 'warn' : ''}">${n}</span></div>
       <div class="stat" onclick="goPage('denik')"><span class="sic">📓</span><span class="st2">Zápisy v deníku za 30 dní</span><span class="sn">${S.entries.length}</span></div>
@@ -8035,7 +8036,7 @@ function kartaKlice() {
       </div>
       <button class="btn ghost sm" style="margin-left:auto;flex:none" onclick="predatKlicDialog('${k.id}')">Předat</button>
     </div>`; }).join('')}
-    <div class="note">Když klíč někomu dáš, zapiš to hned tlačítkem Předat — ať se ví, kde klíče jsou.</div>
+    <div class="note">Když klíč někomu dáš, zapiš to hned tlačítkem Předat — ať se ví, kde klíče jsou.${S.meAuth && S.meAuth.role === 'admin' ? ' Karta zmizí, až klíč předáš dál nebo vrátíš do kanceláře.' : ''}</div>
   </div>`;
 }
 
@@ -8045,7 +8046,8 @@ function sekceKliceProjektu(p) {
     <h3>🔑 Klíče zakázky (${ks.length})</h3>
     ${ks.map(k => `<div class="urow" style="align-items:flex-start"><span>🔑</span>
       <div><b>${esc(k.nazev)}</b><br>
-        <span class="muted">drží: <b>${esc(k.drzitelJmeno || '— kancelář')}</b>${k.drzitelJmeno ? (k.potvrzeno ? ' · potvrzeno' : ' · <span style="color:var(--wait)">nepotvrzeno</span>') : ''}</span></div>
+        <span class="muted">drží: <b>${esc(k.drzitelJmeno || '— kancelář')}</b>${k.drzitelJmeno ? (k.potvrzeno ? ' · potvrzeno' : ' · <span style="color:var(--wait)">nepotvrzeno</span>') : ''}</span>
+        ${S.me && k.drzitelId === S.me.id && !k.potvrzeno ? `<br><span class="lnk" onclick="potvrditKlic('${k.id}')">✓ Mám ho — potvrdit převzetí</span>` : ''}</div>
       <span style="margin-left:auto;white-space:nowrap">
         <button class="btn ghost sm" onclick="predatKlicDialog('${k.id}')">Předat</button>
         <span class="lnk" style="font-size:12px;margin-left:8px" onclick="historieKlice('${k.id}')">historie</span>
