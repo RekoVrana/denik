@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '13. 10. 2026 b';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '13. 10. 2026 c';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -1280,10 +1280,19 @@ function zmensitDataUrl(dataUrl, maxPx, q) {
     img.src = dataUrl;
   });
 }
-/* Strop poctu fotek na jeden zaznam: dokument ma limit 1 MB a kazdy nahled
-   nese ~25-60 kB — bez stropu by se zaznam s 20+ fotkami tise neulozil,
-   ale uzivatel by videl "ulozeno". Osm sedi na kalkulaci u fotonahledu. */
-const MAX_FOTEK_ZAZNAMU = 8;
+/* Strop poctu fotek na jeden zaznam: dokument ma limit 1 MB. Od 13. 10. 2026
+   (Marco) az 20 fotek — proto je nahled do databaze mensi (320 px, ~15–35 kB)
+   a vedle poctu se hlida i SOUCET bajtu nahledu (FOTKY_BAJTU_MAX), aby se
+   zaznam s hodne „tezkymi" nahledy nikdy tise neulozil. */
+const MAX_FOTEK_ZAZNAMU = 20;
+const FOTKY_BAJTU_MAX = 820000;   // nahledy dohromady; zbytek dokumentu (text, prilohy, pocasi) je male
+const fotkyBajtu = photos => (photos || []).reduce((a, ph) => a + ((ph && ph.thumb) ? ph.thumb.length : 0), 0);
+/* Vejde se dalsi fotka? Pocet i bajty. Vraci text duvodu, nebo ''. */
+function fotkaSeNevejde(photos, dalsiThumb) {
+  if ((photos || []).length >= MAX_FOTEK_ZAZNAMU) return 'Do jednoho zápisu jde nejvíc ' + MAX_FOTEK_ZAZNAMU + ' fotek — další dej do nového zápisu.';
+  if (fotkyBajtu(photos) + ((dalsiThumb && dalsiThumb.length) || 0) > FOTKY_BAJTU_MAX) return 'Víc fotek se do tohoto zápisu nevejde (náhledy by přesáhly velikost záznamu) — další dej do nového zápisu.';
+  return '';
+}
 /* Nahradni dlazdice pro fotku, ktere prohlizec neumi vyrobit nahled
    (typicky HEIC mimo iPhone) — bez ni by v mrizce strasil rozbity obrazek. */
 const NAHLED_NEDOSTUPNY = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><rect width="120" height="120" fill="#d8dde3"/><text x="60" y="58" font-size="34" text-anchor="middle">📷</text><text x="60" y="88" font-size="12" text-anchor="middle" fill="#556">bez náhledu</text></svg>');
@@ -1311,7 +1320,7 @@ async function pripravFotku(f, label) {
   const nazev = label || (f.name || '').replace(/\.[^.]+$/, '');
   try {
     const img = await fileToImage(f);
-    const thumb = scaleJpeg(img, 360, 0.62);
+    let thumb = scaleJpeg(img, 320, 0.6); if (thumb.length > 45000) thumb = scaleJpeg(img, 320, 0.45);   // 20 fotek × ~30 kB se do dokumentu vejde
     /* Stredni verze (1100 px) se nikam neuklada — do databaze nejde
        (~220 kB na fotku by pri tisicich fotek vycerpalo 1GB limit) a na
        Drive jde verze 1600 px. Fotky UKOLU maji svou vlastni cestu. */
@@ -1332,12 +1341,12 @@ async function pripravFotku(f, label) {
 }
 async function processPhotos(files, label) {
   for (const f of files) {
-    if (S.draftPhotos.length + S.fsPick.size >= MAX_FOTEK_ZAZNAMU) {
-      oznam('Do jednoho záznamu jde nejvíc ' + MAX_FOTEK_ZAZNAMU + ' fotek — víc by se nevešlo a záznam by se neuložil.\nDalší fotky prosím přidej do nového zápisu.');
-      break;
-    }
     const ph = await pripravFotku(f, label);
-    if (ph) S.draftPhotos.push(ph);
+    if (!ph) continue;
+    const vybraneThumby = [...S.fsPick].map(id => (S.fotkyStavby || []).find(x => x.id === id)).filter(Boolean);
+    const duvod = fotkaSeNevejde([...S.draftPhotos, ...vybraneThumby], ph.thumb);
+    if (duvod) { oznam(duvod); break; }
+    S.draftPhotos.push(ph);
   }
   render();
 }
@@ -1639,8 +1648,9 @@ async function addPhotosToEntry(eid, files) {
   const fresh = await cerstveFotky(eid, e.photos);
   const pripravene = [];
   for (const f of list) {
-    if (fresh.length + pripravene.length >= MAX_FOTEK_ZAZNAMU) { oznam('Do jednoho zápisu jde nejvíc ' + MAX_FOTEK_ZAZNAMU + ' fotek — další dej do nového zápisu.'); break; }
-    const ph = await pripravFotku(f); if (ph) pripravene.push(ph);
+    const ph = await pripravFotku(f); if (!ph) continue;
+    const duvod = fotkaSeNevejde([...fresh, ...pripravene], ph.thumb); if (duvod) { oznam(duvod); break; }
+    pripravene.push(ph);
   }
   if (!pripravene.length) return;
   const nove = await zaraditFotky(p, eid, e.date, pripravene);
@@ -1658,6 +1668,7 @@ async function fsPripojitKZapisu(eid) {
   if (!nove.length) { toast('Nejdřív ťukni na fotky, které chceš přidat'); return; }
   const fresh = await cerstveFotky(eid, e.photos);
   if (fresh.length + nove.length > MAX_FOTEK_ZAZNAMU) { oznam('Do jednoho zápisu jde nejvíc ' + MAX_FOTEK_ZAZNAMU + ' fotek (teď ' + fresh.length + ').'); return; }
+  if (fotkyBajtu([...fresh, ...nove]) > FOTKY_BAJTU_MAX) { oznam('Tolik fotek se do tohoto zápisu nevejde (náhledy by přesáhly velikost záznamu) — vyber jich méně nebo založ další zápis.'); return; }
   const photos = [...fresh, ...nove];
   try { await db.collection('entries').doc(eid).update({ photos }); } catch (err) { toast('Fotky se nepodařilo přidat — ' + dbErrText(err)); return; }
   S.fsPick = new Set();
@@ -5092,6 +5103,7 @@ function pgSchvaleni() {
           <button class="btn ok" onclick="approveEntry('${e.id}')">✓ Schválit pro investora</button>
           <button class="btn dark" onclick="keepInternalEntry('${e.id}')">🔒 Ponechat jen interní</button>
           <button class="btn ghost sm" onclick="openDetail('${e.id}')">Otevřít detail</button>
+          <button class="btn ghost sm" style="color:var(--red);margin-left:auto" title="Smazat zápis (nejde vrátit)" onclick="delEntry('${e.id}')">🗑 Smazat zápis</button>
         </div>
       </div>`; }).join('')
     : `<div class="card"><div class="empty">🎉 Nic nečeká na schválení.<br><span class="muted">Nové zápisy pracovníků se objeví tady.</span></div></div>`}
