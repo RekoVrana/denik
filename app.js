@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '13. 10. 2026';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '13. 10. 2026 b';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -3083,7 +3083,7 @@ function pgProjDetail() {
             z nich slabsi. Ted je tu misto nich prouzek, ktery ukaze i 40 %,
             a tuknuti otevre to sprave okno.
             Kolecko zustava: jedno tuknuti = hotovo / zpatky na nulu. */''}
-        ${(p.milestones || []).map((m, i) => { const pct = milePct(m); const cls = pct === 100 ? 'done' : pct > 0 ? 'now' : 'next'; return `
+        ${etapySerazene(p.milestones || []).map(m => { const i = (p.milestones || []).indexOf(m); const pct = milePct(m); const cls = pct === 100 ? 'done' : pct > 0 ? 'now' : 'next'; return `
           <div class="mile ${cls}"><div class="dot" style="cursor:pointer" title="Odškrtnout hotovo / vrátit" onclick="setMilePct('${p.id}',${i},${pct === 100 ? 0 : 100})">${pct === 100 ? '✓' : pct > 0 ? '●' : ''}</div>
           <div style="flex:1">
             <div style="cursor:pointer" title="Ťukni pro nastavení etapy — postup, termín, lidi i popis" onclick="etapaPanel('${p.id}',${i})">
@@ -3573,7 +3573,19 @@ function milePct(m) {
 // Prubeh = prumer postupu vsech milniku, cela procenta. Faze = prvni rozdelany
 // milnik (0<p<100), jinak prvni nedokonceny; vse hotovo → „Dokončeno".
 // Bez milniku prubeh NEZNAME → progress: null (zobrazuje se „—", ne 0 %).
+/* Pořadí etap: podle data zahájení (pak ukončení); etapy bez termínu až za
+   nimi v pořadí, jak byly zapsané. Řazení je stabilní a vrací NOVÉ pole se
+   stejnými objekty, takže původní index zůstává dohledatelný přes indexOf.
+   Dřív se etapy ukazovaly v pořadí zapsání — kdo přidal etapu dodatečně
+   (Martinec, 13. 10. 2026), měl ji v záložce stavby na konci bez ohledu
+   na datum, zatímco harmonogram ji kreslil správně. */
+function etapySerazene(ms) {
+  const vse = (ms || []).map((m, i) => ({ m, i }));
+  const klic = x => etapaNaplanovana(x.m) ? [0, x.m.od, x.m.do || '', x.i] : [1, '', '', x.i];
+  return vse.sort((a, b) => { const ka = klic(a), kb = klic(b); for (let k = 0; k < 4; k++) { if (ka[k] < kb[k]) return -1; if (ka[k] > kb[k]) return 1; } return 0; }).map(x => x.m);
+}
 function msRecalc(ms, p) {
+  ms = etapySerazene(ms);   // fáze = první nedokončená etapa PODLE DATA, ne podle pořadí zapsání
   if (!ms || !ms.length) return { progress: null, phase: (p && p.phase) || '' };
   const progress = Math.round(ms.reduce((a, m) => a + milePct(m), 0) / ms.length);
   const run = ms.find(m => { const v = milePct(m); return v > 0 && v < 100; });
@@ -3594,6 +3606,7 @@ function projPhase(p) {
 // Spolecny zapis: milniky vzdy, progress/phase jen kdyz se opravdu zmenily
 // (zadne zbytecne zapisy, zadne prekreslovaci smycky).
 async function ulozMilniky(pid, ms) {
+  ms = etapySerazene(ms);   // ukládá se už seřazené podle data — záložka stavby, harmonogram i portál pak sedí
   const p = proj(pid); const r = msRecalc(ms, p);
   const upd = { milestones: ms };
   if (r.progress !== (typeof p.progress === 'number' ? p.progress : null)) upd.progress = r.progress;
@@ -9048,7 +9061,7 @@ function viewPortal() {
     ${(P.milestones || []).length ? `<div class="card">
       <h3>📅 Harmonogram</h3>
       ${/* Stav milniku na portalu se bere z postupu (milePct) — funguje i pro stara data bez „p". */''}
-      ${P.milestones.map(m => { const pc = milePct(m); const cls = pc === 100 ? 'done' : pc > 0 ? 'now' : 'next'; return `<div class="mile ${cls}"><div class="dot">${pc === 100 ? '✓' : pc > 0 ? '●' : ''}</div><div>${cls === 'now' ? '<b>' + esc(m.t) + ' — probíhá (' + pc + ' %)</b>' : esc(m.t)}${m.od && m.do ? ' <span class="muted" style="font-size:11px">' + fmtISO(m.od) + ' – ' + fmtISO(m.do) + '</span>' : (m.dur ? ' <span class="muted" style="font-size:11px">(' + esc(m.dur) + ')</span>' : '')}</div></div>`; }).join('')}
+      ${etapySerazene(P.milestones).map(m => { const pc = milePct(m); const cls = pc === 100 ? 'done' : pc > 0 ? 'now' : 'next'; return `<div class="mile ${cls}"><div class="dot">${pc === 100 ? '✓' : pc > 0 ? '●' : ''}</div><div>${cls === 'now' ? '<b>' + esc(m.t) + ' — probíhá (' + pc + ' %)</b>' : esc(m.t)}${m.od && m.do ? ' <span class="muted" style="font-size:11px">' + fmtISO(m.od) + ' – ' + fmtISO(m.do) + '</span>' : (m.dur ? ' <span class="muted" style="font-size:11px">(' + esc(m.dur) + ')</span>' : '')}</div></div>`; }).join('')}
     </div>` : ''}
     ${S.portalDocs.length ? `<div class="card">
       <h3>📁 Dokumenty</h3>
@@ -9111,7 +9124,7 @@ async function syncPortalHeader(p, tokZnamy) {
      Kdo na stavbe delá, je nase vec; investorovi do toho nic neni a ID lidi
      by se dala parovat s dalsimi daty. Proto se milniky pred zapisem
      prevypravi jen na pole, ktera ma videt. */
-  const proPortal = (p.milestones || []).map(m => {
+  const proPortal = etapySerazene(p.milestones || []).map(m => {
     const out = { t: m.t, p: typeof m.p === 'number' ? m.p : undefined, s: m.s };
     if (m.dur) out.dur = m.dur;
     if (m.od) out.od = m.od;
