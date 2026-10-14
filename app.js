@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '13. 10. 2026 e';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '14. 10. 2026';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -3998,7 +3998,7 @@ function harmoPocetPater(etapy) {
 }
 const HARMO_PATRO = 28;   /* vyska jednoho patra v pixelech */
 
-function harmoPruhHtml(e, tridaNavic, popis) {
+function harmoPruhHtml(e, tridaNavic, popis, jenCteni) {
   const g = harmoPruh(e.od, e.do); if (!g) return '';
   const stav = etapaStav(e);
   const pct = milePct(e);
@@ -4013,7 +4013,7 @@ function harmoPruhHtml(e, tridaNavic, popis) {
       aria-label="${esc(e.t || '')} ${fmtISO(e.od)} – ${fmtISO(e.do)}, hotovo ${pct} %"
       data-pid="${e.pid}" data-i="${e.i}"
       onmouseenter="etapaBublina(this)" onmouseleave="etapaBublinaPryc()"
-      onclick="etapaBublinaPryc();etapaPanel('${e.pid}',${e.i})">
+      onclick="etapaBublinaPryc();${jenCteni ? 'etapaInfo' : 'etapaPanel'}('${e.pid}',${e.i})">
       ${pct > 0 && pct < 100 ? `<div class="hfill" style="width:${pct}%"></div>` : ''}
       <span>${text}</span></div>`;
 }
@@ -4031,17 +4031,15 @@ function etapaBublinaPryc() {
   const el = document.getElementById('etbub');
   if (el) el.style.display = 'none';
 }
-function etapaBublina(prvek) {
-  const pid = prvek.dataset.pid, i = Number(prvek.dataset.i);
-  const p = proj(pid); const m = ((p || {}).milestones || [])[i];
-  if (!m) return;
+/* Obsah bubliny i okna s etapou — jedna predloha pro vedeni (bublina u mysi)
+   a partu/suby (okno po tuknuti, jen ke cteni). */
+function etapaPopisHtml(p, m, jenCteni) {
   const pct = milePct(m);
   const stav = etapaStav(m);
   const jmena = etapaLide(m).map(id => fullName(userById(id) || {}).trim()).filter(Boolean);
   const body = String(m.popis || '').split(/\n+/).map(x => x.trim()).filter(Boolean);
   const barva = { done: 'var(--ok)', now: 'var(--amber-d)', next: 'var(--ink2)', late: 'var(--red)' }[stav];
-  const el = etapaBublinaEl();
-  el.innerHTML = `
+  return `
     <div class="etbub-h" style="border-left-color:${barva}">
       <small>${esc(p.name || '')}</small>
       <b>${esc(m.t || '')}</b>
@@ -4049,9 +4047,23 @@ function etapaBublina(prvek) {
     </div>
     ${stav === 'late' ? `<div class="etbub-skluz">⚠ Mělo skončit ${fmtISO(m.do)} a hotové to není</div>` : ''}
     ${body.length ? `<ul class="etbub-body">${body.map(x => `<li>${esc(x)}</li>`).join('')}</ul>`
-      : '<div class="etbub-nic">Bez popisu — ťukni a doplň, co etapa obnáší.</div>'}
+      : `<div class="etbub-nic">${jenCteni ? 'Bez popisu.' : 'Bez popisu — ťukni a doplň, co etapa obnáší.'}</div>`}
     ${jmena.length ? `<div class="etbub-lide">👷 ${esc(jmena.join(', '))}</div>`
       : '<div class="etbub-lide" style="color:var(--wait)">👷 nikdo nepřiřazen</div>'}`;
+}
+/* Okno s etapou pro partu a suby — jen ke cteni, nastavovat etapy smi vedeni. */
+function etapaInfo(pid, i) {
+  const p = proj(pid); const m = ((p || {}).milestones || [])[i];
+  if (!m) return;
+  modal(`<div class="etinfo">${etapaPopisHtml(p, m, true)}</div>
+    <div class="aprv"><button class="btn ghost" onclick="closeModal()">Zavřít</button></div>`);
+}
+function etapaBublina(prvek) {
+  const pid = prvek.dataset.pid, i = Number(prvek.dataset.i);
+  const p = proj(pid); const m = ((p || {}).milestones || [])[i];
+  if (!m) return;
+  const el = etapaBublinaEl();
+  el.innerHTML = etapaPopisHtml(p, m, false);
   el.style.display = 'block';
   /* Umistit nad cihlicku; kdyz se nahoru nevejde, dat ji pod ni. Vodorovne
      se drzi v okne, at neutece za okraj u etap na kraji osy. */
@@ -4082,13 +4094,13 @@ function harmoHlavicka(popisSloupce) {
   </div>`;
 }
 /* Jeden radek osy — spolecny pro oba pohledy, at se chovaji stejne. */
-function harmoRadek(popisekHtml, etapy, tridaEtapy) {
+function harmoRadek(popisekHtml, etapy, tridaEtapy, jenCteni) {
   const dnes = harmoDnesLeft();
   const pater = harmoPocetPater(etapy);
   return `<div class="hrow">
     <div class="hlab">${popisekHtml}</div>
     <div class="htrack" style="width:${harmoSirka()}px;height:${10 + pater * HARMO_PATRO}px">
-      ${harmoPatra(etapy).map(e => harmoPruhHtml(e, tridaEtapy ? tridaEtapy(e) : '', e.__popis)).join('')}
+      ${harmoPatra(etapy).map(e => harmoPruhHtml(e, tridaEtapy ? tridaEtapy(e) : '', e.__popis, jenCteni)).join('')}
       ${dnes != null ? `<div class="hdnes" style="left:${dnes}px"></div>` : ''}
     </div>
   </div>`;
@@ -4155,6 +4167,77 @@ function harmoPodleLidi() {
      <span><i class="hb-now"></i>probíhá</span>
      <span><i class="hb-next"></i>čeká</span>
      <span class="muted">Ťuknutím na pruh se dostaneš na tu stavbu.</span>`);
+}
+
+/* ============ HARMONOGRAM PRO PARTU A SUBY (jen ke cteni) ============
+   Etapy uz kazdy prihlaseny cte (jsou soucasti dokumentu stavby), chybela
+   jen obrazovka. Dve podoby — seznam (vychozi, na telefonu citelnejsi) a
+   osa (stejna kresba jako u vedeni, bez ➕ a bez nastavovani; tuknuti na
+   pruh otevre okno s popisem). Volba se pamatuje v telefonu. Parta si u osy
+   muze zapnout vsechny aktivni stavby pod sebou; sub vidi jen vybranou. */
+function harmoPohled() {
+  if (!S.harmoPohled) { try { S.harmoPohled = localStorage.getItem('denik_harmo_pohled') || 'seznam'; } catch (e) { S.harmoPohled = 'seznam'; } }
+  return S.harmoPohled === 'osa' ? 'osa' : 'seznam';
+}
+function harmoPohledNastav(v) { S.harmoPohled = v; try { localStorage.setItem('denik_harmo_pohled', v); } catch (e) { } S.harmoScroll = null; render(); }
+function harmoVseNastav(z) { S.harmoVse = !!z; try { localStorage.setItem('denik_harmo_vse', z ? '1' : ''); } catch (e) { } S.harmoScroll = null; render(); }
+function harmoVse() {
+  if (S.harmoVse == null) { try { S.harmoVse = localStorage.getItem('denik_harmo_vse') === '1'; } catch (e) { S.harmoVse = false; } }
+  return !!S.harmoVse;
+}
+function jsemNaEtape(m) { return !!(S.me && etapaLide(m).indexOf(S.me.id) >= 0); }
+function kartaHarmonogram(p, role) {
+  if (!p) return '';
+  const pohled = harmoPohled();
+  const etapy = etapySerazene(p.milestones || []).filter(etapaNaplanovana);
+  const vse = role === 'worker' && pohled === 'osa' && harmoVse();
+  const hlava = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+      <h3 style="margin:0">📅 Harmonogram</h3>
+      <span class="sp"></span>
+      <span class="seg"><button class="${pohled === 'seznam' ? 'active' : ''}" onclick="harmoPohledNastav('seznam')">Seznam</button><button class="${pohled === 'osa' ? 'active' : ''}" onclick="harmoPohledNastav('osa')">Osa</button></span>
+    </div>`;
+  if (!etapy.length && !vse) return `<div class="card">${hlava}<div class="empty">📅 Stavba zatím nemá naplánované etapy.</div></div>`;
+  if (pohled === 'seznam') {
+    return `<div class="card">${hlava}
+      ${etapy.map(m => { const pc = milePct(m); const st = etapaStav(m); const ja = jsemNaEtape(m);
+        const jmena = etapaLide(m).map(id => fullName(userById(id) || {}).trim()).filter(Boolean);
+        const body = String(m.popis || '').split(/\n+/).map(x => x.trim()).filter(Boolean);
+        return `<div class="mile ${st} ${ja ? 'ja' : ''}">
+          <div class="dot">${st === 'done' ? '✓' : st === 'late' ? '!' : st === 'now' ? '●' : ''}</div>
+          <div style="flex:1;min-width:0">
+            <b>${esc(m.t || '')}</b>${ja ? ' <span class="badge b-ok">ty</span>' : ''}
+            <span class="muted" style="font-size:11.5px"> ${fmtISO(m.od)} – ${fmtISO(m.do)} · ${st === 'done' ? 'hotovo' : st === 'late' ? 'mělo skončit, je na ' + pc + ' %' : st === 'now' ? 'probíhá, ' + pc + ' %' : 'čeká'}</span>
+            ${jmena.length ? `<div class="muted" style="font-size:11.5px">👷 ${esc(jmena.join(', '))}</div>` : ''}
+            ${body.length ? `<ul class="etlist">${body.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+          </div></div>`; }).join('')}
+      <div class="note">Termíny a postup nastavuje vedení. <b>!</b> = mělo skončit a hotové to není.</div>
+    </div>`;
+  }
+  setTimeout(harmoScrollObnov, 0);
+  const stavby = vse ? S.projects.filter(x => x.active || (x.milestones || []).some(etapaNaplanovana)) : [p];
+  const trida = e => jsemNaEtape(e) ? 'hb-ja' : '';
+  const radky = stavby.map(x => {
+    const et = (x.milestones || []).map((m, i) => ({ ...m, i, pid: x.id, projekt: x.name || '' })).filter(etapaNaplanovana)
+      .map(e => ({ ...e, __popis: e.t + (milePct(e) === 100 ? ' ✓' : milePct(e) ? ' ' + milePct(e) + ' %' : '') }));
+    const lab = vse ? `<b>${esc(x.name || '')}</b><small>${projProgress(x) != null ? projProgress(x) + ' %' : ''}</small>` : '';
+    return harmoRadek(lab, et, trida, true);
+  }).join('');
+  return `<div class="card">${hlava}
+    <div class="aprv" style="margin:0 0 8px;justify-content:space-between">
+      <span><button class="btn ghost sm" onclick="harmoPosun(-4)">‹ měsíc</button> <button class="btn ghost sm" onclick="harmoNaDnesek()">dnes</button> <button class="btn ghost sm" onclick="harmoPosun(4)">měsíc ›</button></span>
+      ${role === 'worker' ? `<label style="margin:0;display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:500;text-transform:none;letter-spacing:0;color:var(--ink2)"><input type="checkbox" ${vse ? 'checked' : ''} onchange="harmoVseNastav(this.checked)" style="width:auto;margin:0">všechny stavby</label>` : ''}
+    </div>
+    <div class="hmob ${vse ? '' : 'hmob1'}">${harmoObal(harmoHlavicka(vse ? 'Stavba' : ''), radky,
+      `<span><i class="hb-done"></i>hotovo</span><span><i class="hb-now"></i>probíhá</span><span><i class="hb-next"></i>čeká</span><span><i class="hb-late"></i>skluz</span>${S.me ? '<span><i class="hb-ja"></i>ty</span>' : ''}`)}</div>
+    <div class="note">Osu <b>posouvej prstem do stran</b>, ťuknutím na pruh se ukáže popis etapy. Termíny nastavuje vedení.</div>
+  </div>`;
+}
+/* Radek „Teď" v zalozce Dnes — co se na stavbe prave dela. */
+function etapaTedHtml(p) {
+  if (!p) return '';
+  const ted = etapySerazene(p.milestones || []).filter(m => etapaNaplanovana(m) && (etapaStav(m) === 'now' || etapaStav(m) === 'late'));
+  if (!ted.length) return '';
+  return `<div class="inote" style="margin-top:8px">📅 <b>Teď:</b> ${ted.map(m => `${esc(m.t || '')}${jsemNaEtape(m) ? ' (ty)' : ''} · do ${fmtISO(m.do)} · ${milePct(m)} %${etapaStav(m) === 'late' ? ' <b style="color:var(--red)">ve skluzu</b>' : ''}`).join('<br>📅 ')}</div>`;
 }
 
 /* ---- fotka: dlaždice ---- */
@@ -8242,6 +8325,7 @@ function viewSub() {
           <div><b>${esc((proj(otevrena.pid) || {}).name || '')}</b><br>
             <span class="muted">od ${otevrena.prichod || otevrena.time || ''} · ${otevrena.pocet} ${otevrena.pocet === 1 ? 'člověk' : otevrena.pocet <= 4 ? 'lidi' : 'lidí'} · ${esc(otevrena.cinnost || '')}</span><br>
             <b style="color:var(--ok)">Na stavbě ${dobaText(otevrena.prichod || otevrena.time)}</b></div></div>
+        ${etapaTedHtml(proj(otevrena.pid))}
         ${S.subOdchodOpen ? `
         <div class="ukform" style="margin-top:10px">
           <label>Co jste dnes udělali? *</label>
@@ -8282,6 +8366,7 @@ function viewSub() {
     ${tab === 'ukoly' ? kartaUkoly(p) : ''}
     ${tab === 'stavba' ? `
       ${vyberStavbyProhlizeni(pv, p && p.id)}
+      ${kartaHarmonogram(pv, 'sub')}
       ${kartaPodklady(pv)}
       ${kartaPoznamky(pv)}
       ${kartaKlice()}
@@ -8524,6 +8609,7 @@ function viewWorker() {
         ${p ? `<div class="muted" style="margin-top:8px">${esc(p.address || '')}${
           !p.gps ? ' <b style="color:var(--wait)">· stavba nemá GPS, poloha se neověří</b>' : ''}</div>` : ''}
       `}
+      ${etapaTedHtml(vPraciUI ? proj(sm.pid) : p)}
 
       <label>⏱ Docházka</label>
       ${zamitnute.map(z => `<div class="inote" style="background:#fdeceb;border-color:#e9b5b0;color:#8a2c22">
@@ -8576,6 +8662,7 @@ function viewWorker() {
     ${tab === 'ukoly' ? kartaUkoly(p) : ''}
     ${tab === 'stavba' ? `
       ${vyberStavbyProhlizeni(pv, p && p.id)}
+      ${kartaHarmonogram(pv, 'worker')}
       ${kartaPodklady(pv)}
       ${kartaPoznamky(pv)}
       ${kartaKlice()}

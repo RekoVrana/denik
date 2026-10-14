@@ -155,6 +155,22 @@
   .hb-late{background:#fdeceb;color:var(--red);border:1px solid var(--red)}
   .hb-kolize{background:#fdeceb;color:var(--red);border:2px solid var(--red)}
   .hb-nikdo{border-style:dotted}
+  .hb-ja{box-shadow:0 0 0 2px var(--ink) inset}
+  /* Osa pro partu a suby: u jedine stavby se sloupec se jmenem nekresli,
+     na telefonu by sezral tretinu obrazovky. */
+  .hmob .chartcard{margin-bottom:0}
+  .hmob1 .hlab{display:none}
+  .hmob1 .hgantt{width:auto !important}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .seg button{border:0;background:#fff;padding:5px 11px;font-size:12.5px;font-weight:600;color:var(--ink2);cursor:pointer}
+  .seg button.active{background:var(--ink);color:#fff}
+  .mile.late .dot{background:var(--red);color:#fff}
+  .mile.ja{background:var(--amber-soft);border-radius:8px;padding:6px 8px}
+  .etlist{margin:3px 0 0 16px;padding:0;font-size:12px;color:var(--ink2)}
+  .etinfo .etbub-h{border-left:4px solid;padding-left:10px;display:flex;flex-direction:column;gap:2px;margin-bottom:8px}
+  .etinfo .etbub-h small{color:var(--ink2)} .etinfo .etbub-h b{font-size:16px}
+  .etinfo .etbub-skluz{color:var(--red);font-weight:700;margin-bottom:6px}
+  .etinfo .etbub-body{margin:0 0 8px 18px;padding:0} .etinfo .etbub-nic{color:var(--ink2)} .etinfo .etbub-lide{margin-top:6px}
   .hdnes{position:absolute;top:0;bottom:0;width:2px;background:var(--red);z-index:4;pointer-events:none}
   .hdnes.hlabeled::after{content:"dnes";position:absolute;top:1px;left:4px;font-size:9px;font-weight:800;
     letter-spacing:.06em;text-transform:uppercase;color:var(--red)}
@@ -507,9 +523,9 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js" integrity="sha384-ZaR6mWzmJtrRibZ1Vm7SoHFr8OXjyAuGAXalGDKqbxFT18oi/z+oZLIRFkpeNor1" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" integrity="sha384-I1LYojsZ5RM1cOda44Z2h42Qa6YfsQ1XkXxREnhp4ueYBR/4d1pG1K+NZM537Vsj" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" integrity="sha384-Ke0FJhH7LyRqDxZ0wt+/OXV38yfQVu7g9VPEEGjYmB4RVOY/ta04uecRhsMwT7V3" crossorigin="anonymous"></script>
-<script src="vypocty.js?v=20261013e"></script>
-<script src="navod.js?v=20261013e"></script>
-<script src="config.js?v=20261013e"></script>
-<script src="app.js?v=20261013e"></script>
+<script src="vypocty.js?v=20261014"></script>
+<script src="navod.js?v=20261014"></script>
+<script src="config.js?v=20261014"></script>
+<script src="app.js?v=20261014"></script>
 </body>
 </html>

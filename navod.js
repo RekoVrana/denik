@@ -40,7 +40,7 @@ function navodWorker() {
 
     ${navodKrok('🕐', 'Kde co najdeš',
         'Dole je pět záložek. <b>🕐 Dnes</b> — píchačka a zápis, tady jsi skoro pořád. '
-      + '<b>📌 Úkoly</b> — co máš udělat. <b>🏗 Stavba</b> — výkresy, poznámky a klíče. '
+      + '<b>📌 Úkoly</b> — co máš udělat. <b>🏗 Stavba</b> — harmonogram etap (seznam nebo osa), výkresy, poznámky a klíče. '
       + '<b>📓 Deník</b> — co se na stavbě psalo, i s fotkami. '
       + '<b>⏱ Hodiny</b> — kolik máš odpracováno.')}
 
@@ -117,7 +117,7 @@ function navodSub() {
 
     ${navodKrok('🕐', 'Kde co najdeš',
         'Dole jsou čtyři záložky. <b>🕐 Dnes</b> — příchod a odchod, tady jsi skoro pořád. '
-      + '<b>📌 Úkoly</b> — co máte udělat. <b>🏗 Stavba</b> — výkresy, poznámky a klíče. '
+      + '<b>📌 Úkoly</b> — co máte udělat. <b>🏗 Stavba</b> — harmonogram etap (seznam nebo osa), výkresy, poznámky a klíče. '
       + '<b>📓 Deník</b> — co se na stavbě psalo, i s fotkami.')}
 
     ${navodKrok('🧰', 'Přijedete na stavbu',
