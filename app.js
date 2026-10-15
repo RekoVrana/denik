@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '14. 10. 2026';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '15. 10. 2026';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -376,6 +376,7 @@ function listen(col, target, opts) {
       S[target] = zive;
       if (opts && opts.sort) S[target].sort(opts.sort);
     }
+    if (opts && opts.pak) opts.pak();
     render();
   }, err => console.warn('listener ' + col, err)));
 }
@@ -637,7 +638,11 @@ function startData() {
   const tsort = (a, b) => ((b.date || '') + (b.time || '')).localeCompare((a.date || '') + (a.time || ''));
   if (role === 'admin') listen('tickety', 'tickety', { sort: tsort });
   else listen('tickety', 'tickety', { where: [['authUid', '==', S.authUser.uid]], sort: tsort });
-  listen('users', 'users', { sort: (a, b) => (a.prijmeni || '').localeCompare(b.prijmeni || '', 'cs') });
+  /* Smazani lide (smazan: true) zustavaji v databazi kvuli dochazce, zapisum
+     a vyplatam, ale v aplikaci nejsou nikde videt — S.users je bez nich,
+     userById je najde pro historii. Seznam „smazani" je v Lidech. */
+  listen('users', 'usersVse', { sort: (a, b) => (a.prijmeni || '').localeCompare(b.prijmeni || '', 'cs'),
+    pak: () => { S.users = S.usersVse.filter(u => !u.smazan); } });
   if (role === 'admin') {
     listen('attendance', 'attendance', { where: [['date', '>=', oknoOd()]], okno: true });
     /* Pending zapisy CELE, bez okna: zapis cekajici na schvaleni dele nez
@@ -769,7 +774,7 @@ function jeMuj(t) {
   if (t.respId) return t.respId === S.me.id;
   return t.resp === fullName(S.me) || (t.res || []).includes(fullName(S.me));
 }
-const userById = id => S.users.find(u => u.id === id);
+const userById = id => S.users.find(u => u.id === id) || (S.usersVse || []).find(u => u.id === id);
 /* Komu se da zadat ukol (a predat klic): jen lide z firmy — kancelar,
    parta a subdodavatele (ti maji vlastni vchod, viewSub). Investor je
    klient — ukol mu nikdo zadavat nema. */
@@ -6786,8 +6791,13 @@ function pgUzivatele() {
     <div class="tablecard">
       <div class="uktabs" style="padding:10px 12px 0;flex-wrap:wrap">
         ${[['', '👥 Všichni'], ['kanc', '🗂 Vedení'], ['teren', '👷 Parta'], ['sub', '🔧 Subdodavatelé'], ['inv', '🏠 Investoři']].map(([k, t]) => `
-          <div class="t ${uzFiltrZapnuty(k) ? 'active' : ''}" onclick="uzFiltrPrepni('${k}')">${t} · ${k ? S.users.filter(u => (u.typ || {})[k]).length : S.users.length}</div>`).join('')}
+          <div class="t ${uzFiltrZapnuty(k) && !S.uzSmazani ? 'active' : ''}" onclick="S.uzSmazani=false;uzFiltrPrepni('${k}')">${t} · ${k ? S.users.filter(u => (u.typ || {})[k]).length : S.users.length}</div>`).join('')}
+        ${(S.usersVse || []).some(u => u.smazan) ? `<div class="t ${S.uzSmazani ? 'active' : ''}" onclick="S.uzSmazani=!S.uzSmazani;render()">🗑 Smazaní · ${S.usersVse.filter(u => u.smazan).length}</div>` : ''}
       </div>
+      ${S.uzSmazani ? `<div style="padding:10px 12px">
+        <div class="note" style="margin-top:0">Smazaní lidé: nejsou v žádném výběru a nemají přihlášení, ale jejich docházka, zápisy a výplaty zůstaly dohledatelné.</div>
+        ${S.usersVse.filter(u => u.smazan).map(u => `<div class="urow"><span class="uav">${ini(u)}</span><b class="lnk" style="color:inherit" onclick="otevriOsobu('${u.id}')">${esc(fullName(u))}</b><span class="muted">${typUzivateleText(u)}${u.smazanKdy ? ' · smazán ' + fmtISO(u.smazanKdy) : ''}</span><button class="btn ghost sm" style="margin-left:auto" onclick="obnovitUzivatele('${u.id}')">↩ Obnovit</button></div>`).join('')}
+      </div>` : ''}
       <div class="tabletools"><div class="search"><input id="q-uziv" placeholder="Hledat — jméno, e-mail, popis" value="${esc(S.uzHledat || '')}" oninput="S.uzHledat=this.value;render()"></div>
         ${(S.uzHledat || '').trim() ? `<button class="btn ghost sm" onclick="S.uzHledat='';zapomen('q-uziv');render()">✕ Zrušit hledání</button>` : ''}</div>
       <div style="overflow-x:auto"><table>
@@ -7155,14 +7165,29 @@ async function delUser(udi) {
   const dochazky = new Set([...att.docs, ...attU.docs].map(d => d.id)).size;
   const zapisu = new Set([...entA.docs, ...entU.docs].map(d => d.id)).size;
   const hlaseni = hls.size;
-  if (dochazky || zapisu || hlaseni) {
-    await oznam(fullName(u) + ' smazat nejde.\n\nMá ' + dochazky + ' záznamů docházky, ' + zapisu + ' zápisů v deníku a ' + hlaseni + ' hlášení — ' +
-      'to je podklad pro výplaty, fakturaci a stavební deník.\n\nMísto smazání: zruš mu přihlášení (🚫) a přepni ho na neaktivního. ' +
-      'Zmizí ze všech výběrů, ale historie zůstane dohledatelná.');
-    return;
-  }
   if (kli.size) {
     await oznam(fullName(u) + ' smazat nejde.\n\nDrží ' + kli.size + ' klíčů. Nejdřív je v evidenci klíčů předej někomu jinému nebo vrať do kanceláře.');
+    return;
+  }
+  if (dochazky || zapisu || hlaseni) {
+    /* Marco 15. 10. 2026: lidi chce mazat i s historii. Zaznamy jsou podklad
+       pro vyplaty a stavebni denik, takze se fyzicky nemazou — clovek dostane
+       smazan: true, zmizi ze seznamu i vsech vyberu, prihlaseni se zrusi.
+       Jde ho obnovit v Lidech pod „🗑 Smazaní". */
+    if (!await potvrd('Smazat ' + fullName(u) + '?\n\nMá ' + dochazky + ' záznamů docházky, ' + zapisu + ' zápisů v deníku a ' + hlaseni + ' hlášení. ' +
+      'Ty zůstanou (jsou podkladem pro výplaty a stavební deník) a jeho jméno se v nich dál ukáže.\n\n' +
+      'Člověk zmizí ze seznamu lidí a ze všech výběrů, přihlášení se mu zruší. Kdyby to byl omyl, jde obnovit v Lidech pod „🗑 Smazaní".', 'Smazat')) return;
+    try {
+      if (u.uid) await db.collection('users_auth').doc(u.uid).delete().catch(() => {});
+      await db.collection('roster').doc(udi).delete().catch(() => {});
+      await db.collection('kontakty').doc(udi).delete().catch(() => {});
+      for (const t of S.tasks.filter(x => x.respId === udi)) await db.collection('tasks').doc(t.id).update({ respId: '' }).catch(() => {});
+      await db.collection('users').doc(udi).update({
+        smazan: true, smazanKdy: isoToday(), active: false,
+        uid: firebase.firestore.FieldValue.delete(), authEmail: firebase.firestore.FieldValue.delete(), pinVerze: (u.pinVerze || 1) + 1
+      });
+      goPage('uzivatele'); toast('Uživatel smazán ✓ Historie zůstala.');
+    } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
     return;
   }
   if (!await potvrd('Opravdu smazat ' + fullName(u) + '?\n\nNemá žádnou docházku, zápisy ani hlášení. Smazání nejde vrátit zpět.')) return;
@@ -7181,6 +7206,14 @@ async function delUser(udi) {
     for (const t of S.tasks.filter(x => x.respId === udi)) await db.collection('tasks').doc(t.id).update({ respId: '' }).catch(() => {});
     await db.collection('users').doc(udi).delete();
     goPage('uzivatele'); toast('Uživatel smazán ✓');
+  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
+}
+async function obnovitUzivatele(udi) {
+  const u = userById(udi); if (!u || !u.smazan) return;
+  if (!await potvrd('Obnovit ' + fullName(u) + '?\n\nVrátí se do seznamu lidí jako neaktivní. Přihlášení mu případně vytvoř znovu (🔑).', 'Obnovit')) return;
+  try {
+    await db.collection('users').doc(udi).update({ smazan: firebase.firestore.FieldValue.delete(), smazanKdy: firebase.firestore.FieldValue.delete() });
+    toast('Obnoveno ✓');
   } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
 }
 
