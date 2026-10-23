@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '23. 10. 2026 b';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '23. 10. 2026 c';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -275,6 +275,10 @@ const S = {
   view: 'nastenka', nastenkaTab: 'prehled', tickety: [], adminFilter: null, detail: null,
   projDetailId: null, projDetailTab: 'info', newUserType: null, editUserId: null, newUserActive: null,
   ukolyView: 'seznam', orgFilter: 'vse', taskFormOpen: false, attFormOpen: false, vpFormOpen: false,
+  /* odpovedi u ukolu (viz sekce ODPOVEDI U UKOLU): vedeni je ma vsechny
+     naraz, parta jen pro prave rozbaleny ukol */
+  odpovedi: {}, odpSleduji: null, odpUnsub: null, odpEdit: null, odpReagujNa: null, odpHistorie: {},
+  ukolFiltrPid: '', ukolFiltrResp: '', ukolPredloha: null,
   hlaseni: [], subProject: null, subPocet: 1, subOdchodOpen: false, subZaznam: '',
   podkladyStav: null, podkladyCesta: [], podkladyPid: null, poznamky: [], poznamkaEdit: null, entryEdit: null,
   poznamkyProjekt: '', poznamkyHledat: '',
@@ -360,7 +364,7 @@ function zapomen(...ids) {
 function zapomenVse() { Object.keys(FORMMEM).forEach(k => { delete FORMMEM[k]; }); }
 
 /* ---------- data listeners ---------- */
-function clearSubs() { S.unsub.forEach(u => { try { u(); } catch (e) {} }); S.unsub = []; }
+function clearSubs() { S.unsub.forEach(u => { try { u(); } catch (e) {} }); S.unsub = []; if (S.odpUnsub) { try { S.odpUnsub(); } catch (e) {} } S.odpUnsub = null; S.odpSleduji = null; S.odpovedi = {}; }
 function listen(col, target, opts) {
   let q = db.collection(col);
   if (opts && opts.where) opts.where.forEach(w => q = q.where(...w));
@@ -609,7 +613,8 @@ function startData() {
   /* POZOR: tohle if/else je jeden celek pro UKOLY — nevkladat mezi ne nic.
      Presne tim tu vznikla chyba: vlozeny blok hlaseni si prisvojil "else"
      a subdodavatelum se ukoly prestaly nacitat uplne. */
-  if (role === 'admin') listen('tasks', 'tasks', { sort: taskSort });
+  if (role === 'admin') listen('tasks', 'tasks', { sort: taskSort, pak: prevedOdpovedi });
+  if (role === 'admin') listenOdpovediVse();
   if (role === 'admin') listen('fotky_stavby', 'fotkyStavby', { where: [['date', '>=', oknoOd()]], sort: (a, b) => (b.date || '').localeCompare(a.date || '') || (((b.createdAt && b.createdAt.seconds) || 0) - ((a.createdAt && a.createdAt.seconds) || 0)) });
   else listenMojeUkoly();
   /* Hlaseni subdodavatelu: vedeni vidi vse (v okne), sub jen svoje. */
@@ -713,35 +718,186 @@ function respName(t) {
 }
 /* Naléhavost úkolu se pozná barevným prouzkem, ne cudnou poznamkou —
    na stavbe se na telefon kouka vterinu, ne minutu. */
-/* Odpovedi u ukolu: kratka konverzace primo pod ukolem ("hotovo, ale
-   chybelo lepidlo"). Pridat ji smi ten, kdo ukol vidi — prijemce,
-   zadavatel, vedeni. */
-async function ukolOdpovedet(id) {
-  const inp = $('#up-' + id); if (!inp) return;
+/* ============ ODPOVEDI U UKOLU ============
+   Kratka konverzace primo pod ukolem ("hotovo, ale chybelo lepidlo").
+   Od 23. 10. 2026 (zadani Marca) bydli kazda odpoved jako vlastni doklad
+   v /tasks/{ukol}/odpovedi, ne v poli uvnitr ukolu — jen tak jdou hlidat
+   pravidla "upravit smi jen autor, smazat autor nebo vedeni":
+   - upravit: jen autor; puvodni zneni zustava v historii (upraveno[]),
+   - smazat: autor nebo vedeni; odpoved se NEVYMAZE, jen oznaci (smazano),
+     aby reakce pod ni nezustaly viset ve vzduchu a slo dohledat, co tam bylo,
+   - reagovat: jedna uroven podvlaken (naId = na kterou odpoved),
+   - z odpovedi jde jednim tuknutim zalozit novy ukol.
+   Vedeni poslouchá vsechny odpovedi naraz (collectionGroup), parta jen ty
+   u prave rozbaleneho ukolu — pravidla totiz cizi ukoly nepusti a jeden
+   dotaz pres vsechny by cely spadl. Stare odpovedi (pole v ukolu) se
+   prevedou jednou, kdyz se prihlasi vedeni (prevedOdpovedi). */
+function jsemVedeni() { return !!(S.meAuth && S.meAuth.role === 'admin'); }
+function mojeId() { return (S.meAuth && S.meAuth.userDocId) || (S.me && S.me.id) || ''; }
+function listenOdpovediVse() {
+  S.unsub.push(db.collectionGroup('odpovedi').onSnapshot(snap => {
+    const mapa = {};
+    snap.docs.forEach(d => { const o = { id: d.id, ...d.data() }; (mapa[o.taskId] = mapa[o.taskId] || []).push(o); });
+    S.odpovedi = mapa; render();
+  }, err => console.warn('odpovedi', err)));
+}
+/* Parta: posluchac jen pro jeden (rozbaleny) ukol. Predchozi se odhlasi. */
+function odpovediSleduj(tid) {
+  if (S.odpSleduji === tid) return;
+  if (S.odpUnsub) { try { S.odpUnsub(); } catch (e) {} }
+  S.odpSleduji = tid; S.odpUnsub = null;
+  if (!tid) return;
+  S.odpUnsub = db.collection('tasks').doc(tid).collection('odpovedi').onSnapshot(snap => {
+    S.odpovedi[tid] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    render();
+  }, err => console.warn('odpovedi/' + tid, err));
+}
+function odpRazeni(a, b) {
+  const ka = (a.date || '') + (a.time || '') + (a.createdAt && a.createdAt.seconds || 0);
+  const kb = (b.date || '') + (b.time || '') + (b.createdAt && b.createdAt.seconds || 0);
+  return ka < kb ? -1 : ka > kb ? 1 : 0;
+}
+/* Vsechny odpovedi ukolu: nove doklady + pripadne jeste neprevedene stare
+   pole (parta je vidi, dokud se neprihlasi vedeni a neprevede je). */
+function odpovediUkolu(t) {
+  const stare = (t.odpovedi || []).map((o, i) => ({ id: 'stare-' + i, stare: true, naId: null, upraveno: [], smazano: null, ...o }));
+  return stare.concat(S.odpovedi[t.id] || []).sort(odpRazeni);
+}
+function pocetOdpovedi(t) {
+  if (S.odpovedi[t.id]) return S.odpovedi[t.id].filter(o => !o.smazano).length + (t.odpovedi || []).length;
+  if (typeof t.odpPocet === 'number') return t.odpPocet + (t.odpovedi || []).length;
+  return (t.odpovedi || []).length;
+}
+async function ukolOdpovedet(id, naId) {
+  const inp = $('#up-' + id + (naId ? '-' + naId : '')); if (!inp) return;
   const text = inp.value.trim(); if (!text) { toast('Napiš odpověď'); return; }
   try {
-    await db.collection('tasks').doc(id).update({
-      odpovedi: firebase.firestore.FieldValue.arrayUnion({
-        autorId: S.me ? S.me.id : '', autorJmeno: fullName(S.me || {}),
-        text, date: isoToday(), time: nowTime()
-      })
+    await db.collection('tasks').doc(id).collection('odpovedi').add({
+      taskId: id, autorId: mojeId(), autorUid: S.authUser.uid, autorJmeno: fullName(S.me || {}),
+      text, date: isoToday(), time: nowTime(), naId: naId || null, upraveno: [], smazano: null, createdAt: FV()
     });
-    inp.value = ''; toast('Odpověď přidána ✓');
+    /* pocitadlo na ukolu — podle nej parta vidi "💬 3" i bez nacteni odpovedi */
+    db.collection('tasks').doc(id).update({ odpPocet: firebase.firestore.FieldValue.increment(1) }).catch(() => {});
+    inp.value = ''; zapomen(inp.id); S.odpReagujNa = null; toast('Odpověď přidána ✓');
+    render();
   } catch (e) { toast('Nepřidalo se — ' + dbErrText(e)); }
 }
+async function odpUpravitUlozit(tid, oid) {
+  const o = (S.odpovedi[tid] || []).find(x => x.id === oid); if (!o) return;
+  const inp = $('#oe-' + oid); if (!inp) return;
+  const text = inp.value.trim(); if (!text) { toast('Odpověď nemůže být prázdná'); return; }
+  if (text === o.text) { S.odpEdit = null; zapomen(inp.id); render(); return; }
+  try {
+    await db.collection('tasks').doc(tid).collection('odpovedi').doc(oid).update({
+      text, upraveno: firebase.firestore.FieldValue.arrayUnion({ text: o.text, date: isoToday(), time: nowTime() })
+    });
+    S.odpEdit = null; zapomen(inp.id); toast('Odpověď upravena ✓'); render();
+  } catch (e) { toast('Neupravilo se — ' + dbErrText(e)); }
+}
+async function odpSmazat(tid, oid) {
+  const o = (S.odpovedi[tid] || []).find(x => x.id === oid); if (!o) return;
+  if (!await potvrd('Smazat tuhle odpověď?\n\n„' + o.text.slice(0, 120) + (o.text.length > 120 ? '…' : '') + '"\n\nZůstane po ní jen stopa, kdo a kdy ji smazal.', '🗑 Smazat')) return;
+  try {
+    await db.collection('tasks').doc(tid).collection('odpovedi').doc(oid).update({
+      smazano: { kdoId: mojeId(), kdoJmeno: fullName(S.me || {}), date: isoToday(), time: nowTime() }
+    });
+    db.collection('tasks').doc(tid).update({ odpPocet: firebase.firestore.FieldValue.increment(-1) }).catch(() => {});
+    toast('Odpověď smazána'); render();
+  } catch (e) { toast('Nesmazalo se — ' + dbErrText(e)); }
+}
+/* Z odpovedi novy ukol: predvyplni formular (nadpis = zacatek odpovedi,
+   popis = cela odpoved s odkazem, odkud je, stavba = stavba ukolu). */
+function odpNovyUkol(tid, oid) {
+  const t = S.tasks.find(x => x.id === tid); const o = odpovediUkolu(t || { id: tid }).find(x => x.id === oid);
+  if (!t || !o) return;
+  const prvni = o.text.split('\n')[0].trim();
+  S.ukolPredloha = { title: prvni.length > 80 ? prvni.slice(0, 77) + '…' : prvni, popis: o.text + '\n\n(z odpovědi ' + (o.autorJmeno || '') + ' u úkolu „' + t.title + '")', pid: t.pid };
+  closeModal(); S.odpReagujNa = null;
+  if (jsemVedeni()) { zapomen('tk-t', 'tk-popis', 'tk-p'); S.taskFormOpen = true; goPage('ukoly'); }
+  else { zapomen('wtk-t', 'wtk-popis', 'wtk-p'); S.wtaskOpen = true; S.ukolDetail = null; if (typeof mobTab === 'function') mobTab('ukoly'); else render(); }
+  toast('Formulář předvyplněn — doplň, komu a dokdy');
+}
+function odpHtml(t, o, hloubka) {
+  const moje = !o.stare && o.autorUid && S.authUser && o.autorUid === S.authUser.uid;
+  const hist = (o.upraveno || []);
+  const ukazHist = !!S.odpHistorie[o.id];
+  const kdy = fmtISO(o.date) + ' ' + (o.time || '');
+  let telo;
+  if (o.smazano) {
+    telo = `<span class="muted">🗑 smazáno — ${esc(o.smazano.kdoJmeno || '')} ${fmtISO(o.smazano.date)} ${o.smazano.time || ''}</span>`;
+  } else if (S.odpEdit === o.id) {
+    telo = `<textarea id="oe-${o.id}" style="min-height:54px;margin-top:4px" onclick="event.stopPropagation()" onkeydown="event.stopPropagation()">${esc(o.text || '')}</textarea>
+      <div style="display:flex;gap:6px;margin-top:4px"><button class="btn amber sm" onclick="event.stopPropagation();odpUpravitUlozit('${t.id}','${o.id}')">💾 Uložit</button>
+      <button class="btn ghost sm" onclick="event.stopPropagation();S.odpEdit=null;zapomen('oe-${o.id}');render()">Zrušit</button></div>`;
+  } else {
+    telo = `<span style="white-space:pre-line">${esc(o.text || '')}</span>`;
+  }
+  const akce = [];
+  if (!o.smazano && !o.stare && hloubka === 0) akce.push(`<span class="lnk" onclick="event.stopPropagation();S.odpReagujNa=S.odpReagujNa==='${o.id}'?null:'${o.id}';S.odpEdit=null;render()">↩ reagovat</span>`);
+  if (moje && !o.smazano && S.odpEdit !== o.id) akce.push(`<span class="lnk" onclick="event.stopPropagation();S.odpEdit='${o.id}';S.odpReagujNa=null;render()">✏️ upravit</span>`);
+  if ((moje || jsemVedeni()) && !o.smazano && !o.stare) akce.push(`<span class="lnk" onclick="event.stopPropagation();odpSmazat('${t.id}','${o.id}')">🗑 smazat</span>`);
+  if (!o.smazano && !o.stare) akce.push(`<span class="lnk" onclick="event.stopPropagation();odpNovyUkol('${t.id}','${o.id}')">➕ úkol z toho</span>`);
+  const deti = hloubka === 0 ? odpovediUkolu(t).filter(x => x.naId === o.id) : [];
+  return `<div style="background:${hloubka ? '#eef1f5' : '#f4f6f9'};border-radius:8px;padding:6px 10px;font-size:13px${hloubka ? ';margin-left:18px;border-left:3px solid #cbd4dd' : ''}">
+      <b>${esc(o.autorJmeno || '')}</b> <span class="muted">${kdy}</span>
+      ${hist.length ? ` <span class="lnk muted" style="font-size:11.5px" title="Ukázat předchozí znění" onclick="event.stopPropagation();S.odpHistorie['${o.id}']=!S.odpHistorie['${o.id}'];render()">· upraveno ${hist.length}× ${ukazHist ? '▴' : '▾'}</span>` : ''}
+      <br>${telo}
+      ${ukazHist && (hist.length || o.smazano) ? `<div style="margin-top:5px;padding:5px 8px;background:#fff;border-radius:6px;font-size:12px">
+        ${o.smazano ? `<div><span class="muted">poslední znění:</span> <span style="white-space:pre-line">${esc(o.text || '')}</span></div>` : ''}
+        ${hist.slice().reverse().map(h => `<div><span class="muted">do ${fmtISO(h.date)} ${h.time || ''}:</span> <span style="white-space:pre-line">${esc(h.text || '')}</span></div>`).join('')}
+      </div>` : ''}
+      ${o.smazano && hist.length === 0 ? `<span class="lnk muted" style="font-size:11.5px" onclick="event.stopPropagation();S.odpHistorie['${o.id}']=!S.odpHistorie['${o.id}'];render()">${ukazHist ? '▴ skrýt' : '▾ co tam bylo'}</span>` : ''}
+      ${akce.length ? `<div style="display:flex;gap:10px;margin-top:4px;font-size:11.5px;flex-wrap:wrap">${akce.join('')}</div>` : ''}
+    </div>
+    ${deti.map(d => odpHtml(t, d, 1)).join('')}
+    ${S.odpReagujNa === o.id ? `<div style="display:flex;gap:7px;margin-left:18px">
+      <input type="text" id="up-${t.id}-${o.id}" placeholder="Reagovat na ${esc((o.autorJmeno || '').split(' ')[0])}…" style="flex:1;min-width:0"
+             onclick="event.stopPropagation()" onkeydown="event.stopPropagation();if(event.key==='Enter')ukolOdpovedet('${t.id}','${o.id}')">
+      <button class="btn dark sm" style="flex:none" onclick="event.stopPropagation();ukolOdpovedet('${t.id}','${o.id}')">Odeslat</button></div>` : ''}`;
+}
 function ukolDetailHtml(t) {
+  if (!jsemVedeni()) odpovediSleduj(t.id);
+  const vse = odpovediUkolu(t);
+  const koreny = vse.filter(o => !o.naId || !vse.some(x => x.id === o.naId));
+  const nacita = !jsemVedeni() && !S.odpovedi[t.id];
   return `
     ${t.popis ? `<div class="muted" style="font-size:13.5px;margin-top:4px;white-space:pre-line">${esc(t.popis)}</div>` : ''}
-    ${(t.odpovedi || []).length ? `<div style="margin-top:8px;display:flex;flex-direction:column;gap:5px">
-      ${t.odpovedi.map(o => `<div style="background:#f4f6f9;border-radius:8px;padding:6px 10px;font-size:13px">
-        <b>${esc(o.autorJmeno || '')}</b> <span class="muted">${fmtISO(o.date)} ${o.time || ''}</span><br>
-        <span style="white-space:pre-line">${esc(o.text || '')}</span></div>`).join('')}
-    </div>` : ''}
+    ${koreny.length ? `<div style="margin-top:8px;display:flex;flex-direction:column;gap:5px" onclick="event.stopPropagation()">
+      ${koreny.map(o => odpHtml(t, o, 0)).join('')}
+    </div>` : (nacita ? '<div class="muted" style="font-size:12px;margin-top:6px">načítám odpovědi…</div>' : '')}
     <div style="display:flex;gap:7px;margin-top:8px">
       <input type="text" id="up-${t.id}" placeholder="Napsat odpověď…" style="flex:1;min-width:0"
              onclick="event.stopPropagation()" onkeydown="event.stopPropagation();if(event.key==='Enter')ukolOdpovedet('${t.id}')">
       <button class="btn dark sm" style="flex:none" onclick="event.stopPropagation();ukolOdpovedet('${t.id}')">Odpovědět</button>
     </div>`;
+}
+/* Jednorazovy prevod: stare odpovedi (pole v ukolu) -> doklady. Bezi jen
+   u vedeni, po nacteni ukolu, a kazdy ukol zpracuje jednou. Autor stare
+   odpovedi nema autorUid, takze ji uz nikdo neupravi — jen vedeni smaze. */
+let _prevodOdpovediBezi = false;
+async function prevedOdpovedi() {
+  if (_prevodOdpovediBezi || !jsemVedeni()) return;
+  const kandidati = S.tasks.filter(t => Array.isArray(t.odpovedi) && t.odpovedi.length);
+  if (!kandidati.length) return;
+  _prevodOdpovediBezi = true;
+  try {
+    for (const t of kandidati) {
+      const ref = db.collection('tasks').doc(t.id);
+      const zije = await ref.collection('odpovedi').where('prevedeno', '==', true).limit(1).get();
+      if (zije.empty) {
+        for (const o of t.odpovedi) {
+          await ref.collection('odpovedi').add({
+            taskId: t.id, autorId: o.autorId || '', autorUid: '', autorJmeno: o.autorJmeno || '',
+            text: o.text || '', date: o.date || '', time: o.time || '', naId: null, upraveno: [], smazano: null,
+            prevedeno: true, createdAt: FV()
+          });
+        }
+      }
+      await ref.update({ odpovedi: firebase.firestore.FieldValue.delete(), odpPocet: firebase.firestore.FieldValue.increment(t.odpovedi.length) });
+    }
+    console.info('odpovedi prevedeny: ' + kandidati.length + ' ukolu');
+  } catch (e) { console.warn('prevod odpovedi', e); }
+  _prevodOdpovediBezi = false;
 }
 function fotkyUkolu(t) {
   if (!(t.photos || []).length) return '';
@@ -754,7 +910,7 @@ function ukolModal(id) {
     <div class="muted" style="font-size:13px">🏗 ${esc((proj(t.pid) || {}).name || '')} · zadal <b>${esc(t.zadal || '?')}</b> ➜ <b>${esc(t.resp || 'nikomu')}</b> · ${terminChip(t)} ${(t.photos || []).length ? '📷' + t.photos.length : ''}</div>
     ${fotkyUkolu(t)}
     ${ukolDetailHtml(t)}
-    <div class="aprv"><button class="btn dark" onclick="closeModal()">Zavřít</button></div>`);
+    <div class="aprv">${(jsemVedeni() || t.zadalId === mojeId()) ? `<button class="btn ghost" onclick="closeModal();ukolUpravit('${t.id}')">✏️ Upravit úkol</button>` : ''}<button class="btn dark" onclick="closeModal()">Zavřít</button></div>`);
 }
 function ukolNaleh(t) {
   const d = isoToday();
@@ -3228,7 +3384,7 @@ function pgProjDetail() {
     const tk = S.tasks.filter(x => x.pid === p.id && x.stav !== 'sablona');
     body = `<main><div class="card">
       <h3>📌 Úkoly na stavbě (${tk.length})</h3>
-      ${tk.map(x => `<div class="urow"><span>${x.stav === 'hotovo' ? '✅' : isOverdue(x) ? '❗' : '📌'}</span><div><b>${esc(x.title)}</b><br><span class="muted">${esc(respName(x))} · termín ${fmtISO(x.term)}</span></div>
+      ${tk.map(x => `<div class="urow" style="cursor:pointer" title="Otevřít úkol" onclick="ukolModal('${x.id}')"><span>${x.stav === 'hotovo' ? '✅' : isOverdue(x) ? '❗' : '📌'}</span><div><b>${esc(x.title)}</b>${pocetOdpovedi(x) ? ` <span class="muted">💬${pocetOdpovedi(x)}</span>` : ''}<br><span class="muted">${esc(respName(x))} · termín ${fmtISO(x.term)}</span></div>
         <span style="margin-left:auto"><span class="badge ${STAVCOLOR[x.stav]}">${STAVY[x.stav]}</span></span></div>`).join('') || '<div class="empty">Žádné úkoly.</div>'}
       <div class="aprv"><button class="btn amber sm" onclick="S.taskFormOpen=true;goPage('ukoly')">➕ Přidat úkol</button></div>
     </div></main>`;
@@ -5716,28 +5872,57 @@ function pgUkoly() {
     ${S.taskFormOpen ? `
     <div class="card">
       <h3>➕ Nový úkol</h3>
-      <label>Nadpis *</label><input type="text" id="tk-t" placeholder="Co je potřeba udělat">
-      <label>Popis (nepovinný) <span class="muted" style="text-transform:none;font-weight:400">— enter dělá odrážku</span></label><textarea id="tk-popis" placeholder="- podrobnost&#10;- další bod" style="min-height:54px"></textarea>
+      <label>Nadpis *</label><input type="text" id="tk-t" placeholder="Co je potřeba udělat" value="${esc((S.ukolPredloha || {}).title || '')}">
+      <label>Popis (nepovinný) <span class="muted" style="text-transform:none;font-weight:400">— enter dělá odrážku</span></label><textarea id="tk-popis" placeholder="- podrobnost&#10;- další bod" style="min-height:54px">${esc((S.ukolPredloha || {}).popis || '')}</textarea>
       <div class="frow">
-        <div><label>Stavba</label><select id="tk-p">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
+        <div><label>Stavba</label><select id="tk-p">${S.projects.filter(p => p.active || p.id === (S.ukolPredloha || {}).pid).map(p => `<option value="${p.id}" ${p.id === (S.ukolPredloha || {}).pid ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
         <div><label>Odpovědná osoba</label><select id="tk-r">${lideProUkoly().map(u => `<option value="${u.id}">${esc(fullName(u))}</option>`).join('')}</select></div>
       </div>
       <label>Termín</label><input type="date" id="tk-d" value="${shiftISO(isoToday(), 3)}">
       <div class="aprv"><button class="btn amber" onclick="addTask()">💾 ULOŽIT ÚKOL</button></div>
     </div>` : ''}
+    ${ukolyFiltrHtml()}
     ${v === 'seznam' ? ukolySeznam() : ukolyKanban()}
     <div class="note">Úkoly po termínu se eskalují na nástěnku s tlačítky Hotovo / +3 dny. Interní poznámky z deníku jdou převést na úkol jedním klikem.</div>
   </main>`;
 }
+/* Filtr podle stavby a odpovedne osoby (Marco 23. 10. 2026). Drzi se,
+   dokud se appka nezavre; zrusit jde jednim tuknutim. V nabidce jsou i
+   neaktivni stavby a lide, kteri nejaky ukol maji — jinak by sel ukol
+   u dokoncene stavby najit jen rucne. */
+function ukolyFiltrovane() {
+  return S.tasks.filter(t => t.stav !== 'sablona'
+    && (!S.ukolFiltrPid || t.pid === S.ukolFiltrPid)
+    && (!S.ukolFiltrResp || t.respId === S.ukolFiltrResp));
+}
+function ukolyFiltrHtml() {
+  const ukoly = S.tasks.filter(t => t.stav !== 'sablona');
+  const stavby = S.projects.filter(p => p.active || ukoly.some(t => t.pid === p.id));
+  const lideIds = new Set(ukoly.map(t => t.respId).filter(Boolean));
+  const lide = S.users.filter(u => lideIds.has(u.id)).sort((a, b) => (a.prijmeni || '').localeCompare(b.prijmeni || '', 'cs'));
+  const aktivni = !!(S.ukolFiltrPid || S.ukolFiltrResp);
+  return `<div class="tabletools" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">
+    <select id="uf-p" style="width:auto;max-width:48%" onchange="S.ukolFiltrPid=this.value;render()">
+      <option value="">🏗 Všechny stavby</option>
+      ${stavby.map(p => `<option value="${p.id}" ${S.ukolFiltrPid === p.id ? 'selected' : ''}>${esc(p.name)}${p.active ? '' : ' (neaktivní)'}</option>`).join('')}
+    </select>
+    <select id="uf-r" style="width:auto;max-width:48%" onchange="S.ukolFiltrResp=this.value;render()">
+      <option value="">👤 Všichni lidé</option>
+      ${lide.map(u => `<option value="${u.id}" ${S.ukolFiltrResp === u.id ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}
+    </select>
+    ${aktivni ? `<button class="btn ghost sm" onclick="S.ukolFiltrPid='';S.ukolFiltrResp='';render()">✕ Zrušit filtr</button>
+      <span class="muted" style="font-size:12px">${ukolyFiltrovane().length} z ${ukoly.length}</span>` : ''}
+  </div>`;
+}
 function ukolySeznam() {
-  const rows = S.tasks.filter(t => t.stav !== 'sablona').sort((a, b) => (a.stav === 'hotovo') - (b.stav === 'hotovo') || (a.term || '').localeCompare(b.term || ''));
+  const rows = ukolyFiltrovane().sort((a, b) => (a.stav === 'hotovo') - (b.stav === 'hotovo') || (a.term || '').localeCompare(b.term || ''));
   return `<div class="tablecard">
     <div style="overflow-x:auto"><table>
       <tr><th style="width:30px"></th><th>Název</th><th>Stavba</th><th>Odpovědná osoba</th><th>Stav</th><th>Vytvořeno</th><th>Termín</th><th></th></tr>
       ${rows.map(t => `
       <tr style="${isOverdue(t) ? 'background:#fdeceb' : ''}">
         <td><input type="checkbox" ${t.stav === 'hotovo' ? 'checked' : ''} onclick="taskDone('${t.id}')"></td>
-        <td style="cursor:pointer" onclick="ukolModal('${t.id}')"><b>${esc(t.title)}</b>${(t.odpovedi || []).length ? ` <span class="muted">💬${t.odpovedi.length}</span>` : ''}${(t.photos || []).length ? ` <span class="muted">📷${t.photos.length}</span>` : ''}${t.popis ? `<br><span class="muted" style="font-weight:400">${esc(t.popis.slice(0, 90))}</span>` : ''}${t.src ? ` <span class="badge b-int">${esc(t.src)}</span>` : ''}</td>
+        <td style="cursor:pointer" onclick="ukolModal('${t.id}')"><b>${esc(t.title)}</b>${pocetOdpovedi(t) ? ` <span class="muted">💬${pocetOdpovedi(t)}</span>` : ''}${(t.photos || []).length ? ` <span class="muted">📷${t.photos.length}</span>` : ''}${t.popis ? `<br><span class="muted" style="font-weight:400">${esc(t.popis.slice(0, 90))}</span>` : ''}${t.src ? ` <span class="badge b-int">${esc(t.src)}</span>` : ''}</td>
         <td>${esc((proj(t.pid) || {}).name || '')}</td>
         <td>${esc(respName(t))}</td>
         <td><span class="badge ${STAVCOLOR[t.stav]}">${STAVY[t.stav]}</span></td>
@@ -5756,10 +5941,10 @@ function ukolyKanban() {
   return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
     ${cols.map(c => `
     <div style="background:#e7ebf0;border-radius:10px;padding:10px">
-      <div style="font-weight:800;font-size:12px;color:#42505e;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">${STAVY[c]} (${S.tasks.filter(t => t.stav === c).length})</div>
-      ${S.tasks.filter(t => t.stav === c).map(t => `
+      <div style="font-weight:800;font-size:12px;color:#42505e;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">${STAVY[c]} (${ukolyFiltrovane().filter(t => t.stav === c).length})</div>
+      ${ukolyFiltrovane().filter(t => t.stav === c).map(t => `
         <div class="card" style="padding:10px 12px;margin-bottom:8px;${isOverdue(t) ? 'border-left:3px solid var(--red)' : ''}">
-          <b style="font-size:13px">${esc(t.title)}</b>
+          <b style="font-size:13px;cursor:pointer" onclick="ukolModal('${t.id}')">${esc(t.title)}</b>${pocetOdpovedi(t) ? ` <span class="muted" style="font-size:11.5px">💬${pocetOdpovedi(t)}</span>` : ''}
           <div class="muted" style="font-size:11.5px;margin:4px 0">${esc((proj(t.pid) || {}).name || '')} · ${esc(respName(t))}</div>
           <div style="font-size:11.5px">${isOverdue(t) ? `<b style="color:var(--red)">❗ ${fmtISO(t.term)}</b>` : `📅 ${fmtISO(t.term)}`}</div>
           <div style="display:flex;gap:4px;margin-top:8px">
@@ -5919,6 +6104,7 @@ async function addTask() {
       term: $('#tk-d').value || shiftISO(isoToday(), 3), stav: 'nove', res: [fullName(ru)], createdAt: FV()
     });
   } catch (e) { toast('Nepovedlo se uložit: ' + dbErrText(e)); return; }
+  S.ukolPredloha = null;
   /* Zapomenout se musi i popis — drive se cistil jen nadpis, takze popis
      predchoziho ukolu se pri dalsim otevreni formulare vratil zpatky
      a odpovedny dostal cizi zadani. */
@@ -8373,9 +8559,9 @@ function kartaUkoly(p) {
       ${S.wtaskOpen ? `
       <div class="ukform">
         <label>Nadpis *</label>
-        <input type="text" id="wtk-t" placeholder="Dovézt lepidlo na obklady">
+        <input type="text" id="wtk-t" placeholder="Dovézt lepidlo na obklady" value="${esc((S.ukolPredloha || {}).title || '')}">
         <label>Popis <span class="muted" style="text-transform:none;font-weight:400">— podrobnosti, nepovinné</span></label>
-        <textarea id="wtk-popis" placeholder="Jaké lepidlo, kolik, kam přesně…" style="min-height:54px"></textarea>
+        <textarea id="wtk-popis" placeholder="Jaké lepidlo, kolik, kam přesně…" style="min-height:54px">${esc((S.ukolPredloha || {}).popis || '')}</textarea>
         <div class="frow">
           <div><label>Komu</label>
             <select id="wtk-r">
@@ -8386,7 +8572,7 @@ function kartaUkoly(p) {
           <div><label>Termín</label><input type="date" id="wtk-d" value="${shiftISO(isoToday(), 3)}"></div>
         </div>
         <label>Stavba</label>
-        <select id="wtk-p">${S.projects.filter(x => x.active !== false).map(x => `<option value="${x.id}" ${p && x.id === p.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+        <select id="wtk-p">${S.projects.filter(x => x.active !== false).map(x => `<option value="${x.id}" ${((S.ukolPredloha && S.ukolPredloha.pid) || (p && p.id)) === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
         <label>Fotka k úkolu <span class="muted" style="text-transform:none;font-weight:400">— vyfoť nebo přilož · po vyřízení úkolu se fotky smažou</span></label>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">📸 Vyfotit<input type="file" accept="image/*" capture="environment" hidden onchange="ukolFotoPridat(this.files)"></label><label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">🖼 Z galerie<input type="file" accept="image/*" multiple hidden onchange="ukolFotoPridat(this.files)"></label></div>
         ${(S.taskFoto || []).length ? `<div class="photos">${S.taskFoto.map((f, i) => `<div class="ph"><img src="${f.thumb}"><span class="del" onclick="S.taskFoto.splice(${i},1);render()">✕</span></div>`).join('')}</div>` : ''}
@@ -8399,19 +8585,19 @@ function kartaUkoly(p) {
       ${ut === 'moje' ? `<div class="uk">
         ${myTasks.map(t => `<div class="ukol ${ukolNaleh(t)}">
           <span class="bx" onclick="taskDone('${t.id}')" title="Označit jako hotové"></span>
-          <div style="cursor:pointer" onclick="S.ukolDetail=S.ukolDetail==='${t.id}'?null:'${t.id}';render()"><div class="tt">${esc(t.title)}${(t.odpovedi || []).length ? ` <span class="muted" style="font-weight:400">💬${t.odpovedi.length}</span>` : ''}</div>
+          <div style="cursor:pointer" onclick="S.ukolDetail=S.ukolDetail==='${t.id}'?null:'${t.id}';render()"><div class="tt">${esc(t.title)}${pocetOdpovedi(t) ? ` <span class="muted" style="font-weight:400">💬${pocetOdpovedi(t)}</span>` : ''}</div>
             ${S.ukolDetail === t.id ? ukolDetailHtml(t) : (t.popis ? `<div class="muted" style="font-size:13px;margin-top:2px">${esc(t.popis.split('\n')[0].slice(0, 90))}${(t.popis.length > 90 || t.popis.includes('\n')) ? '…' : ''}</div>` : '')}
             <div class="mt">${terminChip(t)}<span>🏗 ${esc((proj(t.pid) || {}).name || '')}</span>${t.zadal ? `<span>👤 zadal ${esc(t.zadal)}</span>` : ''}${t.resp && (!S.me || t.respId !== S.me.id) ? `<span>➜ ${esc(t.resp)}</span>` : ''}${S.me && t.zadalId === S.me.id ? `<span class="lnk" style="margin-left:auto" onclick="event.stopPropagation();ukolUpravit('${t.id}')">✏️ upravit</span><span class="lnk" onclick="event.stopPropagation();smazatMujUkol('${t.id}')">✕ zrušit</span>` : ''}</div>
             ${fotkyUkolu(t)}
           </div></div>`).join('')}
         ${hotoveDnes.map(t => `<div class="ukol hot">
           <span class="bx on" onclick="taskDone('${t.id}')" title="Vrátit mezi nehotové">✓</span>
-          <div style="cursor:pointer" onclick="S.ukolDetail=S.ukolDetail==='${t.id}'?null:'${t.id}';render()"><div class="tt">${esc(t.title)}${(t.odpovedi || []).length ? ` <span class="muted" style="font-weight:400">💬${t.odpovedi.length}</span>` : ''}</div><div class="mt"><span>Hotovo dnes — ťuknutím vrátíš</span></div></div></div>`).join('')}
+          <div style="cursor:pointer" onclick="S.ukolDetail=S.ukolDetail==='${t.id}'?null:'${t.id}';render()"><div class="tt">${esc(t.title)}${pocetOdpovedi(t) ? ` <span class="muted" style="font-weight:400">💬${pocetOdpovedi(t)}</span>` : ''}</div><div class="mt"><span>Hotovo dnes — ťuknutím vrátíš</span></div></div></div>`).join('')}
         ${(!myTasks.length && !hotoveDnes.length) ? '<div class="empty">Žádné úkoly. Můžeš dělat svoje. 👍</div>' : ''}
       </div>` : `<div class="uk">
         ${zadaneMnou.map(t => `<div class="ukol ${ukolNaleh(t)}">
           <span class="uav">${ini(userById(t.respId) || { jmeno: t.resp || '?', prijmeni: '' })}</span>
-          <div style="cursor:pointer" onclick="S.ukolDetail=S.ukolDetail==='${t.id}'?null:'${t.id}';render()"><div class="tt">${esc(t.title)}${(t.odpovedi || []).length ? ` <span class="muted" style="font-weight:400">💬${t.odpovedi.length}</span>` : ''}</div>
+          <div style="cursor:pointer" onclick="S.ukolDetail=S.ukolDetail==='${t.id}'?null:'${t.id}';render()"><div class="tt">${esc(t.title)}${pocetOdpovedi(t) ? ` <span class="muted" style="font-weight:400">💬${pocetOdpovedi(t)}</span>` : ''}</div>
             ${S.ukolDetail === t.id ? ukolDetailHtml(t) : (t.popis ? `<div class="muted" style="font-size:13px;margin-top:2px">${esc(t.popis.split('\n')[0].slice(0, 90))}${(t.popis.length > 90 || t.popis.includes('\n')) ? '…' : ''}</div>` : '')}
             <div class="mt">${terminChip(t)}<span class="badge ${STAVCOLOR[t.stav] || 'b-int'}">${STAVY[t.stav] || t.stav}</span><span>➜ ${esc(t.resp || 'nikomu')}</span>
               <span class="lnk" style="margin-left:auto" onclick="event.stopPropagation();ukolUpravit('${t.id}')">✏️ upravit</span>
