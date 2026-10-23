@@ -65,6 +65,11 @@ function navodWorker() {
         'Bez fotky zápis odeslat nejde. Podle fotek vedení pozná, co je hotové, '
       + 'a ukazuje je zákazníkovi. Vyfoť, co jste dnes udělali.')}
 
+    ${navodKrok('⬆', 'Fotky se posílají na Disk samy',
+        'Nahoře vidíš <b>🕓 čeká na odeslání</b> nebo <b>⬆ odesílám</b>. Na Androidu to telefon '
+      + 'dokončí sám i se zavřenou appkou — průběh je v oznámeních. Na iPhonu nech appku chvíli '
+      + 'otevřenou, displej nezhasne, dokud to nedoběhne. Nic se neztratí.')}
+
     ${navodKrok('🏁', 'Odcházíš domů',
         'Ťukni <b>🏁 ZAPSAT ODCHOD</b>. Znovu se otevře foťák, vyfoť se. Tím máš den hotový.')}
 

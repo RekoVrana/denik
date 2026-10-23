@@ -1,5 +1,5 @@
 /* Service worker — Deník staveb Rekonstrukce Vrána */
-const CACHE = 'vrana-denik-v56';
+const CACHE = 'vrana-denik-v57';
 const ASSETS = ['./', './index.html', './app.js', './vypocty.js', './navod.js', './config.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
@@ -94,5 +94,70 @@ self.addEventListener('notificationclick', e => {
       }
     }
     return self.clients.openWindow(cil);
+  }));
+});
+
+/* ---- NAHRÁVÁNÍ NA POZADÍ (Background Fetch, Android Chrome) ----
+   Appka na telefonu neumí nic poslat, když je zavřená nebo displej zhasne.
+   Na Androidu jde nahrání předat systému: telefon ho dokončí sám a ukazuje
+   průběh v oznámeních jako u stahování. Sem přijde výsledek — odpověď
+   mostu s fileId se zapíše k položce fronty v IndexedDB (stejná databáze,
+   jakou používá appka) a appka ji při příštím otevření jen dopíše do
+   záznamu. iPhone tohle neumí, tam zůstává nahrávání při otevřené appce.
+   Zadal Marco 23. 10. 2026 („aby se nahrávalo i při zavřené aplikaci"). */
+const FRONTA_DB = 'vrana-fronta', FRONTA_STORE = 'soubory';
+function frontaDbOtevrit() {
+  return new Promise((ok, no) => {
+    const r = indexedDB.open(FRONTA_DB, 1);
+    r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains(FRONTA_STORE)) r.result.createObjectStore(FRONTA_STORE, { keyPath: 'id', autoIncrement: true }); };
+    r.onsuccess = () => ok(r.result);
+    r.onerror = () => no(r.error);
+  });
+}
+function frontaDbUprav(id, fn) {
+  return frontaDbOtevrit().then(d => new Promise((ok, no) => {
+    const t = d.transaction(FRONTA_STORE, 'readwrite'), st = t.objectStore(FRONTA_STORE);
+    const g = st.get(id);
+    g.onsuccess = () => { const it = g.result; if (it) { fn(it); st.put(it); } };
+    t.oncomplete = () => ok(); t.onerror = () => no(t.error);
+  }));
+}
+/* Značka registrace je „fronta-<id položky>-<klíč>" — z ní se pozná položka. */
+function frontaIdZeZnacky(z) { const m = /^fronta-(\d+)-/.exec(z || ''); return m ? Number(m[1]) : null; }
+
+self.addEventListener('backgroundfetchsuccess', e => {
+  const reg = e.registration, id = frontaIdZeZnacky(reg.id);
+  e.waitUntil((async () => {
+    let fileId = '';
+    try {
+      const zaznamy = await reg.matchAll();
+      for (const z of zaznamy) {
+        const odp = await z.responseReady;
+        const txt = await odp.text();
+        try { const j = JSON.parse(txt); if (j && j.fileId) fileId = j.fileId; } catch (e2) {}
+      }
+    } catch (e2) {}
+    if (id != null) {
+      /* fileId známe → data fotky už netřeba, appka jen dopíše odkaz do
+         záznamu. Bez fileId (most odpověděl stránkou místo dat) se položka
+         jen uvolní a appka ji dohledá podle klíče. */
+      await frontaDbUprav(id, it => { it.pozadi = false; if (fileId) { it.fileId = fileId; delete it.data; } }).catch(() => {});
+    }
+    try { await e.updateUI({ title: fileId ? 'Deník: fotka je na Disku ✓' : 'Deník: fotka dorazila, appka ji dopíše' }); } catch (e2) {}
+  })());
+});
+function frontaPozadiSelhalo(e, titul) {
+  const id = frontaIdZeZnacky(e.registration.id);
+  e.waitUntil((async () => {
+    if (id != null) await frontaDbUprav(id, it => { it.pozadi = false; }).catch(() => {});
+    try { await e.updateUI({ title: titul }); } catch (e2) {}
+  })());
+}
+self.addEventListener('backgroundfetchfail', e => frontaPozadiSelhalo(e, 'Deník: nahrání nedoběhlo, appka to zkusí znovu'));
+self.addEventListener('backgroundfetchabort', e => frontaPozadiSelhalo(e, 'Deník: nahrání zrušeno'));
+self.addEventListener('backgroundfetchclick', e => {
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(okna => {
+    for (const o of okna) if (o.url.startsWith(self.registration.scope) && 'focus' in o) return o.focus();
+    return self.clients.openWindow('./');
   }));
 });

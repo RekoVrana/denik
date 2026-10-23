@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '23. 10. 2026';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '23. 10. 2026 b';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -301,7 +301,7 @@ const S = {
   pushPracuje: false, pushChyba: '',
   online: navigator.onLine, unsub: [],
   searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false, checking: null, installPrompt: null, swReg: null, updateReady: false, updating: false,
-  frontaPocet: 0, frontaSelhalo: [], frontaPrubeh: null, orgZobrazeno: 40, mobTab: 'dnes', mojeMesic: null, prohlizenaStavba: null
+  frontaPocet: 0, frontaSelhalo: [], frontaPrubeh: null, frontaPozadi: 0, orgZobrazeno: 40, mobTab: 'dnes', mojeMesic: null, prohlizenaStavba: null
 };
 window.addEventListener('online', () => { S.online = true; render(); });
 window.addEventListener('offline', () => { S.online = false; render(); });
@@ -1117,10 +1117,31 @@ function frontaBadgeHtml() {
   if (S.frontaPrubeh && S.frontaPrubeh.celkem) {
     return `<span id="frontabadge" class="badge b-wait" title="Odesílám fotky na Disk — nech appku otevřenou, dokud to nedoběhne.">⬆ odesílám ${S.frontaPrubeh.hotovo + 1 > S.frontaPrubeh.celkem ? S.frontaPrubeh.celkem : S.frontaPrubeh.hotovo + 1}/${S.frontaPrubeh.celkem}</span>`;
   }
+  if (S.frontaPocet && S.frontaPozadi) {
+    return `<span id="frontabadge" class="badge b-wait" title="Telefon nahrává fotky na Disk sám — i když appku zavřeš. Průběh vidíš v oznámeních.">⬆ ${S.frontaPozadi} nahrává telefon na pozadí</span>`;
+  }
   if (S.frontaPocet) {
     return `<span id="frontabadge" class="badge ${S.online ? 'b-wait' : 'b-int'}" title="${S.online ? 'Fotky čekají na odeslání — odešlou se, jakmile bude appka chvíli otevřená.' : 'Fotky a přílohy čekají, až bude signál. Neztratí se — appka je odešle sama.'}">🕓 ${S.frontaPocet} čeká na odeslání</span>`;
   }
   return '<span id="frontabadge"></span>';
+}
+/* Background Fetch: jen kde ho prohlížeč umí (Android Chrome; iPhone ne)
+   a service worker už běží. */
+function frontaPozadiManager() {
+  try { return (S.swReg && S.swReg.backgroundFetch && navigator.serviceWorker.controller) ? S.swReg.backgroundFetch : null; } catch (e) { return null; }
+}
+function frontaZnackaPozadi(it) { return 'fronta-' + it.id + '-' + it.klic; }
+async function frontaPredatPozadi(pozadi, it, slozka) {
+  const telo = JSON.stringify({
+    action: 'upload', folderId: slozka, rootId: CFG.driveRootFolderId,
+    cn: it.cn, client: it.client, folderName: it.folderName || '', date: it.date, name: it.name,
+    druh: it.druh || 'foto', klic: it.klic,
+    data: String(it.data).split(',')[1], mime: it.mime || 'application/octet-stream'
+  });
+  const popis = it.druh === 'selfie' ? 'fotka z docházky' : it.druh === 'priloha' ? 'příloha' : it.original ? 'fotka (plná)' : 'fotka';
+  await pozadi.fetch(frontaZnackaPozadi(it),
+    [new Request(CFG.scriptUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: telo })],
+    { title: 'Deník staveb — ' + popis + ' na Disk', icons: [{ src: './icon-192.png', sizes: '192x192', type: 'image/png' }], uploadTotal: telo.length });
 }
 async function frontaOdeslat() {
   if (_frontaBezi || !S.online || !CFG.scriptUrl) return;
@@ -1140,7 +1161,7 @@ async function frontaOdeslat() {
   cekaji.sort((a, b) => ((a.druh in PORADI ? PORADI[a.druh] : 2) - (b.druh in PORADI ? PORADI[b.druh] : 2)) || ((a.id || 0) - (b.id || 0)));
   S.uploading++; S.frontaPrubeh = { hotovo: 0, celkem: cekaji.length }; render();
   obrazovkuDrzet();
-  let zmeskano = 0, docasnych = 0;
+  let zmeskano = 0, docasnych = 0, pozadiBezi = 0;
   try {
     for (const it of cekaji) {
       if (!S.online) break;
@@ -1166,7 +1187,30 @@ async function frontaOdeslat() {
           /* Uz jsme to jednou poslali a odpoved se ztratila? Nejdriv se
              zeptat podle klice — je to par bajtu misto dalsich 3 MB
              a hlavne zadny duplikat. */
+          /* NA POZADÍ (Android Chrome): nahrání se předá systému a dokončí
+             se i po zavření appky nebo zhasnutí displeje. Výsledek zapíše
+             service worker k položce (fileId), tady už jen hlídáme, co běží. */
+          const pozadi = frontaPozadiManager();
+          if (pozadi) {
+            const znacka = frontaZnackaPozadi(it);
+            const bezi = await pozadi.get(znacka).catch(() => null);
+            if (bezi && !bezi.result) { pozadiBezi++; continue; }      // telefon na tom pracuje
+          }
           if (it.odeslano) fileId = await frontaNajdiPodleKlice(slozka, it.klic);
+          if (!fileId && pozadi) {
+            it.odeslano = true; it.pozadi = true;
+            try { await frontaTx('readwrite', st => st.put(it)); } catch (e2) {}
+            try {
+              await frontaPredatPozadi(pozadi, it, slozka);
+              pozadiBezi++;
+              continue;                                   // dokončí telefon, výsledek zapíše service worker
+            } catch (e2) {
+              /* Systém to nevzal (třeba plná paměť telefonu) — pošleme to
+                 po staru, při otevřené appce. */
+              console.warn('fronta: pozadi nevzalo, posilam rovnou', e2);
+              it.pozadi = false;
+            }
+          }
           if (!fileId) {
             it.odeslano = true;
             try { await frontaTx('readwrite', st => st.put(it)); } catch (e2) {}
@@ -1252,7 +1296,7 @@ async function frontaOdeslat() {
       }
     }
   } finally {
-    _frontaBezi = false; S.uploading--; S.frontaPrubeh = null;
+    _frontaBezi = false; S.uploading--; S.frontaPrubeh = null; S.frontaPozadi = pozadiBezi;
     obrazovkuPustit();
     if (zmeskano) toast('⚠ ' + zmeskano + (zmeskano === 1 ? ' soubor se nepodařilo odeslat' : ' souborů se nepodařilo odeslat') + ' — zůstaly v telefonu, pošleš je znovu z nástěnky.');
     await frontaSpocitat();
@@ -1307,6 +1351,9 @@ async function frontaZapsatDoZaznamu(it, fileId) {
   }
 }
 window.addEventListener('online', () => setTimeout(frontaOdeslat, 1500));
+/* Po návratu do appky service worker mezitím mohl dopsat fileId k položkám
+   nahraným na pozadí — rovnou je dopíšeme do záznamů. */
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') setTimeout(frontaOdeslat, 800); });
 setInterval(() => { if (S.online) frontaOdeslat(); }, 90000);
 
 /* ---------- image pipeline ---------- */
