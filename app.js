@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '15. 10. 2026';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '23. 10. 2026';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -301,7 +301,7 @@ const S = {
   pushPracuje: false, pushChyba: '',
   online: navigator.onLine, unsub: [],
   searchQ: '', geoHits: [], geoLabel: null, loginMsg: null, myPos: null, posAsked: false, checking: null, installPrompt: null, swReg: null, updateReady: false, updating: false,
-  frontaPocet: 0, frontaSelhalo: [], orgZobrazeno: 40, mobTab: 'dnes', mojeMesic: null, prohlizenaStavba: null
+  frontaPocet: 0, frontaSelhalo: [], frontaPrubeh: null, orgZobrazeno: 40, mobTab: 'dnes', mojeMesic: null, prohlizenaStavba: null
 };
 window.addEventListener('online', () => { S.online = true; render(); });
 window.addEventListener('offline', () => { S.online = false; render(); });
@@ -1096,6 +1096,32 @@ async function frontaNajdiPodleKlice(folderId, klic) {
     return (j && j.fileId) || '';
   } catch (e) { console.warn('fronta: hledani podle klice', e); return ''; }
 }
+/* Dokud se odesila, displej nezhasne (Wake Lock). Zhasnuty telefon
+   odesilani zastavi a parta pak vidi „ceka na odeslani" cely den. Kde to
+   prohlizec neumi, nic se nedeje. */
+let _zamekObrazovky = null;
+async function obrazovkuDrzet() {
+  try { if (navigator.wakeLock && !_zamekObrazovky) _zamekObrazovky = await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+function obrazovkuPustit() {
+  try { if (_zamekObrazovky) _zamekObrazovky.release(); } catch (e) {}
+  _zamekObrazovky = null;
+}
+/* Odznak v hlavicce se meni po kazde polozce — prekreslit jen jeho, ne celou
+   obrazovku (render() by clovekovi utekl pod rukama). */
+function updBadge() {
+  const el = document.getElementById('frontabadge');
+  if (el) el.outerHTML = frontaBadgeHtml();
+}
+function frontaBadgeHtml() {
+  if (S.frontaPrubeh && S.frontaPrubeh.celkem) {
+    return `<span id="frontabadge" class="badge b-wait" title="Odesílám fotky na Disk — nech appku otevřenou, dokud to nedoběhne.">⬆ odesílám ${S.frontaPrubeh.hotovo + 1 > S.frontaPrubeh.celkem ? S.frontaPrubeh.celkem : S.frontaPrubeh.hotovo + 1}/${S.frontaPrubeh.celkem}</span>`;
+  }
+  if (S.frontaPocet) {
+    return `<span id="frontabadge" class="badge ${S.online ? 'b-wait' : 'b-int'}" title="${S.online ? 'Fotky čekají na odeslání — odešlou se, jakmile bude appka chvíli otevřená.' : 'Fotky a přílohy čekají, až bude signál. Neztratí se — appka je odešle sama.'}">🕓 ${S.frontaPocet} čeká na odeslání</span>`;
+  }
+  return '<span id="frontabadge"></span>';
+}
 async function frontaOdeslat() {
   if (_frontaBezi || !S.online || !CFG.scriptUrl) return;
   /* Zamek MUSI byt driv nez prvni await — jinak dve soucasna volani
@@ -1106,11 +1132,19 @@ async function frontaOdeslat() {
      posle znovu tlacitkem. Frontu neblokuji. */
   const cekaji = (await frontaVse()).filter(x => !x.selhalo);
   if (!cekaji.length) { _frontaBezi = false; return; }
-  S.uploading++; render();
-  let zmeskano = 0;
+  /* Nejdriv to male a dulezite: selfie z dochazky, prohlizeci kopie fotek
+     (z nich cte denik, galerie i portal) a prilohy. Originaly o 3 MB jdou
+     az nakonec — kdyz clovek appku zavre v pulce, ma uz aspon vsechny
+     fotky videt. Falat mel 68 polozek a prochazely po paru za navstevu. */
+  const PORADI = { selfie: 0, nahled: 1, priloha: 2, foto: 3 };
+  cekaji.sort((a, b) => ((a.druh in PORADI ? PORADI[a.druh] : 2) - (b.druh in PORADI ? PORADI[b.druh] : 2)) || ((a.id || 0) - (b.id || 0)));
+  S.uploading++; S.frontaPrubeh = { hotovo: 0, celkem: cekaji.length }; render();
+  obrazovkuDrzet();
+  let zmeskano = 0, docasnych = 0;
   try {
     for (const it of cekaji) {
       if (!S.online) break;
+      S.frontaPrubeh = { hotovo: S.frontaPrubeh.hotovo, celkem: cekaji.length }; updBadge();
       try {
         let fileId = it.fileId;
         if (!fileId) {
@@ -1172,6 +1206,7 @@ async function frontaOdeslat() {
         }
         await frontaZapsatDoZaznamu(it, fileId);
         await frontaSmazat(it.id);
+        S.frontaPrubeh.hotovo++; S.frontaPocet = Math.max(0, S.frontaPocet - 1); updBadge();
       } catch (e) {
         /* permission-denied = TRVALA chyba: zaznam mezitim opustil stav
            pending (vedeni ho schvalilo / dalo jen interni / smazalo) a autor
@@ -1184,7 +1219,15 @@ async function frontaOdeslat() {
         }
         /* Vypadl signal? Nic nepocitame a zkusime priste — parta foti
            v suterenech, kde je bez signalu klidne cely den. */
-        if (jeVypadekSite(e)) { console.warn('fronta: bez signalu, zkusim priste', e); break; }
+        if (jeVypadekSite(e)) {
+          /* Opravdu bez signalu — konec, zkusime priste. Ale kdyz telefon
+             signal ma a jen Google vratil misto odpovedi stranku
+             „nenalezeno" (stava se zhruba kazde treti volani), jedeme dal
+             na dalsi polozku; tahle prijde na radu znovu za chvili. */
+          if (!navigator.onLine || !S.online || !(e && e.docasne)) { console.warn('fronta: bez signalu, zkusim priste', e); break; }
+          docasnych++; console.warn('fronta: most neodpovedel, jdu na dalsi', e.message);
+          continue;
+        }
         /* Most odpovedel, ale polozku odmitl (moc velky soubor, chyba v
            zaznamu). Opakovani nejspis nepomuze — po par pokusech ji vzdame,
            jinak by zablokovala celou frontu navzdy a za ni by uz neproslo
@@ -1209,9 +1252,13 @@ async function frontaOdeslat() {
       }
     }
   } finally {
-    _frontaBezi = false; S.uploading--;
+    _frontaBezi = false; S.uploading--; S.frontaPrubeh = null;
+    obrazovkuPustit();
     if (zmeskano) toast('⚠ ' + zmeskano + (zmeskano === 1 ? ' soubor se nepodařilo odeslat' : ' souborů se nepodařilo odeslat') + ' — zůstaly v telefonu, pošleš je znovu z nástěnky.');
     await frontaSpocitat();
+    /* Zbyva-li co poslat a signal je, nejdeme spat na 90 s — pokracujeme
+       za par vterin. Pri otevrene appce tak fronta jede v kuse. */
+    if (S.frontaPocet && S.online && docasnych) setTimeout(frontaOdeslat, 4000);
   }
 }
 async function frontaZapsatDoZaznamu(it, fileId) {
@@ -2557,7 +2604,7 @@ function topbar() {
     <span class="sp"></span>
     <span class="offdot ${S.online ? '' : 'off'}">${S.online ? '' : '⚠ OFFLINE — změny se uloží po připojení'}</span>
     ${S.uploading ? '<span class="badge b-wait">📤 nahrávám na Drive…</span>' : ''}
-    ${S.frontaPocet ? `<span class="badge ${S.online ? 'b-wait' : 'b-int'}" title="Fotky a přílohy čekají, až bude signál. Neztratí se — appka je odešle sama.">🕓 ${S.frontaPocet} čeká na odeslání</span>` : ''}
+    ${frontaBadgeHtml()}
     <button class="btn ghost sm" style="padding:6px 10px" title="Nahlásit chybu nebo navrhnout zlepšení" onclick="ticketDialog()">💬</button>
     <span class="muted" style="font-size:10.5px;white-space:nowrap" title="Verze aplikace">${VERZE}</span>
     <button class="btn ghost sm" title="Zkontrolovat a stáhnout novou verzi" onclick="aktualizovatApp()" style="padding:6px 10px">${S.updating ? '<span class="updspin"></span>' : '⟳'}</button>
