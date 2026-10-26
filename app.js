@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '23. 10. 2026 e';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '23. 10. 2026 f';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -6063,7 +6063,11 @@ function ukolyFiltrHtml() {
   </div>`;
 }
 function ukolySeznam() {
-  const rows = ukolyFiltrovane().sort((a, b) => (a.stav === 'hotovo') - (b.stav === 'hotovo') || (a.term || '').localeCompare(b.term || ''));
+  /* Nehotove podle terminu (nejblizsi nahore). Hotove az pod nimi a
+     OBRACENE — naposledy odskrtnuty prvni (Marco 26. 10. 2026); u stareho
+     ukolu bez hotovoDne se bere termin. */
+  const rows = ukolyFiltrovane().sort((a, b) => (a.stav === 'hotovo') - (b.stav === 'hotovo')
+    || (a.stav === 'hotovo' ? (b.hotovoDne || b.term || '').localeCompare(a.hotovoDne || a.term || '') : (a.term || '').localeCompare(b.term || '')));
   return `<div class="tablecard">
     <div style="overflow-x:auto"><table>
       <tr><th style="width:30px"></th><th>Název</th><th>Stavba</th><th>Odpovědná osoba</th><th>Stav</th><th>Vytvořeno</th><th>Termín</th><th></th></tr>
@@ -6090,7 +6094,7 @@ function ukolyKanban() {
     ${cols.map(c => `
     <div style="background:#e7ebf0;border-radius:10px;padding:10px">
       <div style="font-weight:800;font-size:12px;color:#42505e;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">${STAVY[c]} (${ukolyFiltrovane().filter(t => t.stav === c).length})</div>
-      ${ukolyFiltrovane().filter(t => t.stav === c).map(t => `
+      ${ukolyFiltrovane().filter(t => t.stav === c).sort((a, b) => c === 'hotovo' ? (b.hotovoDne || b.term || '').localeCompare(a.hotovoDne || a.term || '') : (a.term || '').localeCompare(b.term || '')).map(t => `
         <div class="card" style="padding:10px 12px;margin-bottom:8px;${isOverdue(t) ? 'border-left:3px solid var(--red)' : ''}">
           <b style="font-size:13px;cursor:pointer" onclick="ukolModal('${t.id}')">${esc(t.title)}</b>${pocetOdpovedi(t) ? ` <span class="muted" style="font-size:11.5px">💬${pocetOdpovedi(t)}</span>` : ''}
           <div class="muted" style="font-size:11.5px;margin:4px 0">${esc((proj(t.pid) || {}).name || '')} · ${esc(respName(t))}</div>
