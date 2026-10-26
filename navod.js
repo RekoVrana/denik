@@ -98,6 +98,8 @@ function navodWorker() {
     ${navodKrok('🏗', 'Všechno o stavbě',
         'Záložka <b>🏗 Stavba</b> dole. Nahoře si <b>vybereš stavbu</b> — můžeš se podívat '
       + 'i na jinou, než na které máš píchnuto, docházce to nevadí. '
+      + '<b>🚚 Závoz — co chybí</b> — když ti něco dojde nebo chybí, napiš to sem jedním řádkem '
+      + '(klidně s fotkou obalu). Doveze se při příštím závozu; kdo to převezme, ťukne <b>✓ Dovezeno</b>. '
       + '<b>📐 Podklady stavby</b> — ťukni <b>📂 Zobrazit podklady</b>, jsou tam výkresy a přílohy. '
       + '<b>📝 Poznámky ke stavbě</b> — kódy, kontakty, kde se zavírá voda. '
       + '<b>🔑 Klíče u mě</b> — když klíč někomu dáš, hned ťukni <b>Předat</b>.')}

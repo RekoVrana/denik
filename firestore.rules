@@ -7,7 +7,13 @@
 //  Živá verze: Firebase konzole → Firestore → Rules
 //  Když se změní tam, změň i tady, ať kopie nezastará.
 //
-//  Poslední změna 23. 10. 2026 (odpovědi u úkolů):
+//  Poslední změna 26. 10. 2026 (závozy):
+//  25) Přibyla /zavozy — co na stavbě chybí. Čte a zakládá každý s rolí
+//      (pod svým jménem, stav 'chybi', fotka do 60 kB), odškrtnout
+//      „dovezeno" smí kdokoli s rolí (mění jen pole stavu), text opraví
+//      jen autor, mazat autor nebo vedení.
+//
+//  Změna 23. 10. 2026 (odpovědi u úkolů):
 //  24) /tasks/{id}/odpovedi — každá odpověď je vlastní doklad. Číst smí
 //      vedení a účastníci úkolu (přidělený, zadavatel). Přidat smí účastník
 //      jen pod svým jménem. UPRAVIT smí jen autor a jen text + historii
@@ -502,6 +508,27 @@ service cloud.firestore {
     // vedeni nebo ten, kdo klic prave drzi; po predani je novym drzitelem
     // prijemce, ktery prevzeti potvrzuje — ale predani plati i bez
     // potvrzeni (Marco 27. 8.). Historie zustava v dokumentu klice.
+    // Zavozy — co na stavbe chybi (26. 10. 2026). Nakupni seznam stavby:
+    // cte a pise kazdy s roli (parta i sub), zalozit jen pod svym jmenem a
+    // ve stavu 'chybi' s malou fotkou. Odskrtnout „dovezeno" (a vratit) smi
+    // kdokoli s roli — ten, kdo vec na stavbe prevezme; meni se jen pole
+    // stavu. Text a mnozstvi opravi jen autor. Mazat autor nebo vedeni.
+    match /zavozy/{id} {
+      allow read: if hasRole();
+      allow create: if hasRole()
+        && request.resource.data.autorUid == request.auth.uid
+        && request.resource.data.stav == 'chybi'
+        && request.resource.data.text is string && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 300
+        && (request.resource.data.foto == null || (request.resource.data.foto is string && request.resource.data.foto.size() < 60000))
+        && request.resource.data.keys().hasOnly(['pid', 'text', 'mnozstvi', 'foto', 'autorId', 'autorUid', 'autorJmeno', 'date', 'time', 'stav', 'dovezlJmeno', 'dovezenoDen', 'dovezenoCas', 'createdAt']);
+      allow update: if hasRole() && (
+             (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stav', 'dovezlJmeno', 'dovezenoDen', 'dovezenoCas'])
+              && request.resource.data.stav in ['chybi', 'dovezeno'])
+          || (resource.data.autorUid == request.auth.uid
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'mnozstvi', 'foto'])));
+      allow delete: if isAdmin() || (hasRole() && resource.data.autorUid == request.auth.uid);
+    }
+
     match /klice/{id} {
       // Cte kazdy s roli vcetne suba — klice se predavaji i subum a sub
       // i parta maji kartaKlice v aplikaci (posluchac bez filtru). Zuzit

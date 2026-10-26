@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '26. 10. 2026 e';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '26. 10. 2026 f';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -280,6 +280,7 @@ const S = {
   odpovedi: {}, odpSleduji: null, odpUnsub: null, odpEdit: null, odpReagujNa: null, odpHistorie: {},
   ukolFiltrPid: '', ukolFiltrResp: '', ukolPredloha: null, ukolModalId: null, ukolHledat: '', ukolHotoveVse: false,
   ukolSoubory: [], usVyber: null,   // soubory u noveho ukolu; otevreny vyber z podkladu
+  zavozy: [], zavozFoto: null, zavozUkazDovezene: false,   // zavozy: co na stavbe chybi (viz sekce ZAVOZY)
   hlaseni: [], subProject: null, subPocet: 1, subOdchodOpen: false, subZaznam: '',
   podkladyStav: null, podkladyCesta: [], podkladyPid: null, poznamky: [], poznamkaEdit: null, entryEdit: null,
   poznamkyProjekt: '', poznamkyHledat: '',
@@ -623,6 +624,7 @@ function startData() {
   if (role === 'admin') listen('hlaseni', 'hlaseni', { where: [['date', '>=', oknoOd()]], sort: hlasSort });
   else if (role === 'sub') listen('hlaseni', 'hlaseni', { where: [['authUid', '==', S.authUser.uid]], sort: hlasSort });
   listen('klice', 'klice', {});
+  listenZavozy();
   /* Poznamky: vedeni vidi vsechny, ostatni jen ty sve. Filtrovat musi
      uz dotaz — pravidla umi cely dotaz jen povolit, nebo odmitnout.
      Kazdy klic (vsichni / parta / ja) ma vlastni posluchac a vysledky
@@ -719,6 +721,127 @@ function respName(t) {
 }
 /* Naléhavost úkolu se pozná barevným prouzkem, ne cudnou poznamkou —
    na stavbe se na telefon kouka vterinu, ne minutu. */
+/* ============ ZAVOZY — CO NA STAVBE CHYBI ============
+   Nakupni seznam stavby (Marco 26. 10. 2026): pracovnik zjisti, ze mu neco
+   chybi, napise to jednim radkem (volitelne fotka obalu), a pri dalsim
+   zavozu se to doveze. Dva stavy: CHYBI -> DOVEZENO (odskrtne kdokoli,
+   typicky ten, kdo to na stavbe prevezme). Vedeni vidi vsechny stavby
+   pohromade = plan priste cesty. Psat muze parta i sub. Zadne ceny ani
+   dodavatele — to je vec kancelare.
+   Doklad /zavozy/{id}: pid, text, mnozstvi, foto (nahled ~20 kB | null),
+   autorId/autorUid/autorJmeno, date, time, stav, dovezlJmeno, dovezenoDen,
+   dovezenoCas, createdAt. */
+function listenZavozy() {
+  const casti = { chybi: [], dovezeno: [] };
+  const slozit = () => {
+    const mapa = new Map();
+    casti.chybi.concat(casti.dovezeno).forEach(z => mapa.set(z.id, z));
+    S.zavozy = [...mapa.values()].sort((a, b) => ((b.date || '') + (b.time || '')).localeCompare((a.date || '') + (a.time || '')));
+    render();
+  };
+  /* dva dotazy misto jednoho slozeneho (stav + datum by chtelo index):
+     vsechno, co chybi, a dovezene jen z posledniho okna */
+  S.unsub.push(db.collection('zavozy').where('stav', '==', 'chybi').onSnapshot(snap => { casti.chybi = snap.docs.map(d => ({ id: d.id, ...d.data() })); slozit(); }, err => console.warn('zavozy', err)));
+  S.unsub.push(db.collection('zavozy').where('dovezenoDen', '>=', oknoOd()).onSnapshot(snap => { casti.dovezeno = snap.docs.map(d => ({ id: d.id, ...d.data() })); slozit(); }, err => console.warn('zavozy/dovezene', err)));
+}
+function zavozyStavby(pid) { return S.zavozy.filter(z => z.pid === pid); }
+async function zavozFotoVybrat(files) {
+  const f = files && files[0]; if (!f) return;
+  try { const ph = await pripravFotku(f, ''); S.zavozFoto = ph && ph.thumb !== NAHLED_NEDOSTUPNY ? ph.thumb : null; }
+  catch (e) { S.zavozFoto = null; }
+  render();
+}
+async function zavozPridat(pid) {
+  const inp = $('#zv-text'); const text = inp ? inp.value.trim() : '';
+  if (!text) { toast('Napiš, co chybí'); return; }
+  const mn = $('#zv-mn') ? $('#zv-mn').value.trim() : '';
+  try {
+    await db.collection('zavozy').add({
+      pid, text, mnozstvi: mn, foto: S.zavozFoto || null,
+      autorId: mojeId(), autorUid: S.authUser.uid, autorJmeno: fullName(S.me || {}),
+      date: isoToday(), time: nowTime(), stav: 'chybi', dovezlJmeno: '', dovezenoDen: '', dovezenoCas: '', createdAt: FV()
+    });
+    inp.value = ''; if ($('#zv-mn')) $('#zv-mn').value = ''; zapomen('zv-text', 'zv-mn'); S.zavozFoto = null;
+    toast('Zapsáno — doveze se při příštím závozu ✓'); render();
+  } catch (e) { toast('Nezapsalo se — ' + dbErrText(e)); }
+}
+async function zavozDovezeno(id) {
+  try { await db.collection('zavozy').doc(id).update({ stav: 'dovezeno', dovezlJmeno: fullName(S.me || {}), dovezenoDen: isoToday(), dovezenoCas: nowTime() }); toast('Dovezeno ✓'); }
+  catch (e) { toast('Nezměnilo se — ' + dbErrText(e)); }
+}
+async function zavozVratit(id) {
+  try { await db.collection('zavozy').doc(id).update({ stav: 'chybi', dovezlJmeno: '', dovezenoDen: '', dovezenoCas: '' }); }
+  catch (e) { toast('Nezměnilo se — ' + dbErrText(e)); }
+}
+async function zavozSmazat(id) {
+  const z = S.zavozy.find(x => x.id === id); if (!z) return;
+  if (!await potvrd('Smazat „' + z.text + '" ze seznamu?', '🗑 Smazat')) return;
+  try { await db.collection('zavozy').doc(id).delete(); } catch (e) { toast('Nesmazalo se — ' + dbErrText(e)); }
+}
+function zavozRadek(z, admin) {
+  const moje = z.autorUid && S.authUser && z.autorUid === S.authUser.uid;
+  const hot = z.stav === 'dovezeno';
+  return `<div class="urow" style="align-items:flex-start;${hot ? 'opacity:.6' : ''}">
+    ${z.foto ? `<img src="${z.foto}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;border:1px solid var(--line);cursor:pointer;flex:none" onclick="zavozFotoUkaz('${z.id}')">` : '<span style="font-size:19px">🧱</span>'}
+    <div style="min-width:0;flex:1">
+      <b style="${hot ? 'text-decoration:line-through;text-decoration-color:#9aa7b5' : ''}">${esc(z.text)}</b>${z.mnozstvi ? ` <span class="badge b-int">${esc(z.mnozstvi)}</span>` : ''}<br>
+      <span class="muted" style="font-size:12px">${esc(z.autorJmeno || '')} · ${fmtISO(z.date)} ${z.time || ''}${hot ? ` · <b>dovezeno</b> ${fmtISO(z.dovezenoDen)}${z.dovezlJmeno ? ' (' + esc(z.dovezlJmeno) + ')' : ''}` : ''}</span>
+    </div>
+    <span style="display:flex;gap:6px;flex:none;align-items:center">
+      ${hot ? `<span class="lnk muted" style="font-size:12px" title="Vrátit mezi chybějící" onclick="zavozVratit('${z.id}')">↩</span>`
+            : `<button class="btn ok sm" title="Je na stavbě" onclick="zavozDovezeno('${z.id}')">✓ Dovezeno</button>`}
+      ${(moje || admin) ? `<span class="lnk muted" title="Smazat" onclick="zavozSmazat('${z.id}')">🗑</span>` : ''}
+    </span>
+  </div>`;
+}
+function zavozFotoUkaz(id) {
+  const z = S.zavozy.find(x => x.id === id); if (!z || !z.foto) return;
+  $('#viewer').innerHTML = `<div class="viewer" onclick="if(event.target===this)closeDoc()"><div class="vwrap">
+    <div class="vhead"><b style="flex:1;min-width:120px">${esc(z.text)}</b><button class="btn dark sm" onclick="closeDoc()">✕ Zavřít</button></div>
+    <div class="vbody" style="padding:0;align-items:center"><img src="${z.foto}" style="width:100%;max-height:80vh;object-fit:contain"></div></div></div>`;
+}
+/* Karta v zalozce Stavba (parta i sub). */
+function kartaZavoz(p) {
+  if (!p) return '';
+  const vse = zavozyStavby(p.id);
+  const chybi = vse.filter(z => z.stav === 'chybi');
+  const dovezene = vse.filter(z => z.stav === 'dovezeno').slice(0, 15);
+  return `<div class="card">
+    <h3>🚚 Závoz — co chybí <span class="muted" style="font-weight:400">${chybi.length ? `· ${chybi.length} ${chybi.length === 1 ? 'věc' : chybi.length < 5 ? 'věci' : 'věcí'}` : '· nic nechybí'}</span></h3>
+    <div style="display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap">
+      <input type="text" id="zv-text" placeholder="Co chybí — třeba „lepidlo na obklady“" style="flex:1 1 180px;min-width:0" onkeydown="if(event.key==='Enter')zavozPridat('${p.id}')">
+      <input type="text" id="zv-mn" placeholder="kolik" style="width:84px;flex:none">
+      <label class="btn ghost sm" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;flex:none" title="Fotka obalu řekne víc než název">📸${S.zavozFoto ? ' ✓' : ''}<input type="file" accept="image/*" capture="environment" hidden onchange="zavozFotoVybrat(this.files);this.value=''"></label>
+      <button class="btn amber sm" style="flex:none" onclick="zavozPridat('${p.id}')">➕ Přidat</button>
+    </div>
+    ${S.zavozFoto ? `<div style="margin-top:6px;display:flex;gap:8px;align-items:center"><img src="${S.zavozFoto}" style="width:44px;height:44px;object-fit:cover;border-radius:8px"><span class="lnk muted" style="font-size:12px" onclick="S.zavozFoto=null;render()">✕ bez fotky</span></div>` : ''}
+    <div style="margin-top:8px">${chybi.map(z => zavozRadek(z, false)).join('') || '<div class="muted" style="font-size:13px;padding:4px 0">Zatím nic. Když ti něco chybí, napiš to sem — doveze se při příštím závozu.</div>'}</div>
+    ${dovezene.length ? `<div style="margin-top:6px"><span class="lnk muted" style="font-size:12px" onclick="S.zavozUkazDovezene=!S.zavozUkazDovezene;render()">${S.zavozUkazDovezene ? '▴ skrýt dovezené' : `▾ dovezené (${dovezene.length})`}</span>
+      ${S.zavozUkazDovezene ? dovezene.map(z => zavozRadek(z, false)).join('') : ''}</div>` : ''}
+  </div>`;
+}
+/* Stranka vedeni: vsechny stavby pohromade = plan priste cesty. */
+function pgZavozy() {
+  const chybi = S.zavozy.filter(z => z.stav === 'chybi');
+  const dovezene = S.zavozy.filter(z => z.stav === 'dovezeno');
+  const poStavbach = {};
+  chybi.forEach(z => (poStavbach[z.pid] = poStavbach[z.pid] || []).push(z));
+  const pids = Object.keys(poStavbach).sort((a, b) => ((proj(a) || {}).name || '').localeCompare((proj(b) || {}).name || '', 'cs'));
+  return `
+  <div class="strip"><h1>Závozy</h1><span class="sp"></span><span class="muted">${chybi.length ? `${chybi.length} ${chybi.length === 1 ? 'věc' : chybi.length < 5 ? 'věci' : 'věcí'} na ${pids.length} ${pids.length === 1 ? 'stavbě' : 'stavbách'}` : 'nic nechybí'}</span></div>
+  <main>
+    ${pids.map(pid => `<div class="card">
+      <h3>🛠 ${esc((proj(pid) || {}).name || '—')} <span class="muted" style="font-weight:400">· ${poStavbach[pid].length}</span></h3>
+      ${poStavbach[pid].map(z => zavozRadek(z, true)).join('')}
+    </div>`).join('') || '<div class="card"><div class="empty">🎉 Na stavbách nic nechybí.</div></div>'}
+    ${dovezene.length ? `<div class="card">
+      <h3>✅ Dovezeno za posledních ${OKNO_DNU} dní <span class="muted" style="font-weight:400">· ${dovezene.length}</span></h3>
+      ${(S.zavozUkazDovezene ? dovezene : dovezene.slice(0, 5)).map(z => `<div style="display:flex;gap:8px;align-items:baseline"><span class="muted" style="font-size:12px;flex:none">${esc((proj(z.pid) || {}).name || '')}</span>${zavozRadek(z, true)}</div>`).join('')}
+      ${dovezene.length > 5 ? `<span class="lnk muted" style="font-size:12px" onclick="S.zavozUkazDovezene=!S.zavozUkazDovezene;render()">${S.zavozUkazDovezene ? '▴ sbalit' : `▾ zobrazit všech ${dovezene.length}`}</span>` : ''}
+    </div>` : ''}
+    <div class="note">Parta píše, co jí na stavbě chybí, v záložce Stavba. Kdo věc na stavbu přiveze nebo převezme, ťukne ✓ Dovezeno. Žádné ceny ani objednávky — to patří kanceláři.</div>
+  </main>`;
+}
 /* ============ SOUBORY U UKOLU ============
    K ukolu jde pripojit soubor (vykres, nabidka, foto detailu) — bud
    z pocitace/telefonu, nebo vyberem z podkladu stavby. Soubor z pocitace
@@ -3021,6 +3144,7 @@ function sidebar() {
     { k: 'organizace', ic: '🏢', t: 'Organizace', bdg: gpsBad || '' },
     { k: 'ukoly', ic: '📌', t: 'Úkoly', bdg: S.tasks.filter(isOverdue).length || '' },
     { k: 'viceprace', ic: '🧾', t: 'Vícepráce', bdg: S.viceprace.filter(v => v.stav === 'navrh' || v.stav === 'u_investora').length || '' },
+    { k: 'zavozy', ic: '🚚', t: 'Závozy', bdg: S.zavozy.filter(z => z.stav === 'chybi').length || '' },
     { k: 'poznamky', ic: '📝', t: 'Poznámky' },
     { k: 'reporty', ic: '📈', t: 'Reporty' },
   ];
@@ -3050,6 +3174,7 @@ function viewAdmin() {
   else if (S.view === 'viceprace') body = pgViceprace();
   else if (S.view === 'poznamky') body = pgPoznamky();
   else if (S.view === 'reporty') body = pgReporty();
+  else if (S.view === 'zavozy') body = pgZavozy();
   else body = pgDenik();
   return topbar() + `<div class="shell">${sidebar()}<div class="content">${body}</div></div>`;
 }
@@ -3084,6 +3209,7 @@ function nastenkaPrehled() {
       <div class="stat" onclick="goPage('denik')"><span class="sic">📓</span><span class="st2">Zápisy v deníku za 30 dní</span><span class="sn">${S.entries.length}</span></div>
       <div class="stat" onclick="goPage('projekty')"><span class="sic">🛠️</span><span class="st2">Aktivní stavby</span><span class="sn">${act.length}</span></div>
       <div class="stat"><span class="sic">⚠️</span><span class="st2">Dnes bez zápisu</span><span class="sn ${noToday.length ? 'warn' : ''}">${noToday.length}</span></div>
+      <div class="stat" onclick="goPage('zavozy')"><span class="sic">🚚</span><span class="st2">Chybí na stavbách</span><span class="sn ${S.zavozy.filter(z => z.stav === 'chybi').length ? 'warn' : ''}">${S.zavozy.filter(z => z.stav === 'chybi').length}</span></div>
     </div>
     <div class="grid2">
       <div class="card">
@@ -9012,6 +9138,7 @@ function viewSub() {
     ${tab === 'stavba' ? `
       ${vyberStavbyProhlizeni(pv, p && p.id)}
       ${kartaHarmonogram(pv, 'sub')}
+      ${kartaZavoz(pv)}
       ${kartaPodklady(pv)}
       ${kartaPoznamky(pv)}
       ${kartaKlice()}
@@ -9308,6 +9435,7 @@ function viewWorker() {
     ${tab === 'stavba' ? `
       ${vyberStavbyProhlizeni(pv, p && p.id)}
       ${kartaHarmonogram(pv, 'worker')}
+      ${kartaZavoz(pv)}
       ${kartaPodklady(pv)}
       ${kartaPoznamky(pv)}
       ${kartaKlice()}
