@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '26. 10. 2026 b';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '26. 10. 2026 c';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -614,7 +614,7 @@ function startData() {
   /* POZOR: tohle if/else je jeden celek pro UKOLY — nevkladat mezi ne nic.
      Presne tim tu vznikla chyba: vlozeny blok hlaseni si prisvojil "else"
      a subdodavatelum se ukoly prestaly nacitat uplne. */
-  if (role === 'admin') listen('tasks', 'tasks', { sort: taskSort, pak: prevedOdpovedi });
+  if (role === 'admin') listen('tasks', 'tasks', { sort: taskSort, pak: () => { prevedOdpovedi(); prevedStavyUkolu(); } });
   if (role === 'admin') listenOdpovediVse();
   if (role === 'admin') listen('fotky_stavby', 'fotkyStavby', { where: [['date', '>=', oknoOd()]], sort: (a, b) => (b.date || '').localeCompare(a.date || '') || (((b.createdAt && b.createdAt.seconds) || 0) - ((a.createdAt && a.createdAt.seconds) || 0)) });
   else listenMojeUkoly();
@@ -1014,6 +1014,18 @@ function ukolDetailHtml(t) {
 /* Jednorazovy prevod: stare odpovedi (pole v ukolu) -> doklady. Bezi jen
    u vedeni, po nacteni ukolu, a kazdy ukol zpracuje jednou. Autor stare
    odpovedi nema autorUid, takze ji uz nikdo neupravi — jen vedeni smaze. */
+/* Stav 'probiha' uz neexistuje (26. 10. 2026) — vedeni ho pri prihlaseni
+   prevede na 'nove'. Kazdy ukol jednou. */
+let _prevodStavuBezi = false;
+async function prevedStavyUkolu() {
+  if (_prevodStavuBezi || !jsemVedeni()) return;
+  const k = S.tasks.filter(t => t.stav === 'probiha');
+  if (!k.length) return;
+  _prevodStavuBezi = true;
+  try { for (const t of k) await db.collection('tasks').doc(t.id).update({ stav: 'nove' }); }
+  catch (e) { console.warn('prevod stavu ukolu', e); }
+  _prevodStavuBezi = false;
+}
 let _prevodOdpovediBezi = false;
 async function prevedOdpovedi() {
   if (_prevodOdpovediBezi || !jsemVedeni()) return;
@@ -1105,9 +1117,15 @@ function lideProUkoly() {
 }
 function entriesOf(pid) { return S.entries.filter(e => e.pid === pid); }
 function pendingEntries() { return S.entries.filter(e => e.status === 'pending'); }
-function isOverdue(t) { return t.stav !== 'hotovo' && t.stav !== 'sablona' && t.term && t.term < isoToday(); }
-const STAVY = { nove: 'Nové', probiha: 'Probíhá', kontrola: 'Ke kontrole', hotovo: 'Hotovo' };
-const STAVCOLOR = { nove: 'b-int', probiha: 'b-wait', kontrola: 'b-wait', hotovo: 'b-ok' };
+function isOverdue(t) { return jeOtevreny(t) && t.term && t.term < isoToday(); }
+/* Tri stavy (Marco 26. 10. 2026, varianta 2): K udelani -> (parta odskrtne)
+   Ke kontrole -> (vedeni potvrdi) Hotovo. Kdyz odskrtne vedeni, je hotovo
+   rovnou. 'probiha' je starsi stav — vedeni ho pri prihlaseni prevede na
+   'nove', do te doby se ukazuje jako K udelani. */
+const STAVY = { nove: 'K udělání', probiha: 'K udělání', kontrola: 'Ke kontrole', hotovo: 'Hotovo' };
+const STAVCOLOR = { nove: 'b-int', probiha: 'b-int', kontrola: 'b-wait', hotovo: 'b-ok' };
+/* otevreny = jeste je co delat (ne hotovo, ne ke kontrole, ne sablona) */
+function jeOtevreny(t) { return t.stav !== 'hotovo' && t.stav !== 'kontrola' && t.stav !== 'sablona'; }
 const VPSTAV = { navrh: ['b-int', '✏️ čeká na nacenění'], u_investora: ['b-wait', '⏳ u investora'], schvaleno: ['b-ok', '✓ schváleno'], zamitnuto: ['b-red', '✕ zamítnuto'], papir: ['b-ok', '✓ schváleno papírově'] };
 function sBadge(s) { return s === 'approved' ? '<span class="badge b-ok">✓ schváleno</span>' : s === 'pending' ? '<span class="badge b-wait">⏳ čeká</span>' : '<span class="badge b-int">🔒 interní</span>'; }
 
@@ -3153,6 +3171,12 @@ function nastenkaUkoly() {
         <span style="margin-left:auto;display:flex;gap:6px"><button class="btn ok sm" onclick="taskDone('${t.id}')">✓ Hotovo</button><button class="btn ghost sm" onclick="taskShift('${t.id}')">+3 dny</button></span></div>`).join('')
       : '<div class="empty">🎉 Žádné úkoly po termínu.</div>'}
     </div>
+    ${ke.length ? `<div class="card">
+      <h3>🔍 Parta hlásí hotovo — potvrdit</h3>
+      ${ke.map(t => `
+        <div class="urow"><span>🔍</span><div><b class="lnk" style="color:inherit" onclick="ukolModal('${t.id}')">${esc(t.title)}</b><br><span class="muted">${esc((proj(t.pid) || {}).name || '')} · ${esc(respName(t))} · odškrtnuto ${fmtISO(t.hotovoDne)}</span></div>
+        <span style="margin-left:auto;display:flex;gap:6px"><button class="btn ok sm" onclick="nastavStavUkolu('${t.id}','hotovo')">✓ Potvrdit</button><button class="btn ghost sm" onclick="nastavStavUkolu('${t.id}','nove')">↩ Vrátit</button></span></div>`).join('')}
+    </div>` : ''}
     <div class="card">
       <h3>🔍 Ke kontrole</h3>
       ${ke.length ? ke.map(t => `<div class="urow"><span>🔍</span><div><b>${esc(t.title)}</b><br><span class="muted">${esc((proj(t.pid) || {}).name || '')} · řeší ${esc((t.res || []).join(', '))}</span></div>
@@ -6139,11 +6163,20 @@ function ukolTerminText(t) {
   if (t.term === d) return 'dnes';
   return fmtISO(t.term);
 }
-const STAVY_PORADI = ['nove', 'probiha', 'kontrola', 'hotovo'];
+
 async function nastavStavUkolu(id, stav) {
   const t = S.tasks.find(x => x.id === id); if (!t || t.stav === stav) return;
   try { await db.collection('tasks').doc(id).update({ stav, hotovoDne: stav === 'hotovo' ? isoToday() : '' }); }
   catch (e) { toast('Nezměnilo se — ' + dbErrText(e)); render(); }
+}
+/* Ovladac stavu na karte: K udelani -> tlacitko „Hotovo"; Ke kontrole ->
+   Potvrdit / Vratit; Hotovo -> zelene zaskrtnuti (tuknutim vrati). */
+function ukolStavOvladac(t) {
+  if (t.stav === 'hotovo') return `<button class="btn ok sm uk-hot" title="Vrátit mezi K udělání" onclick="nastavStavUkolu('${t.id}','nove')">✓ Hotovo</button>`;
+  if (t.stav === 'kontrola') return `<span class="badge b-wait" title="Parta hlásí hotovo — čeká na potvrzení vedení">🔍 ke kontrole</span>
+    <button class="btn ok sm" title="Potvrdit jako hotové" onclick="nastavStavUkolu('${t.id}','hotovo')">✓ Potvrdit</button>
+    <button class="btn ghost sm" title="Vrátit mezi K udělání" onclick="nastavStavUkolu('${t.id}','nove')">↩</button>`;
+  return `<button class="btn ghost sm uk-hot" title="Označit jako hotové" onclick="nastavStavUkolu('${t.id}','hotovo')">☐ Hotovo</button>`;
 }
 function ukolKartaHtml(t) {
   const u = t.respId ? userById(t.respId) : null;
@@ -6162,8 +6195,7 @@ function ukolKartaHtml(t) {
       </div>
     </div>
     <div class="uk-akce" onclick="event.stopPropagation()">
-      <select class="uk-stav" onchange="nastavStavUkolu('${t.id}',this.value)">${STAVY_PORADI.map(k => `<option value="${k}" ${t.stav === k ? 'selected' : ''}>${STAVY[k]}</option>`).join('')}</select>
-      <div class="uk-seg">${STAVY_PORADI.map(k => `<span class="${t.stav === k ? 'on' : ''}" onclick="nastavStavUkolu('${t.id}','${k}')">${STAVY[k]}</span>`).join('')}</div>
+      ${ukolStavOvladac(t)}
       <span class="lnk" title="Upravit úkol" onclick="ukolUpravit('${t.id}')">✏️</span>
       <span class="lnk" title="Smazat úkol" onclick="delTask('${t.id}')">🗑</span>
     </div>
@@ -6179,10 +6211,11 @@ function ukolySeznam() {
   const ja = mojeId();
   /* Poradi skupin (Marco 26. 10. 2026): nejdriv MOJE (i ty po terminu —
      uvnitr skupiny jdou nahoru), pak PO TERMINU ostatnich, pak OSTATNI. */
-  const moje = vse.filter(t => t.stav !== 'hotovo' && t.respId === ja)
+  const moje = vse.filter(t => jeOtevreny(t) && t.respId === ja)
     .sort((x, y) => (isOverdue(y) ? 1 : 0) - (isOverdue(x) ? 1 : 0) || ukolyRazeni(x, y));
-  const poTerminu = vse.filter(t => t.stav !== 'hotovo' && t.respId !== ja && isOverdue(t));
-  const ostatni = vse.filter(t => t.stav !== 'hotovo' && t.respId !== ja && !isOverdue(t));
+  const keKontrole = vse.filter(t => t.stav === 'kontrola');
+  const poTerminu = vse.filter(t => jeOtevreny(t) && t.respId !== ja && isOverdue(t));
+  const ostatni = vse.filter(t => jeOtevreny(t) && t.respId !== ja && !isOverdue(t));
   const hotove = vse.filter(t => t.stav === 'hotovo');
   const LIMIT_HOTOVYCH = 3;
   const hotoveUkaz = S.ukolHotoveVse ? hotove : hotove.slice(0, LIMIT_HOTOVYCH);
@@ -6190,12 +6223,13 @@ function ukolySeznam() {
   if (!vse.length) return `<div class="card"><div class="empty">${(S.ukolHledat || S.ukolFiltrPid || S.ukolFiltrResp) ? 'Nic takového tu není.' : 'Žádné úkoly. 👍'}</div></div>`;
   return `
     ${ukolySkupina('🙋 Moje', null, moje)}
+    ${ukolySkupina('🔍 Ke kontrole', 'var(--wait)', keKontrole)}
     ${ukolySkupina('❗ Po termínu', 'var(--red)', poTerminu)}
     ${ukolySkupina('Ostatní', null, ostatni)}
     ${ukolySkupina('✅ Hotové', '#6b7a8a', hotoveUkaz, skryto ? `<div style="padding:2px 2px 6px"><span class="lnk" style="font-size:12.5px" onclick="S.ukolHotoveVse=true;render()">zobrazit dalších ${skryto} hotových…</span></div>` : (S.ukolHotoveVse && hotove.length > LIMIT_HOTOVYCH ? `<div style="padding:2px 2px 6px"><span class="lnk" style="font-size:12.5px" onclick="S.ukolHotoveVse=false;render()">sbalit hotové</span></div>` : ''))}`;
 }
 function ukolyKanban() {
-  const cols = ['nove', 'probiha', 'kontrola', 'hotovo'];
+  const cols = ['nove', 'kontrola', 'hotovo'];
   return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
     ${cols.map(c => `
     <div style="background:#e7ebf0;border-radius:10px;padding:10px">
@@ -6215,7 +6249,7 @@ function ukolyKanban() {
     </div>`).join('')}
   </div>`;
 }
-function nextStav(s) { return s === 'nove' ? 'probiha' : s === 'probiha' ? 'kontrola' : 'hotovo'; }
+function nextStav(s) { return (s === 'nove' || s === 'probiha') ? 'kontrola' : 'hotovo'; }
 async function tplSave() {
   const n = $('#tp-n').value.trim(); if (!n) { toast('Vyplň název šablony'); return; }
   const items = $('#tp-i').value.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
@@ -6250,16 +6284,20 @@ async function tplApply() {
    ochranna lhuta pro uklid fotek. Bez nej by uklid smazal fotky ukolu jeste
    tyz den. Pri odchodu z hotovo se hotovoDne cisti, aby slo vraceni. */
 async function taskNext(id) { const t = S.tasks.find(x => x.id === id); const stav = nextStav(t.stav); await db.collection('tasks').doc(id).update({ stav, hotovoDne: stav === 'hotovo' ? isoToday() : '' }); }
-async function taskMove(id, dir) { const order = ['nove', 'probiha', 'kontrola', 'hotovo']; const t = S.tasks.find(x => x.id === id); const i = order.indexOf(t.stav) + dir; if (i >= 0 && i < 4) await db.collection('tasks').doc(id).update({ stav: order[i], hotovoDne: order[i] === 'hotovo' ? isoToday() : '' }); }
+async function taskMove(id, dir) { const order = ['nove', 'kontrola', 'hotovo']; const t = S.tasks.find(x => x.id === id); const i = order.indexOf(t.stav === 'probiha' ? 'nove' : t.stav) + dir; if (i >= 0 && i < 3) await db.collection('tasks').doc(id).update({ stav: order[i], hotovoDne: order[i] === 'hotovo' ? isoToday() : '' }); }
 /* Ukol si pamatuje, KDY byl odskrtnut — aby ho pracovnik jeste tentyz den
    videl a mohl vratit, kdyz ho ťuknul omylem. Druhy den uz zmizi. */
 async function taskDone(id) {
-  const t = S.tasks.find(x => x.id === id);
-  const uzHotovy = t.stav === 'hotovo';
-  await db.collection('tasks').doc(id).update({
-    stav: uzHotovy ? 'nove' : 'hotovo',
-    hotovoDne: uzHotovy ? '' : isoToday()
-  });
+  const t = S.tasks.find(x => x.id === id); if (!t) return;
+  /* Parta odskrtne -> „ke kontrole", vedeni potvrdi -> hotovo. Vedeni
+     odskrtne rovnou na hotovo. Druhe tuknuti vraci zpet mezi K udelani. */
+  const vedeni = jsemVedeni();
+  let stav;
+  if (t.stav === 'hotovo' || t.stav === 'kontrola') stav = 'nove';
+  else stav = vedeni ? 'hotovo' : 'kontrola';
+  try {
+    await db.collection('tasks').doc(id).update({ stav, hotovoDne: stav === 'nove' ? '' : isoToday() });
+  } catch (e) { toast('Nezměnilo se — ' + dbErrText(e)); }
 }
 /* Posouva se od DNESKA, ne od stareho terminu. U ukolu 14 dni po terminu
    by "+3 dny" jinak spadlo zase do minulosti, radek by zustal cerveny
@@ -8804,10 +8842,12 @@ function historieKlice(id) {
 /* Karta ukolu je spolecna pro pracovnika i subdodavatele — jeden kod,
    jedno chovani, jedna udrzba. */
 function kartaUkoly(p) {
-  const myTasks = S.tasks.filter(t => t.stav !== 'hotovo' && t.stav !== 'sablona' && jeMuj(t));
+  const myTasks = S.tasks.filter(t => jeOtevreny(t) && jeMuj(t));
   const ut = S.ukolTab || 'moje';
-  /* Dnes odskrtnute — zustavaji videt do konce dne, at jde omyl vzit zpet. */
-  const hotoveDnes = S.tasks.filter(t => t.stav === 'hotovo' && t.hotovoDne === isoToday() && jeMuj(t));
+  /* Odskrtnute partou cekaji na potvrzeni vedeni („ke kontrole") a zustavaji
+     videt, dokud je vedeni nepotvrdi — tuknutim jde omyl vzit zpet.
+     Potvrzene (hotovo) zustanou videt jen do konce dne. */
+  const hotoveDnes = S.tasks.filter(t => jeMuj(t) && (t.stav === 'kontrola' || (t.stav === 'hotovo' && t.hotovoDne === isoToday())));
   /* Co jsem zadal nekomu jinemu — vlastni ukoly uz jsou o kus vys. */
   const zadaneMnou = S.tasks.filter(t => t.stav !== 'hotovo' && t.stav !== 'sablona'
     && S.me && t.zadalId === S.me.id && t.respId !== S.me.id);
@@ -8852,8 +8892,8 @@ function kartaUkoly(p) {
             ${fotkyUkolu(t)}
           </div></div>`).join('')}
         ${hotoveDnes.map(t => `<div class="ukol hot">
-          <span class="bx on" onclick="taskDone('${t.id}')" title="Vrátit mezi nehotové">✓</span>
-          <div style="cursor:pointer" onclick="S.ukolDetail=S.ukolDetail==='${t.id}'?null:'${t.id}';render()"><div class="tt">${esc(t.title)}${pocetOdpovedi(t) ? ` <span class="muted" style="font-weight:400">💬${pocetOdpovedi(t)}</span>` : ''}</div><div class="mt"><span>Hotovo dnes — ťuknutím vrátíš</span></div></div></div>`).join('')}
+          <span class="bx on" style="${t.stav === 'kontrola' ? 'background:var(--wait);border-color:var(--wait)' : ''}" onclick="taskDone('${t.id}')" title="Vrátit mezi nehotové">✓</span>
+          <div style="cursor:pointer" onclick="S.ukolDetail=S.ukolDetail==='${t.id}'?null:'${t.id}';render()"><div class="tt">${esc(t.title)}${pocetOdpovedi(t) ? ` <span class="muted" style="font-weight:400">💬${pocetOdpovedi(t)}</span>` : ''}</div><div class="mt"><span>${t.stav === 'kontrola' ? '🔍 Hotovo — čeká na potvrzení vedení · ťuknutím vrátíš' : 'Potvrzeno jako hotové ✓'}</span></div></div></div>`).join('')}
         ${(!myTasks.length && !hotoveDnes.length) ? '<div class="empty">Žádné úkoly. Můžeš dělat svoje. 👍</div>' : ''}
       </div>` : `<div class="uk">
         ${zadaneMnou.map(t => `<div class="ukol ${ukolNaleh(t)}">
@@ -9011,7 +9051,7 @@ function mobTaby(role) {
      obsah zalozky Dnes, ale dole by nesvitila zadna. */
   const t = mobTabProRoli(role);
   const p = proj(S.workerProject);
-  const ukolu = S.tasks.filter(x => x.stav !== 'hotovo' && x.stav !== 'sablona').length;
+  const ukolu = S.tasks.filter(x => jeOtevreny(x) && jeMuj(x)).length;
   const polozky = [
     { k: 'dnes', ic: '🕐', t: 'Dnes' },
     { k: 'ukoly', ic: '📌', t: 'Úkoly', bdg: ukolu || '' },

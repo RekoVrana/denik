@@ -91,7 +91,8 @@ function navodWorker() {
       + 'Nový příchod si dneska zapíšeš normálně, čekání ti ho neblokuje.')}
 
     ${navodKrok('📌', 'Úkoly',
-        'Záložka <b>📌 Úkoly</b> dole. Hotový úkol odškrtni čtverečkem vlevo. '
+        'Záložka <b>📌 Úkoly</b> dole. Hotový úkol odškrtni čtverečkem vlevo — dostane „čeká na potvrzení vedení" '
+      + 'a zmizí, až ho vedení potvrdí. Omyl vrátíš dalším ťuknutím. '
       + 'Číslo na záložce říká, kolik jich ještě čeká.')}
 
     ${navodKrok('🏗', 'Všechno o stavbě',
