@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '26. 10. 2026 c';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '26. 10. 2026 d';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -5813,8 +5813,36 @@ function gpsBunka(a) {
   const odch = Math.round(a.gps).toLocaleString('cs');
   if (a.gps <= TOL) return `<span class="muted">${odch} m</span>`;
   if (!gpsPresnostOk(a)) return `<span class="muted" title="Telefon polohu jen odhadl (z wifi nebo ze sítě), ne z GPS. Odchylka ${odch} m z toho nic nedokazuje.">poloha nepřesná (±${Math.round(a.gpsPresnost).toLocaleString('cs')} m)</span>`;
-  if (a.gpsProvereno) return `<span class="muted" title="Prověřil(a) ${esc(a.gpsProvereno.kdo || '')}">${odch} m · ✓ prověřeno</span>`;
-  return `<b style="color:var(--red)">⚠ ${odch} m</b>`;
+  const mapa = a.poloha ? ` <span class="lnk" title="Ukázat na mapě, kde byl telefon" onclick="event.stopPropagation();attMapa('${a.id}')">🗺</span>` : '';
+  if (a.gpsProvereno) return `<span class="muted" title="Prověřil(a) ${esc(a.gpsProvereno.kdo || '')}">${odch} m · ✓ prověřeno</span>${mapa}`;
+  return `<b style="color:var(--red)">⚠ ${odch} m</b>${mapa}`;
+}
+/* Mapa k odchylce: stavba (kruh povolene odchylky) a misto, kde telefon
+   pichnul. Jen u zaznamu, ktere polohu maji (od 26. 10. 2026). */
+function attMapa(id) {
+  const a = S.attendance.find(x => x.id === id); if (!a || !a.poloha) return;
+  const p = proj(a.pid); const tol = (p && p.gps && p.gps.tol) || CFG.gpsTolerance || 100;
+  modal(`<h3>🗺 Kde byl telefon</h3>
+    <div class="muted" style="font-size:13px">${esc(a.userName || '')} · ${a.akce} ${fmtISO(a.date)} ${a.time || ''} · <b style="color:${a.gps > tol ? 'var(--red)' : 'inherit'}">${Math.round(a.gps || 0).toLocaleString('cs')} m</b> od stavby${a.gpsPresnost != null ? ` · přesnost měření ±${a.gpsPresnost} m` : ''}</div>
+    <div class="mapreal" id="att-mapa" style="height:320px;margin-top:10px"></div>
+    <div class="muted" style="font-size:12px;margin-top:6px">🔵 stavba a kruh ${tol} m · 🔴 telefon při píchnutí${a.gpsPresnost > tol ? ' · bledý kruh = nejistota měření' : ''}</div>
+    <div class="aprv"><a class="btn ghost sm" target="_blank" href="https://mapy.cz/zakladni?q=${a.poloha.lat}%2C${a.poloha.lng}">Mapy.cz</a><button class="btn dark" onclick="closeModal()">Zavřít</button></div>`);
+  setTimeout(() => {
+    const el = document.getElementById('att-mapa'); if (!el || typeof L === 'undefined') return;
+    const map = L.map(el, { scrollWheelZoom: false });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+    const body = [[a.poloha.lat, a.poloha.lng]];
+    L.circleMarker([a.poloha.lat, a.poloha.lng], { radius: 8, color: '#c0392b', fillColor: '#c0392b', fillOpacity: .9 }).addTo(map).bindTooltip('telefon');
+    if (a.gpsPresnost) L.circle([a.poloha.lat, a.poloha.lng], { radius: a.gpsPresnost, color: '#c0392b', weight: 1, fillOpacity: .06 }).addTo(map);
+    if (p && p.gps && p.gps.lat) {
+      L.circleMarker([p.gps.lat, p.gps.lng], { radius: 8, color: '#1a3c5e', fillColor: '#1a3c5e', fillOpacity: .9 }).addTo(map).bindTooltip(esc(p.name || 'stavba'));
+      L.circle([p.gps.lat, p.gps.lng], { radius: tol, color: '#1a3c5e', weight: 1, fillOpacity: .08 }).addTo(map);
+      L.polyline([[p.gps.lat, p.gps.lng], [a.poloha.lat, a.poloha.lng]], { color: '#6b7a8a', weight: 2, dashArray: '4 4' }).addTo(map);
+      body.push([p.gps.lat, p.gps.lng]);
+    }
+    map.fitBounds(L.latLngBounds(body).pad(0.35), { maxZoom: 18 });
+    setTimeout(() => map.invalidateSize(), 80);
+  }, 0);
 }
 /* Podezrelou polohu musi jit odbavit. Driv sla jen opravit nebo smazat —
    a cervene cislo v listě svitilo dal cely mesic, takze prestalo cokoli
@@ -9548,7 +9576,7 @@ async function workerCheck(akce) {
      signalu (Firestore ho posle sam, az bude) a selfie uz vi, kam patri.
      Zapis se zamerne neceka: offline by se na nej cekalo do nekonecna
      a tlacitko by zustalo viset na "ZAPISUJI…". */
-  const save = async (gpsDev, foto, presnost) => {
+  const save = async (gpsDev, foto, presnost, poloha) => {
     /* Pauza uz neni cislo u odchodu — ma vlastni zaznamy. Kdyz nekdo odchazi
        s bezici pauzou, uzavreme ji, jinak by bezela dal a ubirala hodiny. */
     const ref = db.collection('attendance').doc();
@@ -9559,6 +9587,9 @@ async function workerCheck(akce) {
       /* K odchylce se uklada i to, jak presne telefon meril. Bez toho neslo
          poznat, jestli je 800 m podvod, nebo poloha odhadnuta z wifi. */
       gpsPresnost: (presnost == null ? null : Math.round(presnost)),
+      /* Souradnice telefonu v okamziku pichnuti (Marco 26. 10. 2026) —
+         u odchylky se vedeni podiva na mapu, kde clovek byl. Parta o tom vi. */
+      poloha: poloha || null,
       selfie: foto ? foto.nahled : null, selfieDriveId: null,
       manual: false, createdAt: FV()
     }).catch(e => console.warn('zapis dochazky', e));
@@ -9585,7 +9616,8 @@ async function workerCheck(akce) {
     } else {
       const r = await polohaSlib;
       if (r && r.pos) {
-        await save(haversine(r.pos.coords.latitude, r.pos.coords.longitude, p.gps.lat, p.gps.lng), selfie, r.pos.coords.accuracy);
+        await save(haversine(r.pos.coords.latitude, r.pos.coords.longitude, p.gps.lat, p.gps.lng), selfie, r.pos.coords.accuracy,
+          { lat: +r.pos.coords.latitude.toFixed(6), lng: +r.pos.coords.longitude.toFixed(6) });
       } else {
         if (!await potvrd(posErrText(r && r.err) + '\n\nZapsat ' + akce.toLowerCase() + ' bez ověření polohy?')) {
           S.checking = null; render(); return;
@@ -9712,7 +9744,8 @@ async function workerPrechod() {
      poznat, jestli je 800 m podvod, nebo poloha odhadnuta z wifi. */
   const presnost = (pos && pos.coords && pos.coords.accuracy != null) ? Math.round(pos.coords.accuracy) : null;
   const spolecne = { userDocId: S.me ? S.me.id : '', userName: fullName(S.me || {}), authUid: S.authUser.uid,
-    date: isoToday(), selfie: selfie ? selfie.nahled : null, selfieDriveId: null, manual: false, gpsPresnost: presnost };
+    date: isoToday(), selfie: selfie ? selfie.nahled : null, selfieDriveId: null, manual: false, gpsPresnost: presnost,
+    poloha: pos ? { lat: +pos.coords.latitude.toFixed(6), lng: +pos.coords.longitude.toFixed(6) } : null };
   try {
     // ID obou zaznamu vyrobi telefon — prechod tak projde i bez signalu.
     // Fotka je jedna spolecna, na Drive ji navazeme na zaznam odchodu.
