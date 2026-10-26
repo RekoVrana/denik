@@ -1,5 +1,5 @@
 /* Service worker — Deník staveb Rekonstrukce Vrána */
-const CACHE = 'vrana-denik-v58';
+const CACHE = 'vrana-denik-v59';
 const ASSETS = ['./', './index.html', './app.js', './vypocty.js', './navod.js', './config.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
@@ -146,11 +146,35 @@ self.addEventListener('backgroundfetchsuccess', e => {
     try { await e.updateUI({ title: fileId ? 'Deník: fotka je na Disku ✓' : 'Deník: fotka dorazila, appka ji dopíše' }); } catch (e2) {}
   })());
 });
+function frontaDbCti(id) {
+  return frontaDbOtevrit().then(d => new Promise((ok, no) => {
+    const g = d.transaction(FRONTA_STORE, 'readonly').objectStore(FRONTA_STORE).get(id);
+    g.onsuccess = () => ok(g.result || null); g.onerror = () => no(g.error);
+  }));
+}
+/* Nahrání „selhalo" nejčastěji jen proto, že Google po uložení přesměroval
+   na stránku „nenalezeno" (zhruba každé třetí volání). Soubor na Disku
+   přitom už je. Než to vzdáme, zeptáme se mostu podle klíče — tenhle
+   dotaz jde po obyčejné cestě, která přesměrování zvládne. Když se najde,
+   položka je hotová i bez otevření appky. */
+async function frontaDohledatPodleKlice(it) {
+  if (!it || !it.most || !it.klic) return '';
+  try {
+    const odp = await fetch(it.most, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'findByKey', klic: it.klic }) });
+    const j = JSON.parse(await odp.text());
+    return (j && j.fileId) || '';
+  } catch (e) { return ''; }
+}
 function frontaPozadiSelhalo(e, titul) {
   const id = frontaIdZeZnacky(e.registration.id);
   e.waitUntil((async () => {
-    if (id != null) await frontaDbUprav(id, it => { it.pozadi = false; }).catch(() => {});
-    try { await e.updateUI({ title: titul }); } catch (e2) {}
+    let nalezeno = '';
+    if (id != null) {
+      const it = await frontaDbCti(id).catch(() => null);
+      nalezeno = await frontaDohledatPodleKlice(it);
+      await frontaDbUprav(id, x => { x.pozadi = false; if (nalezeno) { x.fileId = nalezeno; delete x.data; } }).catch(() => {});
+    }
+    try { await e.updateUI({ title: nalezeno ? 'Deník: fotka je na Disku ✓' : titul }); } catch (e2) {}
   })());
 }
 self.addEventListener('backgroundfetchfail', e => frontaPozadiSelhalo(e, 'Deník: nahrání nedoběhlo, appka to zkusí znovu'));

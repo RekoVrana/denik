@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '23. 10. 2026 c';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '23. 10. 2026 d';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -1283,8 +1283,17 @@ function frontaBadgeHtml() {
 }
 /* Background Fetch: jen kde ho prohlížeč umí (Android Chrome; iPhone ne)
    a service worker už běží. */
-function frontaPozadiManager() {
-  try { return (S.swReg && S.swReg.backgroundFetch && navigator.serviceWorker.controller) ? S.swReg.backgroundFetch : null; } catch (e) { return null; }
+/* POZOR na poradi pri startu: fronta se spousti hned po nacteni, ale
+   service worker je pripraveny az o chvili pozdeji. Bez cekani se prvni
+   pruchod rozjel postaru na popredi, drzel zamek celou dobu, co byla appka
+   otevrena, a telefon nedostal nic k predani (David, 26. 10. 2026). */
+async function frontaPozadiManager() {
+  try {
+    if (!('BackgroundFetchManager' in window) || !navigator.serviceWorker) return null;
+    const reg = await Promise.race([navigator.serviceWorker.ready, new Promise(r => setTimeout(() => r(null), 4000))]);
+    if (reg) S.swReg = reg;
+    return (reg && reg.active && reg.backgroundFetch) ? reg.backgroundFetch : null;
+  } catch (e) { return null; }
 }
 function frontaZnackaPozadi(it) { return 'fronta-' + it.id + '-' + it.klic; }
 async function frontaPredatPozadi(pozadi, it, slozka) {
@@ -1318,6 +1327,7 @@ async function frontaOdeslat() {
   S.uploading++; S.frontaPrubeh = { hotovo: 0, celkem: cekaji.length }; render();
   obrazovkuDrzet();
   let zmeskano = 0, docasnych = 0, pozadiBezi = 0;
+  const pozadi = await frontaPozadiManager();   // jednou za pruchod, az je service worker pripraveny
   try {
     for (const it of cekaji) {
       if (!S.online) break;
@@ -1346,7 +1356,6 @@ async function frontaOdeslat() {
           /* NA POZADÍ (Android Chrome): nahrání se předá systému a dokončí
              se i po zavření appky nebo zhasnutí displeje. Výsledek zapíše
              service worker k položce (fileId), tady už jen hlídáme, co běží. */
-          const pozadi = frontaPozadiManager();
           if (pozadi) {
             const znacka = frontaZnackaPozadi(it);
             const bezi = await pozadi.get(znacka).catch(() => null);
@@ -1354,7 +1363,7 @@ async function frontaOdeslat() {
           }
           if (it.odeslano) fileId = await frontaNajdiPodleKlice(slozka, it.klic);
           if (!fileId && pozadi) {
-            it.odeslano = true; it.pozadi = true;
+            it.odeslano = true; it.pozadi = true; it.most = CFG.scriptUrl;
             try { await frontaTx('readwrite', st => st.put(it)); } catch (e2) {}
             try {
               await frontaPredatPozadi(pozadi, it, slozka);
