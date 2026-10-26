@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '23. 10. 2026 i';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '26. 10. 2026';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -278,7 +278,7 @@ const S = {
   /* odpovedi u ukolu (viz sekce ODPOVEDI U UKOLU): vedeni je ma vsechny
      naraz, parta jen pro prave rozbaleny ukol */
   odpovedi: {}, odpSleduji: null, odpUnsub: null, odpEdit: null, odpReagujNa: null, odpHistorie: {},
-  ukolFiltrPid: '', ukolFiltrResp: '', ukolPredloha: null, ukolModalId: null,
+  ukolFiltrPid: '', ukolFiltrResp: '', ukolPredloha: null, ukolModalId: null, ukolHledat: '', ukolHotoveVse: false,
   ukolSoubory: [], usVyber: null,   // soubory u noveho ukolu; otevreny vyber z podkladu
   hlaseni: [], subProject: null, subPocet: 1, subOdchodOpen: false, subZaznam: '',
   podkladyStav: null, podkladyCesta: [], podkladyPid: null, poznamky: [], poznamkaEdit: null, entryEdit: null,
@@ -1067,6 +1067,8 @@ function ukolModalObnov() {
 }
 function prekresliUkol(id) { if (ukolModalOtevren(id)) ukolModalObnov(); else render(); }
 function ukolModal(id) {
+  if (id === 'novy') { S.ukolModalId = id; modal(novyUkolModalHtml()); return; }
+  if (id === 'sablony') { S.ukolModalId = id; modal(sablonyModalHtml()); return; }
   const t = S.tasks.find(x => x.id === id); if (!t) return;
   S.ukolModalId = id;
   modal(`<h3 data-ukol="${id}">📌 ${esc(t.title)}</h3>
@@ -4933,7 +4935,7 @@ function modal(html) {
   $('#modal').innerHTML = `<div class="modal" onclick="if(event.target===this)closeModal()"><div class="mbox">${html}</div></div>`;
   setTimeout(mountMaps, 0);
 }
-function closeModal() { $('#modal').innerHTML = ''; S.ukolModalId = null; }
+function closeModal() { $('#modal').innerHTML = ''; if (S.ukolModalId === 'novy') { S.taskFormOpen = false; S.ukolSoubory = []; S.ukolPredloha = null; } if (S.ukolModalId === 'sablony') S.tplOpen = false; S.ukolModalId = null; }
 
 /* ============ GALERIE FOTEK ============
    Fotky ziji na zaznamech deniku (entry.photos) — galerie je jen jiny pohled
@@ -6010,19 +6012,35 @@ async function attSmazat(id) {
   catch (e) { toast('Smazání se nepovedlo: ' + dbErrText(e)); }
 }
 
-/* ---- Úkoly ---- */
+/* ---- Úkoly ----
+   Prestavba 26. 10. 2026 (zadani Marca, odsouhlaseny nahled): misto tabulky
+   karty ve skupinach „Po terminu / Moje / Ostatni / Hotove", stav se prepina
+   primo na karte, novy ukol a sablony jsou okna (neodsouvaji seznam).
+   Na telefonu se karta preskladava (CSS .uk-*), prepinac stavu nahrazuje
+   jeden stitek s vyberem. */
 function pgUkoly() {
   const v = S.ukolyView;
+  /* okna „novy ukol" a „sablony" se oteviraji podle stavu, at funguji i
+     odkazy odjinud (stavba, odpoved -> novy ukol) */
+  setTimeout(() => {
+    if (S.taskFormOpen && !ukolModalOtevren('novy')) ukolModal('novy');
+    else if (S.tplOpen && !ukolModalOtevren('sablony')) ukolModal('sablony');
+  }, 0);
   return `
   <div class="strip"><h1>Úkoly</h1><span class="sp"></span>
-    <button class="btn ${v === 'kanban' ? 'amber' : 'ghost'} sm" onclick="S.ukolyView='kanban';render()">▦ KANBAN</button>
-    <button class="btn ${v === 'seznam' ? 'amber' : 'ghost'} sm" onclick="S.ukolyView='seznam';render()">≡ SEZNAM</button>
-    <button class="btn ghost sm" onclick="S.tplOpen=!S.tplOpen;render()">📋 ŠABLONY</button>
-    <button class="btn amber" onclick="S.taskFormOpen=!S.taskFormOpen;render()">➕ PŘIDAT</button></div>
+    <button class="btn ${v === 'seznam' ? 'amber' : 'ghost'} sm uk-prepinac" onclick="S.ukolyView='seznam';render()">≡ SEZNAM</button>
+    <button class="btn ${v === 'kanban' ? 'amber' : 'ghost'} sm uk-prepinac" onclick="S.ukolyView='kanban';render()">▦ KANBAN</button>
+    <button class="btn ghost sm uk-prepinac" onclick="S.tplOpen=true;render()">📋 ŠABLONY</button>
+    <button class="btn amber" onclick="S.taskFormOpen=true;render()">➕ PŘIDAT</button></div>
   <main>
-    ${S.tplOpen ? (() => { const tpls = S.tasks.filter(t => t.stav === 'sablona'); return `
-    <div class="card">
-      <h3>📋 Šablony úkolů</h3>
+    ${ukolyNastrojeHtml()}
+    ${v === 'seznam' ? ukolySeznam() : ukolyKanban()}
+    <div class="note">Úkoly po termínu se eskalují na nástěnku s tlačítky Hotovo / +3 dny. Interní poznámky z deníku jdou převést na úkol jedním klikem.</div>
+  </main>`;
+}
+function sablonyModalHtml() {
+  const tpls = S.tasks.filter(t => t.stav === 'sablona');
+  return `<h3 data-ukol="sablony">📋 Šablony úkolů</h3>
       ${tpls.map(tp => `<div class="urow"><span>📋</span><b>${esc(tp.title)}</b><span class="muted" style="margin-left:auto">${(tp.items || []).length} úkolů</span><span class="lnk" style="font-size:11px;margin-left:10px" onclick="smazSablonu('${tp.id}')">✕ smazat</span></div>`).join('') || '<div class="muted">Zatím žádné šablony.</div>'}
       ${tpls.length ? `<div class="formsec"><h4>▶ Aplikovat šablonu na stavbu</h4>
         <div class="frow">
@@ -6041,10 +6059,10 @@ function pgUkoly() {
         <textarea id="tp-i" placeholder="Fotodokumentace předání | +0&#10;Revize elektro — protokol | +3&#10;Podepsat předávací protokol | +5"></textarea>
         <div class="aprv"><button class="btn amber sm" onclick="tplSave()">💾 Uložit šablonu</button></div>
       </div>
-    </div>`; })() : ''}
-    ${S.taskFormOpen ? `
-    <div class="card">
-      <h3>➕ Nový úkol</h3>
+      <div class="aprv"><button class="btn dark" onclick="closeModal()">Zavřít</button></div>`;
+}
+function novyUkolModalHtml() {
+  return `<h3 data-ukol="novy">➕ Nový úkol</h3>
       <label>Nadpis *</label><input type="text" id="tk-t" placeholder="Co je potřeba udělat" value="${esc((S.ukolPredloha || {}).title || '')}">
       <label>Popis (nepovinný) <span class="muted" style="text-transform:none;font-weight:400">— enter dělá odrážku</span></label><textarea id="tk-popis" placeholder="- podrobnost&#10;- další bod" style="min-height:54px">${esc((S.ukolPredloha || {}).popis || '')}</textarea>
       <div class="frow">
@@ -6053,17 +6071,32 @@ function pgUkoly() {
       </div>
       <label>Termín</label><input type="date" id="tk-d" value="${shiftISO(isoToday(), 3)}">
       ${ukolSouboryHtml(null, '#tk-p')}
-      <div class="aprv"><button class="btn amber" onclick="addTask()">💾 ULOŽIT ÚKOL</button></div>
-    </div>` : ''}
-    ${ukolyFiltrHtml()}
-    ${v === 'seznam' ? ukolySeznam() : ukolyKanban()}
-    <div class="note">Úkoly po termínu se eskalují na nástěnku s tlačítky Hotovo / +3 dny. Interní poznámky z deníku jdou převést na úkol jedním klikem.</div>
-  </main>`;
+      <div class="aprv"><button class="btn amber" onclick="addTask()">💾 ULOŽIT ÚKOL</button><button class="btn ghost" onclick="closeModal()">Zrušit</button></div>`;
 }
-/* Filtr podle stavby a odpovedne osoby (Marco 23. 10. 2026). Drzi se,
-   dokud se appka nezavre; zrusit jde jednim tuknutim. V nabidce jsou i
-   neaktivni stavby a lide, kteri nejaky ukol maji — jinak by sel ukol
-   u dokoncene stavby najit jen rucne. */
+/* Hledani + filtr stavby a cloveka + pocty. V nabidce jsou i neaktivni
+   stavby a lide, kteri nejaky ukol maji. */
+function ukolyNastrojeHtml() {
+  const ukoly = S.tasks.filter(t => t.stav !== 'sablona');
+  const stavby = S.projects.filter(p => p.active || ukoly.some(t => t.pid === p.id));
+  const lideIds = new Set(ukoly.map(t => t.respId).filter(Boolean));
+  const lide = S.users.filter(u => lideIds.has(u.id)).sort((a, b) => (a.prijmeni || '').localeCompare(b.prijmeni || '', 'cs'));
+  const aktivni = !!(S.ukolFiltrPid || S.ukolFiltrResp || (S.ukolHledat || '').trim());
+  const vyb = ukolyFiltrovane();
+  const poTerm = vyb.filter(isOverdue).length;
+  return `<div class="uk-nastroje">
+    <div class="search"><input id="uk-q" placeholder="Hledat v úkolech…" value="${esc(S.ukolHledat || '')}" oninput="S.ukolHledat=this.value;render()"></div>
+    <select id="uf-p" style="width:auto" onchange="S.ukolFiltrPid=this.value;render()">
+      <option value="">🏗 Všechny stavby</option>
+      ${stavby.map(p => `<option value="${p.id}" ${S.ukolFiltrPid === p.id ? 'selected' : ''}>${esc(p.name)}${p.active ? '' : ' (neaktivní)'}</option>`).join('')}
+    </select>
+    <select id="uf-r" style="width:auto" onchange="S.ukolFiltrResp=this.value;render()">
+      <option value="">👤 Všichni lidé</option>
+      ${lide.map(u => `<option value="${u.id}" ${S.ukolFiltrResp === u.id ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}
+    </select>
+    ${aktivni ? `<button class="btn ghost sm" onclick="S.ukolFiltrPid='';S.ukolFiltrResp='';S.ukolHledat='';zapomen('uk-q');render()">✕ Zrušit</button>` : ''}
+    <span class="muted uk-pocet" style="font-size:12px;margin-left:auto">${aktivni ? vyb.length + ' z ' + ukoly.length : ukoly.length + ' ' + (ukoly.length === 1 ? 'úkol' : ukoly.length < 5 ? 'úkoly' : 'úkolů')}${poTerm ? ` · <b style="color:var(--red)">${poTerm} po termínu</b>` : ''}</span>
+  </div>`;
+}
 /* Razeni ukolu (Marco 26. 10. 2026): nehotove nahore, hotove dole; v obou
    skupinach nejdriv moje, pak ostatni. Nehotove podle terminu (nejblizsi
    prvni), hotove obracene — naposledy odskrtnuty prvni (stary ukol bez hotovoDne
@@ -6080,53 +6113,83 @@ function ukolyRazeni(a, b) {
   return (a.term || '').localeCompare(b.term || '');
 }
 function ukolyFiltrovane() {
+  const q = (S.ukolHledat || '').trim().toLowerCase();
   return S.tasks.filter(t => t.stav !== 'sablona'
     && (!S.ukolFiltrPid || t.pid === S.ukolFiltrPid)
-    && (!S.ukolFiltrResp || t.respId === S.ukolFiltrResp));
+    && (!S.ukolFiltrResp || t.respId === S.ukolFiltrResp)
+    && (!q || [t.title, t.popis, respName(t), (proj(t.pid) || {}).name, t.zadal].some(x => String(x || '').toLowerCase().includes(q))));
 }
-function ukolyFiltrHtml() {
-  const ukoly = S.tasks.filter(t => t.stav !== 'sablona');
-  const stavby = S.projects.filter(p => p.active || ukoly.some(t => t.pid === p.id));
-  const lideIds = new Set(ukoly.map(t => t.respId).filter(Boolean));
-  const lide = S.users.filter(u => lideIds.has(u.id)).sort((a, b) => (a.prijmeni || '').localeCompare(b.prijmeni || '', 'cs'));
-  const aktivni = !!(S.ukolFiltrPid || S.ukolFiltrResp);
-  return `<div class="tabletools" style="gap:8px;flex-wrap:wrap;margin-bottom:10px">
-    <select id="uf-p" style="width:auto;max-width:48%" onchange="S.ukolFiltrPid=this.value;render()">
-      <option value="">🏗 Všechny stavby</option>
-      ${stavby.map(p => `<option value="${p.id}" ${S.ukolFiltrPid === p.id ? 'selected' : ''}>${esc(p.name)}${p.active ? '' : ' (neaktivní)'}</option>`).join('')}
-    </select>
-    <select id="uf-r" style="width:auto;max-width:48%" onchange="S.ukolFiltrResp=this.value;render()">
-      <option value="">👤 Všichni lidé</option>
-      ${lide.map(u => `<option value="${u.id}" ${S.ukolFiltrResp === u.id ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}
-    </select>
-    ${aktivni ? `<button class="btn ghost sm" onclick="S.ukolFiltrPid='';S.ukolFiltrResp='';render()">✕ Zrušit filtr</button>
-      <span class="muted" style="font-size:12px">${ukolyFiltrovane().length} z ${ukoly.length}</span>` : ''}
+/* Barva clovek -> stale stejna, at se da v seznamu poznat podle kolecka. */
+const BARVY_OSOB = ['#1a3c5e', '#6b4e9b', '#2f7a4d', '#b3382c', '#0e7490', '#8a5a00', '#4b5563', '#9d174d'];
+function barvaOsoby(id) {
+  let h = 0; for (const ch of String(id || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return BARVY_OSOB[h % BARVY_OSOB.length];
+}
+function ukolPruh(t) {
+  if (t.stav === 'hotovo') return 'var(--ok)';
+  if (isOverdue(t)) return 'var(--red)';
+  if (t.term === isoToday()) return '#e0a800';
+  return '#9aa7b5';
+}
+function ukolTerminText(t) {
+  if (t.stav === 'hotovo') return t.hotovoDne ? 'hotovo ' + fmtISO(t.hotovoDne) : 'hotovo';
+  if (!t.term) return 'bez termínu';
+  const d = isoToday();
+  if (t.term < d) { const n = daysBetween(t.term, d); return fmtISO(t.term) + ' · ' + (n === 1 ? 'včera' : n + ' dní po termínu'); }
+  if (t.term === d) return 'dnes';
+  return fmtISO(t.term);
+}
+const STAVY_PORADI = ['nove', 'probiha', 'kontrola', 'hotovo'];
+async function nastavStavUkolu(id, stav) {
+  const t = S.tasks.find(x => x.id === id); if (!t || t.stav === stav) return;
+  try { await db.collection('tasks').doc(id).update({ stav, hotovoDne: stav === 'hotovo' ? isoToday() : '' }); }
+  catch (e) { toast('Nezměnilo se — ' + dbErrText(e)); render(); }
+}
+function ukolKartaHtml(t) {
+  const u = t.respId ? userById(t.respId) : null;
+  const moje = t.respId === mojeId();
+  const hot = t.stav === 'hotovo';
+  return `<div class="uk-karta ${hot ? 'hot' : ''}" onclick="ukolModal('${t.id}')">
+    <div class="pruh" style="background:${ukolPruh(t)}"></div>
+    <span class="uav" style="background:${barvaOsoby(t.respId)};color:#fff" title="${esc(respName(t))}">${u ? ini(u) : '?'}</span>
+    <div class="telo">
+      <div class="uk-nazev">${esc(t.title)}${t.src ? ` <span class="badge b-int" style="font-weight:600">${esc(t.src)}</span>` : ''}</div>
+      <div class="uk-info">
+        <span>🏗 ${esc((proj(t.pid) || {}).name || '—')}</span>
+        <span>👤 ${moje ? '<b>já</b>' : esc(respName(t))}</span>
+        <span style="${isOverdue(t) ? 'color:var(--red);font-weight:700' : ''}">📅 ${ukolTerminText(t)}</span>
+        ${pocetOdpovedi(t) ? `<span>💬 ${pocetOdpovedi(t)}</span>` : ''}${(t.soubory || []).length ? `<span>📎 ${t.soubory.length}</span>` : ''}${(t.photos || []).length ? `<span>📷 ${t.photos.length}</span>` : ''}
+      </div>
+    </div>
+    <div class="uk-akce" onclick="event.stopPropagation()">
+      <select class="uk-stav" onchange="nastavStavUkolu('${t.id}',this.value)">${STAVY_PORADI.map(k => `<option value="${k}" ${t.stav === k ? 'selected' : ''}>${STAVY[k]}</option>`).join('')}</select>
+      <div class="uk-seg">${STAVY_PORADI.map(k => `<span class="${t.stav === k ? 'on' : ''}" onclick="nastavStavUkolu('${t.id}','${k}')">${STAVY[k]}</span>`).join('')}</div>
+      <span class="lnk" title="Upravit úkol" onclick="ukolUpravit('${t.id}')">✏️</span>
+      <span class="lnk" title="Smazat úkol" onclick="delTask('${t.id}')">🗑</span>
+    </div>
   </div>`;
+}
+function ukolySkupina(nazev, barva, ukoly, extra) {
+  if (!ukoly.length) return '';
+  return `<div class="uk-skupina" style="${barva ? 'color:' + barva : ''}"><span>${nazev}</span><span class="pocet">${ukoly.length}</span><span class="cara"></span></div>
+    ${ukoly.map(ukolKartaHtml).join('')}${extra || ''}`;
 }
 function ukolySeznam() {
-  /* Nehotove podle terminu (nejblizsi nahore). Hotove az pod nimi a
-     OBRACENE — naposledy odskrtnuty prvni (Marco 26. 10. 2026); u stareho
-     ukolu bez hotovoDne se bere termin. */
-  const rows = ukolyFiltrovane().sort(ukolyRazeni);
-  return `<div class="tablecard">
-    <div style="overflow-x:auto"><table>
-      <tr><th style="width:30px"></th><th>Název</th><th>Stavba</th><th>Odpovědná osoba</th><th>Stav</th><th>Vytvořeno</th><th>Termín</th><th></th></tr>
-      ${rows.map(t => `
-      <tr style="${isOverdue(t) ? 'background:#fdeceb' : ''}">
-        <td><input type="checkbox" ${t.stav === 'hotovo' ? 'checked' : ''} onclick="taskDone('${t.id}')"></td>
-        <td style="cursor:pointer" onclick="ukolModal('${t.id}')"><b>${esc(t.title)}</b>${pocetOdpovedi(t) ? ` <span class="muted">💬${pocetOdpovedi(t)}</span>` : ''}${(t.photos || []).length ? ` <span class="muted">📷${t.photos.length}</span>` : ''}${(t.soubory || []).length ? ` <span class="muted">📎${t.soubory.length}</span>` : ''}${t.popis ? `<br><span class="muted" style="font-weight:400">${esc(t.popis.slice(0, 90))}</span>` : ''}${t.src ? ` <span class="badge b-int">${esc(t.src)}</span>` : ''}</td>
-        <td>${esc((proj(t.pid) || {}).name || '')}</td>
-        <td>${t.respId === mojeId() ? '<b>🙋 já</b>' : esc(respName(t))}</td>
-        <td><span class="badge ${STAVCOLOR[t.stav]}">${STAVY[t.stav]}</span></td>
-        <td class="muted">${fmtISO(t.created)}</td>
-        <td>${isOverdue(t) ? `<b style="color:var(--red)">❗ ${fmtISO(t.term)} (${daysBetween(t.term, isoToday())} d. po termínu)</b>` : fmtISO(t.term)}</td>
-        <td style="white-space:nowrap">${t.stav !== 'hotovo' ? `<button class="btn ok sm" onclick="taskNext('${t.id}')">→ ${STAVY[nextStav(t.stav)]}</button>` : ''}
-          <button class="btn ghost sm" title="Upravit úkol" onclick="ukolUpravit('${t.id}')">✏️</button>
-          <button class="btn ghost sm" title="Smazat úkol" onclick="delTask('${t.id}')">🗑</button></td>
-      </tr>`).join('')}
-    </table></div>
-    <div class="pagefoot"><span>${rows.length} úkolů</span></div>
-  </div>`;
+  const vse = ukolyFiltrovane().sort(ukolyRazeni);
+  const ja = mojeId();
+  const poTerminu = vse.filter(t => t.stav !== 'hotovo' && isOverdue(t));
+  const moje = vse.filter(t => t.stav !== 'hotovo' && !isOverdue(t) && t.respId === ja);
+  const ostatni = vse.filter(t => t.stav !== 'hotovo' && !isOverdue(t) && t.respId !== ja);
+  const hotove = vse.filter(t => t.stav === 'hotovo');
+  const LIMIT_HOTOVYCH = 3;
+  const hotoveUkaz = S.ukolHotoveVse ? hotove : hotove.slice(0, LIMIT_HOTOVYCH);
+  const skryto = hotove.length - hotoveUkaz.length;
+  if (!vse.length) return `<div class="card"><div class="empty">${(S.ukolHledat || S.ukolFiltrPid || S.ukolFiltrResp) ? 'Nic takového tu není.' : 'Žádné úkoly. 👍'}</div></div>`;
+  return `
+    ${ukolySkupina('❗ Po termínu', 'var(--red)', poTerminu)}
+    ${ukolySkupina('🙋 Moje', null, moje)}
+    ${ukolySkupina('Ostatní', null, ostatni)}
+    ${ukolySkupina('✅ Hotové', '#6b7a8a', hotoveUkaz, skryto ? `<div style="padding:2px 2px 6px"><span class="lnk" style="font-size:12.5px" onclick="S.ukolHotoveVse=true;render()">zobrazit dalších ${skryto} hotových…</span></div>` : (S.ukolHotoveVse && hotove.length > LIMIT_HOTOVYCH ? `<div style="padding:2px 2px 6px"><span class="lnk" style="font-size:12.5px" onclick="S.ukolHotoveVse=false;render()">sbalit hotové</span></div>` : ''))}`;
 }
 function ukolyKanban() {
   const cols = ['nove', 'probiha', 'kontrola', 'hotovo'];
@@ -6175,6 +6238,7 @@ async function tplApply() {
       await db.collection('tasks').add({ title: it.title, zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}), pid, respId, resp, created: isoToday(), term: shiftISO(start, it.off || 0), stav: 'nove', res: [resp], src: 'ze šablony ' + tpl.title, createdAt: FV() });
     }
   } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); render(); return; }
+  if (ukolModalOtevren('sablony')) closeModal();
   S.tplOpen = false;
   toast('Vytvořeno ' + (tpl.items || []).length + ' úkolů ze šablony ✓');
   render();
@@ -6297,6 +6361,7 @@ async function addTask() {
     });
   } catch (e) { toast('Nepovedlo se uložit: ' + dbErrText(e)); return; }
   S.ukolPredloha = null; S.ukolSoubory = [];
+  if (ukolModalOtevren('novy')) closeModal();
   /* Zapomenout se musi i popis — drive se cistil jen nadpis, takze popis
      predchoziho ukolu se pri dalsim otevreni formulare vratil zpatky
      a odpovedny dostal cizi zadani. */

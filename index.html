@@ -331,6 +331,41 @@
   .uktabs .t{flex:1;text-align:center;padding:9px 6px;font-size:12.5px;font-weight:700;
     border-radius:9px;background:#f1f4f8;color:var(--int);cursor:pointer;user-select:none}
   .uktabs .t.active{background:var(--navy);color:#fff}
+  /* Ukoly vedeni — karty ve skupinach (26. 10. 2026) */
+  .uk-nastroje{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:4px}
+  .uk-skupina{display:flex;align-items:center;gap:8px;margin:16px 0 8px;font-size:12px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:#42505e}
+  .uk-skupina .pocet{background:#e7ebf0;color:#42505e;border-radius:99px;padding:1px 8px}
+  .uk-skupina .cara{flex:1;height:1px;background:var(--line)}
+  .uk-karta{display:grid;grid-template-columns:5px auto 1fr auto;gap:0 12px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:6px;cursor:pointer}
+  .uk-karta:hover{border-color:#c9d2dc}
+  .uk-karta.hot{opacity:.72}
+  .uk-karta .pruh{align-self:stretch}
+  .uk-karta .uav{margin-left:8px}
+  .uk-karta .telo{padding:10px 0;min-width:0}
+  .uk-nazev{font-weight:700;font-size:14.5px;color:var(--navy-d);line-height:1.25}
+  .uk-karta.hot .uk-nazev{text-decoration:line-through;text-decoration-color:#9aa7b5}
+  .uk-info{font-size:12px;margin-top:3px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;color:var(--ink2)}
+  .uk-akce{padding:10px 12px 10px 0;display:flex;gap:8px;align-items:center}
+  .uk-seg{display:inline-flex;border:1px solid var(--line);border-radius:99px;overflow:hidden;font-size:11px;font-weight:700;flex:none}
+  .uk-seg span{padding:4px 9px;color:#6b7a8a;background:#fff;cursor:pointer;white-space:nowrap}
+  .uk-seg span.on{background:var(--navy);color:#fff}
+  .uk-akce select.uk-stav{display:none;width:auto;font-size:11px;font-weight:700;border-radius:99px;padding:3px 24px 3px 9px;border:1px solid var(--line);background-color:#fff}
+  @media(max-width:700px){
+    .uk-prepinac{display:none!important}
+    .uk-nastroje{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+    .uk-nastroje .search{grid-column:1/3;width:100%;max-width:none}
+    .uk-nastroje select{width:100%;font-size:13px;padding:7px 8px}
+    .uk-nastroje .uk-pocet{grid-column:1/3;text-align:right;margin:0}
+    .uk-karta{gap:0 9px}
+    .uk-karta .uav{width:30px;height:30px;font-size:11px}
+    .uk-nazev{font-size:14px}
+    .uk-info{font-size:11.5px;gap:7px}
+    .uk-seg{display:none}
+    .uk-akce select.uk-stav{display:inline-block;max-width:104px;padding:3px 18px 3px 8px}
+    .uk-akce{padding-right:10px}
+    .uk-akce .lnk{display:none}
+    .uk-skupina{margin:12px 0 6px;font-size:11px}
+  }
   .uk{display:flex;flex-direction:column;gap:8px}
   .ukol{display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:start;
     background:#fff;border:1px solid var(--line);border-left:4px solid var(--st,#c8d2dc);
@@ -523,9 +558,9 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js" integrity="sha384-ZaR6mWzmJtrRibZ1Vm7SoHFr8OXjyAuGAXalGDKqbxFT18oi/z+oZLIRFkpeNor1" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" integrity="sha384-I1LYojsZ5RM1cOda44Z2h42Qa6YfsQ1XkXxREnhp4ueYBR/4d1pG1K+NZM537Vsj" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" integrity="sha384-Ke0FJhH7LyRqDxZ0wt+/OXV38yfQVu7g9VPEEGjYmB4RVOY/ta04uecRhsMwT7V3" crossorigin="anonymous"></script>
-<script src="vypocty.js?v=20261023i"></script>
-<script src="navod.js?v=20261023i"></script>
-<script src="config.js?v=20261023i"></script>
-<script src="app.js?v=20261023i"></script>
+<script src="vypocty.js?v=20261026"></script>
+<script src="navod.js?v=20261026"></script>
+<script src="config.js?v=20261026"></script>
+<script src="app.js?v=20261026"></script>
 </body>
 </html>
