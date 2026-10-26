@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '23. 10. 2026 g';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '23. 10. 2026 h';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -278,7 +278,7 @@ const S = {
   /* odpovedi u ukolu (viz sekce ODPOVEDI U UKOLU): vedeni je ma vsechny
      naraz, parta jen pro prave rozbaleny ukol */
   odpovedi: {}, odpSleduji: null, odpUnsub: null, odpEdit: null, odpReagujNa: null, odpHistorie: {},
-  ukolFiltrPid: '', ukolFiltrResp: '', ukolPredloha: null,
+  ukolFiltrPid: '', ukolFiltrResp: '', ukolPredloha: null, ukolModalId: null,
   ukolSoubory: [], usVyber: null,   // soubory u noveho ukolu; otevreny vyber z podkladu
   hlaseni: [], subProject: null, subPocet: 1, subOdchodOpen: false, subZaznam: '',
   podkladyStav: null, podkladyCesta: [], podkladyPid: null, poznamky: [], poznamkaEdit: null, entryEdit: null,
@@ -772,9 +772,10 @@ async function ukolSouborOdeber(tid, i) {
   if (!tid) { S.ukolSoubory.splice(i, 1); render(); return; }
   const t = S.tasks.find(x => x.id === tid); if (!t) return;
   const soubory = (t.soubory || []).slice(); const odebrany = soubory.splice(i, 1)[0];
-  if (!await potvrd('Odebrat soubor „' + (odebrany ? odebrany.name : '') + '" od úkolu?\n\nV podkladech stavby zůstane.', 'Odebrat')) return;
-  try { await db.collection('tasks').doc(tid).update({ soubory }); if (document.querySelector('#modal .mbox')) ukolModal(tid); }
-  catch (e) { toast('Neodebralo se — ' + dbErrText(e)); }
+  const bylModal = ukolModalOtevren(tid);
+  if (!await potvrd('Odebrat soubor „' + (odebrany ? odebrany.name : '') + '" od úkolu?\n\nV podkladech stavby zůstane.', 'Odebrat')) { if (bylModal) ukolModal(tid); return; }
+  try { await db.collection('tasks').doc(tid).update({ soubory }); if (bylModal) ukolModal(tid); else render(); }
+  catch (e) { toast('Neodebralo se — ' + dbErrText(e)); if (bylModal) ukolModal(tid); }
 }
 /* Z pocitace / telefonu. pidZ = odkud vzit stavbu (id selectu u noveho ukolu). */
 async function ukolSouborZPocitace(tid, pidNeboSelect, files) {
@@ -787,7 +788,7 @@ async function ukolSouborZPocitace(tid, pidNeboSelect, files) {
     catch (e) { console.warn('soubor ukolu', e); toast('⚠ ' + (e.message || 'Nenahrálo se')); }
     finally { S.uploading--; }
   }
-  if (tid && document.querySelector('#modal .mbox')) ukolModal(tid); else render();
+  prekresliUkol(tid);
 }
 /* Vyber z podkladu stavby: rucni seznam u zakazky + zivy vypis slozky
    Podklady z Drive (s podslozkami). Otevira se pres okno; po vyberu se
@@ -796,7 +797,7 @@ async function ukolSouborZPodkladu(tid, pidNeboSelect, folderId) {
   const pid = pidNeboSelect && pidNeboSelect.startsWith('#') ? ($(pidNeboSelect) && $(pidNeboSelect).value) : pidNeboSelect;
   const p = proj(pid);
   if (!p) { toast('Nejdřív vyber stavbu'); return; }
-  if (!S.usVyber || S.usVyber.pid !== pid || S.usVyber.tid !== tid) S.usVyber = { tid, pid, cesta: [], stav: null };
+  if (!S.usVyber || S.usVyber.pid !== pid || S.usVyber.tid !== tid) S.usVyber = { tid, pid, cesta: [], stav: null, zOkna: ukolModalOtevren(tid) };
   const v = S.usVyber;
   v.stav = { nacita: true }; kresliVyberPodkladu();
   const klic = S.tajne && S.tajne.mostKlic;
@@ -831,7 +832,7 @@ function kresliVyberPodkladu() {
 }
 function vyberPodkladDo(id, nazev) { S.usVyber.cesta.push({ id, nazev }); ukolSouborZPodkladu(S.usVyber.tid, S.usVyber.pid, id); }
 function vyberPodkladZpet() { const v = S.usVyber; v.cesta.pop(); const posl = v.cesta[v.cesta.length - 1]; ukolSouborZPodkladu(v.tid, v.pid, posl ? posl.id : ''); }
-function vyberPodkladZavrit() { const v = S.usVyber; S.usVyber = null; closeModal(); if (v && v.tid && S.view !== 'projdetail' && jsemVedeni()) ukolModal(v.tid); else render(); }
+function vyberPodkladZavrit() { const v = S.usVyber; S.usVyber = null; closeModal(); if (v && v.tid && v.zOkna) ukolModal(v.tid); else render(); }
 async function vyberPodkladHotovo(id, name, mime) {
   const v = S.usVyber; if (!v) return;
   try { await ukolSouborPridej(v.tid, { name, driveId: id, mime: mime || '' }); } catch (e) { toast('Nepřipojilo se — ' + dbErrText(e)); return; }
@@ -933,14 +934,15 @@ async function odpUpravitUlozit(tid, oid) {
 }
 async function odpSmazat(tid, oid) {
   const o = (S.odpovedi[tid] || []).find(x => x.id === oid); if (!o) return;
-  if (!await potvrd('Smazat tuhle odpověď?\n\n„' + o.text.slice(0, 120) + (o.text.length > 120 ? '…' : '') + '"\n\nZůstane po ní jen stopa, kdo a kdy ji smazal.', '🗑 Smazat')) return;
+  const bylModal = ukolModalOtevren(tid);
+  if (!await potvrd('Smazat tuhle odpověď?\n\n„' + o.text.slice(0, 120) + (o.text.length > 120 ? '…' : '') + '"\n\nZůstane po ní jen stopa, kdo a kdy ji smazal.', '🗑 Smazat')) { if (bylModal) ukolModal(tid); return; }
   try {
     await db.collection('tasks').doc(tid).collection('odpovedi').doc(oid).update({
       smazano: { kdoId: mojeId(), kdoJmeno: fullName(S.me || {}), date: isoToday(), time: nowTime() }
     });
     db.collection('tasks').doc(tid).update({ odpPocet: firebase.firestore.FieldValue.increment(-1) }).catch(() => {});
-    toast('Odpověď smazána'); render();
-  } catch (e) { toast('Nesmazalo se — ' + dbErrText(e)); }
+    toast('Odpověď smazána'); if (bylModal) ukolModal(tid); else render();
+  } catch (e) { toast('Nesmazalo se — ' + dbErrText(e)); if (bylModal) ukolModal(tid); }
 }
 /* Z odpovedi novy ukol: predvyplni formular (nadpis = zacatek odpovedi,
    popis = cela odpoved s odkazem, odkud je, stavba = stavba ukolu). */
@@ -965,25 +967,25 @@ function odpHtml(t, o, hloubka) {
   } else if (S.odpEdit === o.id) {
     telo = `<textarea id="oe-${o.id}" style="min-height:54px;margin-top:4px" onclick="event.stopPropagation()" onkeydown="event.stopPropagation()">${esc(o.text || '')}</textarea>
       <div style="display:flex;gap:6px;margin-top:4px"><button class="btn amber sm" onclick="event.stopPropagation();odpUpravitUlozit('${t.id}','${o.id}')">💾 Uložit</button>
-      <button class="btn ghost sm" onclick="event.stopPropagation();S.odpEdit=null;zapomen('oe-${o.id}');render()">Zrušit</button></div>`;
+      <button class="btn ghost sm" onclick="event.stopPropagation();S.odpEdit=null;zapomen('oe-${o.id}');prekresliUkol('${t.id}')">Zrušit</button></div>`;
   } else {
     telo = `<span style="white-space:pre-line">${esc(o.text || '')}</span>`;
   }
   const akce = [];
-  if (!o.smazano && !o.stare && hloubka === 0) akce.push(`<span class="lnk" onclick="event.stopPropagation();S.odpReagujNa=S.odpReagujNa==='${o.id}'?null:'${o.id}';S.odpEdit=null;render()">↩ reagovat</span>`);
-  if (moje && !o.smazano && S.odpEdit !== o.id) akce.push(`<span class="lnk" onclick="event.stopPropagation();S.odpEdit='${o.id}';S.odpReagujNa=null;render()">✏️ upravit</span>`);
+  if (!o.smazano && !o.stare && hloubka === 0) akce.push(`<span class="lnk" onclick="event.stopPropagation();S.odpReagujNa=S.odpReagujNa==='${o.id}'?null:'${o.id}';S.odpEdit=null;prekresliUkol('${t.id}')">↩ reagovat</span>`);
+  if (moje && !o.smazano && S.odpEdit !== o.id) akce.push(`<span class="lnk" onclick="event.stopPropagation();S.odpEdit='${o.id}';S.odpReagujNa=null;prekresliUkol('${t.id}')">✏️ upravit</span>`);
   if ((moje || jsemVedeni()) && !o.smazano && !o.stare) akce.push(`<span class="lnk" onclick="event.stopPropagation();odpSmazat('${t.id}','${o.id}')">🗑 smazat</span>`);
   if (!o.smazano && !o.stare) akce.push(`<span class="lnk" onclick="event.stopPropagation();odpNovyUkol('${t.id}','${o.id}')">➕ úkol z toho</span>`);
   const deti = hloubka === 0 ? odpovediUkolu(t).filter(x => x.naId === o.id) : [];
   return `<div style="background:${hloubka ? '#eef1f5' : '#f4f6f9'};border-radius:8px;padding:6px 10px;font-size:13px${hloubka ? ';margin-left:18px;border-left:3px solid #cbd4dd' : ''}">
       <b>${esc(o.autorJmeno || '')}</b> <span class="muted">${kdy}</span>
-      ${hist.length ? ` <span class="lnk muted" style="font-size:11.5px" title="Ukázat předchozí znění" onclick="event.stopPropagation();S.odpHistorie['${o.id}']=!S.odpHistorie['${o.id}'];render()">· upraveno ${hist.length}× ${ukazHist ? '▴' : '▾'}</span>` : ''}
+      ${hist.length ? ` <span class="lnk muted" style="font-size:11.5px" title="Ukázat předchozí znění" onclick="event.stopPropagation();S.odpHistorie['${o.id}']=!S.odpHistorie['${o.id}'];prekresliUkol('${t.id}')">· upraveno ${hist.length}× ${ukazHist ? '▴' : '▾'}</span>` : ''}
       <br>${telo}
       ${ukazHist && (hist.length || o.smazano) ? `<div style="margin-top:5px;padding:5px 8px;background:#fff;border-radius:6px;font-size:12px">
         ${o.smazano ? `<div><span class="muted">poslední znění:</span> <span style="white-space:pre-line">${esc(o.text || '')}</span></div>` : ''}
         ${hist.slice().reverse().map(h => `<div><span class="muted">do ${fmtISO(h.date)} ${h.time || ''}:</span> <span style="white-space:pre-line">${esc(h.text || '')}</span></div>`).join('')}
       </div>` : ''}
-      ${o.smazano && hist.length === 0 ? `<span class="lnk muted" style="font-size:11.5px" onclick="event.stopPropagation();S.odpHistorie['${o.id}']=!S.odpHistorie['${o.id}'];render()">${ukazHist ? '▴ skrýt' : '▾ co tam bylo'}</span>` : ''}
+      ${o.smazano && hist.length === 0 ? `<span class="lnk muted" style="font-size:11.5px" onclick="event.stopPropagation();S.odpHistorie['${o.id}']=!S.odpHistorie['${o.id}'];prekresliUkol('${t.id}')">${ukazHist ? '▴ skrýt' : '▾ co tam bylo'}</span>` : ''}
       ${akce.length ? `<div style="display:flex;gap:10px;margin-top:4px;font-size:11.5px;flex-wrap:wrap">${akce.join('')}</div>` : ''}
     </div>
     ${deti.map(d => odpHtml(t, d, 1)).join('')}
@@ -1042,9 +1044,32 @@ function fotkyUkolu(t) {
   return `<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">${t.photos.map(f =>
     `<span onclick="event.stopPropagation();otevritFoto('${f.id}','','${jsAttr(t.title)}',this)" style="cursor:pointer"><img src="${f.thumb}" style="width:46px;height:46px;object-fit:cover;border-radius:8px;border:1px solid var(--line)"></span>`).join('')}</div>`;
 }
+/* Okno ukolu se musi umet prekreslit samo: odpovedi chodi zive z databaze
+   a odkazy „reagovat / upravit / historie" meni jen stav. render() kresli
+   jen #root, okno by zustalo stare (Marco 26. 10. 2026: „nejde mi reagovat").
+   Pri obnove se zachova rozepsany text, kurzor i posun okna. */
+function ukolModalOtevren(id) {
+  const el = document.querySelector('#modal [data-ukol]');
+  return !!el && (!id || el.getAttribute('data-ukol') === id);
+}
+function ukolModalObnov() {
+  const id = S.ukolModalId;
+  if (!id || !ukolModalOtevren(id)) return;
+  const box = document.querySelector('#modal .mbox');
+  const pamet = {}; const akt = document.activeElement; const fokus = akt && akt.id; let kurzor = null;
+  box.querySelectorAll('input[id],textarea[id]').forEach(el => { if (el.type !== 'file') pamet[el.id] = el.value; });
+  try { if (akt && akt.id && akt.selectionStart != null) kurzor = akt.selectionStart; } catch (e) {}
+  const posun = box.scrollTop;
+  ukolModal(id);
+  Object.keys(pamet).forEach(k => { const el = document.getElementById(k); if (el) el.value = pamet[k]; });
+  if (fokus) { const el = document.getElementById(fokus); if (el) { el.focus(); if (kurzor != null) { try { el.setSelectionRange(kurzor, kurzor); } catch (e) {} } } }
+  const box2 = document.querySelector('#modal .mbox'); if (box2) box2.scrollTop = posun;
+}
+function prekresliUkol(id) { if (ukolModalOtevren(id)) ukolModalObnov(); else render(); }
 function ukolModal(id) {
   const t = S.tasks.find(x => x.id === id); if (!t) return;
-  modal(`<h3>📌 ${esc(t.title)}</h3>
+  S.ukolModalId = id;
+  modal(`<h3 data-ukol="${id}">📌 ${esc(t.title)}</h3>
     <div class="muted" style="font-size:13px">🏗 ${esc((proj(t.pid) || {}).name || '')} · zadal <b>${esc(t.zadal || '?')}</b> ➜ <b>${esc(t.resp || 'nikomu')}</b> · ${terminChip(t)} ${(t.photos || []).length ? '📷' + t.photos.length : ''}</div>
     ${fotkyUkolu(t)}
     ${ukolDetailHtml(t)}
@@ -2508,6 +2533,7 @@ function render() {
   else if (!S.authUser || !S.meAuth) root.innerHTML = viewLogin();
   else root.innerHTML = (S.meAuth.role === 'admin') ? viewAdmin() : (S.meAuth.role === 'sub' ? viewSub() : viewWorker());
   vratitFormulare();
+  if (S.ukolModalId) ukolModalObnov();   /* otevrene okno ukolu zije z tehoz stavu */
   setTimeout(srovnejLepeni, 0);      /* kam se ma prilepit hlavicka tabulky */
   setTimeout(hlidejPrilepeni, 0);
   etapaBublinaPryc();                /* bublina u cihlicky nesmi prezit prekresleni */
@@ -4907,7 +4933,7 @@ function modal(html) {
   $('#modal').innerHTML = `<div class="modal" onclick="if(event.target===this)closeModal()"><div class="mbox">${html}</div></div>`;
   setTimeout(mountMaps, 0);
 }
-function closeModal() { $('#modal').innerHTML = ''; }
+function closeModal() { $('#modal').innerHTML = ''; S.ukolModalId = null; }
 
 /* ============ GALERIE FOTEK ============
    Fotky ziji na zaznamech deniku (entry.photos) — galerie je jen jiny pohled
