@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '23. 10. 2026 h';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '23. 10. 2026 i';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -6064,16 +6064,18 @@ function pgUkoly() {
    dokud se appka nezavre; zrusit jde jednim tuknutim. V nabidce jsou i
    neaktivni stavby a lide, kteri nejaky ukol maji — jinak by sel ukol
    u dokoncene stavby najit jen rucne. */
-/* Razeni ukolu (Marco 26. 10. 2026): kazdy vidi NAHORE sve ukoly, pak
-   ostatni. Uvnitr: nehotove podle terminu (nejblizsi prvni), hotove az pod
-   nimi a obracene — naposledy odskrtnuty prvni (stary ukol bez hotovoDne
+/* Razeni ukolu (Marco 26. 10. 2026): nehotove nahore, hotove dole; v obou
+   skupinach nejdriv moje, pak ostatni. Nehotove podle terminu (nejblizsi
+   prvni), hotove obracene — naposledy odskrtnuty prvni (stary ukol bez hotovoDne
    podle terminu). Stejne pro seznam i sloupce kanbanu. */
 function ukolyRazeni(a, b) {
+  /* Nejdriv hotove dolu — hotovy ukol nesmi byt nad nehotovymi jen proto,
+     ze je muj (Marco 26. 10. 2026). Moje napred plati uvnitr kazde skupiny. */
+  const hotA = a.stav === 'hotovo' ? 1 : 0, hotB = b.stav === 'hotovo' ? 1 : 0;
+  if (hotA !== hotB) return hotA - hotB;
   const ja = mojeId();
   const mujA = a.respId === ja ? 0 : 1, mujB = b.respId === ja ? 0 : 1;
   if (mujA !== mujB) return mujA - mujB;
-  const hotA = a.stav === 'hotovo' ? 1 : 0, hotB = b.stav === 'hotovo' ? 1 : 0;
-  if (hotA !== hotB) return hotA - hotB;
   if (hotA) return (b.hotovoDne || b.term || '').localeCompare(a.hotovoDne || a.term || '');
   return (a.term || '').localeCompare(b.term || '');
 }
