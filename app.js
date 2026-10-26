@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '26. 10. 2026 d';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '26. 10. 2026 e';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -5180,7 +5180,10 @@ function fgZavri() { document.removeEventListener('keydown', fgKlavesy); closeDo
 function fgKrok(smer) {
   const n = window._fgIdx + smer;
   if (n < 0 || n >= window._fgSeznam.length) return;
-  window._fgIdx = n; fgUkaz();
+  /* Zapamatovane id MUSI prejit na novou fotku. fgUkaz podle nej opravuje
+     index po preskladani seznamu — se starym id skocilo hned zpatky a sipky
+     vypadaly mrtve (Marco 26. 10. 2026). */
+  window._fgIdx = n; window._fgId = (window._fgSeznam[n] || {}).id || ''; fgUkaz();
 }
 /* Prekresli prohlizec pro aktualni fotku: hned thumb (nebo velkou z cache),
    kontext pod fotkou, pak potichu dotahne velkou verzi. */
