@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '23. 10. 2026 f';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '23. 10. 2026 g';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -6038,6 +6038,19 @@ function pgUkoly() {
    dokud se appka nezavre; zrusit jde jednim tuknutim. V nabidce jsou i
    neaktivni stavby a lide, kteri nejaky ukol maji — jinak by sel ukol
    u dokoncene stavby najit jen rucne. */
+/* Razeni ukolu (Marco 26. 10. 2026): kazdy vidi NAHORE sve ukoly, pak
+   ostatni. Uvnitr: nehotove podle terminu (nejblizsi prvni), hotove az pod
+   nimi a obracene — naposledy odskrtnuty prvni (stary ukol bez hotovoDne
+   podle terminu). Stejne pro seznam i sloupce kanbanu. */
+function ukolyRazeni(a, b) {
+  const ja = mojeId();
+  const mujA = a.respId === ja ? 0 : 1, mujB = b.respId === ja ? 0 : 1;
+  if (mujA !== mujB) return mujA - mujB;
+  const hotA = a.stav === 'hotovo' ? 1 : 0, hotB = b.stav === 'hotovo' ? 1 : 0;
+  if (hotA !== hotB) return hotA - hotB;
+  if (hotA) return (b.hotovoDne || b.term || '').localeCompare(a.hotovoDne || a.term || '');
+  return (a.term || '').localeCompare(b.term || '');
+}
 function ukolyFiltrovane() {
   return S.tasks.filter(t => t.stav !== 'sablona'
     && (!S.ukolFiltrPid || t.pid === S.ukolFiltrPid)
@@ -6066,8 +6079,7 @@ function ukolySeznam() {
   /* Nehotove podle terminu (nejblizsi nahore). Hotove az pod nimi a
      OBRACENE — naposledy odskrtnuty prvni (Marco 26. 10. 2026); u stareho
      ukolu bez hotovoDne se bere termin. */
-  const rows = ukolyFiltrovane().sort((a, b) => (a.stav === 'hotovo') - (b.stav === 'hotovo')
-    || (a.stav === 'hotovo' ? (b.hotovoDne || b.term || '').localeCompare(a.hotovoDne || a.term || '') : (a.term || '').localeCompare(b.term || '')));
+  const rows = ukolyFiltrovane().sort(ukolyRazeni);
   return `<div class="tablecard">
     <div style="overflow-x:auto"><table>
       <tr><th style="width:30px"></th><th>Název</th><th>Stavba</th><th>Odpovědná osoba</th><th>Stav</th><th>Vytvořeno</th><th>Termín</th><th></th></tr>
@@ -6076,7 +6088,7 @@ function ukolySeznam() {
         <td><input type="checkbox" ${t.stav === 'hotovo' ? 'checked' : ''} onclick="taskDone('${t.id}')"></td>
         <td style="cursor:pointer" onclick="ukolModal('${t.id}')"><b>${esc(t.title)}</b>${pocetOdpovedi(t) ? ` <span class="muted">💬${pocetOdpovedi(t)}</span>` : ''}${(t.photos || []).length ? ` <span class="muted">📷${t.photos.length}</span>` : ''}${(t.soubory || []).length ? ` <span class="muted">📎${t.soubory.length}</span>` : ''}${t.popis ? `<br><span class="muted" style="font-weight:400">${esc(t.popis.slice(0, 90))}</span>` : ''}${t.src ? ` <span class="badge b-int">${esc(t.src)}</span>` : ''}</td>
         <td>${esc((proj(t.pid) || {}).name || '')}</td>
-        <td>${esc(respName(t))}</td>
+        <td>${t.respId === mojeId() ? '<b>🙋 já</b>' : esc(respName(t))}</td>
         <td><span class="badge ${STAVCOLOR[t.stav]}">${STAVY[t.stav]}</span></td>
         <td class="muted">${fmtISO(t.created)}</td>
         <td>${isOverdue(t) ? `<b style="color:var(--red)">❗ ${fmtISO(t.term)} (${daysBetween(t.term, isoToday())} d. po termínu)</b>` : fmtISO(t.term)}</td>
@@ -6094,10 +6106,10 @@ function ukolyKanban() {
     ${cols.map(c => `
     <div style="background:#e7ebf0;border-radius:10px;padding:10px">
       <div style="font-weight:800;font-size:12px;color:#42505e;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">${STAVY[c]} (${ukolyFiltrovane().filter(t => t.stav === c).length})</div>
-      ${ukolyFiltrovane().filter(t => t.stav === c).sort((a, b) => c === 'hotovo' ? (b.hotovoDne || b.term || '').localeCompare(a.hotovoDne || a.term || '') : (a.term || '').localeCompare(b.term || '')).map(t => `
+      ${ukolyFiltrovane().filter(t => t.stav === c).sort(ukolyRazeni).map(t => `
         <div class="card" style="padding:10px 12px;margin-bottom:8px;${isOverdue(t) ? 'border-left:3px solid var(--red)' : ''}">
           <b style="font-size:13px;cursor:pointer" onclick="ukolModal('${t.id}')">${esc(t.title)}</b>${pocetOdpovedi(t) ? ` <span class="muted" style="font-size:11.5px">💬${pocetOdpovedi(t)}</span>` : ''}
-          <div class="muted" style="font-size:11.5px;margin:4px 0">${esc((proj(t.pid) || {}).name || '')} · ${esc(respName(t))}</div>
+          <div class="muted" style="font-size:11.5px;margin:4px 0">${esc((proj(t.pid) || {}).name || '')} · ${t.respId === mojeId() ? '<b>🙋 já</b>' : esc(respName(t))}</div>
           <div style="font-size:11.5px">${isOverdue(t) ? `<b style="color:var(--red)">❗ ${fmtISO(t.term)}</b>` : `📅 ${fmtISO(t.term)}`}</div>
           <div style="display:flex;gap:4px;margin-top:8px">
             ${c !== 'nove' ? `<button class="btn ghost sm" style="padding:3px 8px" onclick="taskMove('${t.id}',-1)">←</button>` : ''}
