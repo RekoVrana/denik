@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '26. 10. 2026';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '26. 10. 2026 b';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -6177,17 +6177,20 @@ function ukolySkupina(nazev, barva, ukoly, extra) {
 function ukolySeznam() {
   const vse = ukolyFiltrovane().sort(ukolyRazeni);
   const ja = mojeId();
-  const poTerminu = vse.filter(t => t.stav !== 'hotovo' && isOverdue(t));
-  const moje = vse.filter(t => t.stav !== 'hotovo' && !isOverdue(t) && t.respId === ja);
-  const ostatni = vse.filter(t => t.stav !== 'hotovo' && !isOverdue(t) && t.respId !== ja);
+  /* Poradi skupin (Marco 26. 10. 2026): nejdriv MOJE (i ty po terminu —
+     uvnitr skupiny jdou nahoru), pak PO TERMINU ostatnich, pak OSTATNI. */
+  const moje = vse.filter(t => t.stav !== 'hotovo' && t.respId === ja)
+    .sort((x, y) => (isOverdue(y) ? 1 : 0) - (isOverdue(x) ? 1 : 0) || ukolyRazeni(x, y));
+  const poTerminu = vse.filter(t => t.stav !== 'hotovo' && t.respId !== ja && isOverdue(t));
+  const ostatni = vse.filter(t => t.stav !== 'hotovo' && t.respId !== ja && !isOverdue(t));
   const hotove = vse.filter(t => t.stav === 'hotovo');
   const LIMIT_HOTOVYCH = 3;
   const hotoveUkaz = S.ukolHotoveVse ? hotove : hotove.slice(0, LIMIT_HOTOVYCH);
   const skryto = hotove.length - hotoveUkaz.length;
   if (!vse.length) return `<div class="card"><div class="empty">${(S.ukolHledat || S.ukolFiltrPid || S.ukolFiltrResp) ? 'Nic takového tu není.' : 'Žádné úkoly. 👍'}</div></div>`;
   return `
-    ${ukolySkupina('❗ Po termínu', 'var(--red)', poTerminu)}
     ${ukolySkupina('🙋 Moje', null, moje)}
+    ${ukolySkupina('❗ Po termínu', 'var(--red)', poTerminu)}
     ${ukolySkupina('Ostatní', null, ostatni)}
     ${ukolySkupina('✅ Hotové', '#6b7a8a', hotoveUkaz, skryto ? `<div style="padding:2px 2px 6px"><span class="lnk" style="font-size:12.5px" onclick="S.ukolHotoveVse=true;render()">zobrazit dalších ${skryto} hotových…</span></div>` : (S.ukolHotoveVse && hotove.length > LIMIT_HOTOVYCH ? `<div style="padding:2px 2px 6px"><span class="lnk" style="font-size:12.5px" onclick="S.ukolHotoveVse=false;render()">sbalit hotové</span></div>` : ''))}`;
 }
