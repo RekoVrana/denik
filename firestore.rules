@@ -16,7 +16,9 @@
 //      cizí odpověď upravit NESMÍ (rozhodnutí Marca 23. 10. 2026).
 //      Převod starých odpovědí (pole v úkolu) zapisuje vedení s příznakem
 //      prevedeno — takové doklady nemají autorUid, nikdo je neupraví.
-//      /tasks update větev (a) navíc smí odpPocet (počítadlo pro partu).
+//      /tasks update větev (a) navíc smí odpPocet (počítadlo pro partu)
+//      a soubory (26. 10. 2026: přílohy úkolu — odkazy na Drive, účastník
+//      smí připojit i odebrat; soubor sám leží v Podkladech stavby).
 //      Pro vedení je kolekční dotaz přes všechny odpovědi (match /{path=**}).
 //
 //  Změna 12. 10. 2026 (fotky ke stavbě → zápis):
@@ -377,7 +379,7 @@ service cloud.firestore {
         || (hasRole() && (resource.data.respId == mujDocId()
                           || resource.data.zadalId == mujDocId())
             && request.resource.data.diff(resource.data).affectedKeys()
-                 .hasOnly(['stav', 'hotovoDne', 'odpovedi', 'odpPocet']))
+                 .hasOnly(['stav', 'hotovoDne', 'odpovedi', 'odpPocet', 'soubory']))
         || (hasRole() && resource.data.zadalId == mujDocId()
             && request.resource.data.diff(resource.data).affectedKeys()
                  .hasOnly(['title', 'popis', 'pid', 'respId', 'resp', 'res', 'term', 'respOd']));

@@ -65,6 +65,11 @@ function navodWorker() {
         'Bez fotky zápis odeslat nejde. Podle fotek vedení pozná, co je hotové, '
       + 'a ukazuje je zákazníkovi. Vyfoť, co jste dnes udělali.')}
 
+    ${navodKrok('📎', 'Soubor k úkolu',
+        'U úkolu (i při zadávání) je <b>⬆ Soubor z počítače</b> a <b>📐 Z podkladů stavby</b>. '
+      + 'Soubor z telefonu nebo počítače se uloží do Podkladů stavby na Disku a u úkolu zůstane odkaz. '
+      + 'Ťuknutím na název se otevře.')}
+
     ${navodKrok('💬', 'Odpovědi u úkolu',
         'Ťukni na úkol a dole napiš odpověď. U každé odpovědi můžeš <b>↩ reagovat</b> (vznikne '
       + 'podvlákno), svou odpověď <b>✏️ upravit</b> nebo <b>🗑 smazat</b> — původní znění zůstane '

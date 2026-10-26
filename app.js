@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '23. 10. 2026 d';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '23. 10. 2026 e';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -279,6 +279,7 @@ const S = {
      naraz, parta jen pro prave rozbaleny ukol */
   odpovedi: {}, odpSleduji: null, odpUnsub: null, odpEdit: null, odpReagujNa: null, odpHistorie: {},
   ukolFiltrPid: '', ukolFiltrResp: '', ukolPredloha: null,
+  ukolSoubory: [], usVyber: null,   // soubory u noveho ukolu; otevreny vyber z podkladu
   hlaseni: [], subProject: null, subPocet: 1, subOdchodOpen: false, subZaznam: '',
   podkladyStav: null, podkladyCesta: [], podkladyPid: null, poznamky: [], poznamkaEdit: null, entryEdit: null,
   poznamkyProjekt: '', poznamkyHledat: '',
@@ -718,6 +719,142 @@ function respName(t) {
 }
 /* Naléhavost úkolu se pozná barevným prouzkem, ne cudnou poznamkou —
    na stavbe se na telefon kouka vterinu, ne minutu. */
+/* ============ SOUBORY U UKOLU ============
+   K ukolu jde pripojit soubor (vykres, nabidka, foto detailu) — bud
+   z pocitace/telefonu, nebo vyberem z podkladu stavby. Soubor z pocitace
+   se ULOZI DO PODKLADU STAVBY na Disku (slozka Podklady zakazky), takze
+   u stavby zustane i po vyrizeni ukolu; ukol si drzi jen odkaz. Zadal
+   Marco 26. 10. 2026. Pole ukolu: soubory [{name, driveId, mime}]. */
+const SOUBOR_MAX = 15 * 1024 * 1024;
+function ikonaSouboru(mime, name) {
+  const m = (mime || '').toLowerCase(), n = (name || '').toLowerCase();
+  if (m.includes('pdf') || n.endsWith('.pdf')) return '📄';
+  if (m.indexOf('image/') === 0 || /\.(jpe?g|png|heic|webp|gif)$/.test(n)) return '🖼';
+  if (/sheet|excel|csv/.test(m) || /\.(xlsx?|csv)$/.test(n)) return '📊';
+  return '📎';
+}
+function ctiSouborBase64(f) {
+  return new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = () => no(r.error); r.readAsDataURL(f); });
+}
+/* Nahrani do Podkladu stavby s klicem proti duplikatum: kdyz Google
+   odpoved ztrati, soubor se dohleda podle klice misto druheho nahrani. */
+async function nahrajDoPodkladu(p, f) {
+  if (f.size > SOUBOR_MAX) throw new Error('Moc velký soubor (max 15 MB): ' + f.name);
+  const slozka = await slozkaProUpload(p.cn, p.id);
+  if (!slozka) throw new Error('Stavba nemá na Disku složku — napoj ji u zakázky');
+  const klic = frontaKlic();
+  const data = await ctiSouborBase64(f);
+  const telo = { action: 'upload', folderId: slozka, rootId: CFG.driveRootFolderId, cn: p.cn, client: p.client, date: isoToday(), name: f.name, druh: 'podklad', klic, data, mime: f.type || 'application/octet-stream' };
+  let fileId = '';
+  try { fileId = (await driveCall(telo)).fileId || ''; }
+  catch (e) { if (!(e && e.docasne)) throw e; fileId = await frontaNajdiPodleKlice(slozka, klic); if (!fileId) throw e; }
+  if (!fileId) throw new Error('Most soubor nezaložil');
+  const zaznam = { name: f.name, driveId: fileId, mime: f.type || '' };
+  /* Vedeni ma u stavby i rucni seznam podkladu — doplnit, at je soubor
+     videt hned, nejen ve vypisu z Drive. Parta do /projects psat nesmi,
+     u ni staci, ze soubor lezi ve slozce Podklady. */
+  if (jsemVedeni()) {
+    const cur = (proj(p.id) || {}).stavbaDocs || [];
+    if (!cur.some(d => d.driveId === fileId)) await db.collection('projects').doc(p.id).update({ stavbaDocs: [...cur, zaznam] }).catch(() => {});
+  }
+  return zaznam;
+}
+/* Pripojeni souboru k ukolu: tid = existujici ukol (zapise se do databaze),
+   bez tid = rozepsany novy ukol (drzi se v S.ukolSoubory do ulozeni). */
+async function ukolSouborPridej(tid, zaznam) {
+  if (!tid) { S.ukolSoubory = [...S.ukolSoubory, zaznam]; render(); return; }
+  const t = S.tasks.find(x => x.id === tid); if (!t) return;
+  if ((t.soubory || []).some(d => d.driveId === zaznam.driveId)) { toast('Tenhle soubor u úkolu už je'); return; }
+  await db.collection('tasks').doc(tid).update({ soubory: [...(t.soubory || []), zaznam] });
+  toast('Soubor připojen ✓');
+}
+async function ukolSouborOdeber(tid, i) {
+  if (!tid) { S.ukolSoubory.splice(i, 1); render(); return; }
+  const t = S.tasks.find(x => x.id === tid); if (!t) return;
+  const soubory = (t.soubory || []).slice(); const odebrany = soubory.splice(i, 1)[0];
+  if (!await potvrd('Odebrat soubor „' + (odebrany ? odebrany.name : '') + '" od úkolu?\n\nV podkladech stavby zůstane.', 'Odebrat')) return;
+  try { await db.collection('tasks').doc(tid).update({ soubory }); if (document.querySelector('#modal .mbox')) ukolModal(tid); }
+  catch (e) { toast('Neodebralo se — ' + dbErrText(e)); }
+}
+/* Z pocitace / telefonu. pidZ = odkud vzit stavbu (id selectu u noveho ukolu). */
+async function ukolSouborZPocitace(tid, pidNeboSelect, files) {
+  const pid = pidNeboSelect && pidNeboSelect.startsWith('#') ? ($(pidNeboSelect) && $(pidNeboSelect).value) : pidNeboSelect;
+  const p = proj(pid);
+  if (!p) { toast('Nejdřív vyber stavbu'); return; }
+  for (const f of [...files]) {
+    S.uploading++; updBadge(); toast('Nahrávám ' + f.name + '…');
+    try { const z = await nahrajDoPodkladu(p, f); await ukolSouborPridej(tid, z); }
+    catch (e) { console.warn('soubor ukolu', e); toast('⚠ ' + (e.message || 'Nenahrálo se')); }
+    finally { S.uploading--; }
+  }
+  if (tid && document.querySelector('#modal .mbox')) ukolModal(tid); else render();
+}
+/* Vyber z podkladu stavby: rucni seznam u zakazky + zivy vypis slozky
+   Podklady z Drive (s podslozkami). Otevira se pres okno; po vyberu se
+   vrati okno ukolu, nebo se prekresli formular. */
+async function ukolSouborZPodkladu(tid, pidNeboSelect, folderId) {
+  const pid = pidNeboSelect && pidNeboSelect.startsWith('#') ? ($(pidNeboSelect) && $(pidNeboSelect).value) : pidNeboSelect;
+  const p = proj(pid);
+  if (!p) { toast('Nejdřív vyber stavbu'); return; }
+  if (!S.usVyber || S.usVyber.pid !== pid || S.usVyber.tid !== tid) S.usVyber = { tid, pid, cesta: [], stav: null };
+  const v = S.usVyber;
+  v.stav = { nacita: true }; kresliVyberPodkladu();
+  const klic = S.tajne && S.tajne.mostKlic;
+  try {
+    if (!klic || !CFG.scriptUrl) throw new Error('Most není nastavený');
+    const primo = folderId || p.podkladyFolderId || '';
+    const j = await driveCallOpakuj(primo
+      ? { action: 'listPodklady', folderId: primo, klic }
+      : { action: 'listPodklady', projektId: p.driveFolderId || '', cn: p.cn || '', client: p.client || '', rootId: CFG.driveRootFolderId, klic });
+    v.stav = j.ok ? { id: j.id, folders: j.folders || [], files: j.files || [] } : { chyba: j.error || 'Nepovedlo se' };
+  } catch (e) { v.stav = { chyba: e.message || 'Nepovedlo se' }; }
+  kresliVyberPodkladu();
+}
+function kresliVyberPodkladu() {
+  const v = S.usVyber; if (!v) return;
+  const p = proj(v.pid) || {};
+  const st = v.stav || {};
+  const uz = v.tid ? ((S.tasks.find(x => x.id === v.tid) || {}).soubory || []) : S.ukolSoubory;
+  const jeUz = id => uz.some(d => d.driveId === id);
+  const radek = (id, name, mime, size) => `<div class="urow" style="cursor:pointer;${jeUz(id) ? 'opacity:.5' : ''}" onclick="vyberPodkladHotovo('${id}','${jsAttr(name)}','${jsAttr(mime || '')}')">
+      <span>${ikonaSouboru(mime, name)}</span><b>${esc(name)}</b><span class="muted" style="margin-left:auto">${jeUz(id) ? 'už u úkolu' : (size ? Math.round(size / 1024) + ' kB' : 'vybrat')}</span></div>`;
+  modal(`<h3>📐 Vybrat z podkladů — ${esc(p.name || '')}</h3>
+    ${(p.stavbaDocs || []).length && !v.cesta.length ? `<div class="muted" style="font-size:12px;margin:4px 0">Dokumenty stavby</div>${p.stavbaDocs.map(d => radek(d.driveId, d.name, d.mime)).join('')}` : ''}
+    <div class="muted" style="font-size:12px;margin:8px 0 4px">Složka Podklady na Disku${v.cesta.length ? ' / ' + esc(v.cesta.map(c => c.nazev).join(' / ')) : ''}</div>
+    ${v.cesta.length ? `<div class="urow" style="cursor:pointer" onclick="vyberPodkladZpet()"><span>⬅</span><b>zpět</b></div>` : ''}
+    ${st.nacita ? '<div class="loading"><span class="spin"></span>Načítám z Drive…</div>'
+      : st.chyba ? `<div class="note">${esc(st.chyba)}</div>`
+      : `${(st.folders || []).map(f => `<div class="urow" style="cursor:pointer" onclick="vyberPodkladDo('${f.id}','${jsAttr(f.name)}')"><span>📁</span><b>${esc(f.name)}</b><span class="muted" style="margin-left:auto">otevřít</span></div>`).join('')}
+         ${(st.files || []).map(f => radek(f.id, f.name, f.mime, f.size)).join('')}
+         ${!(st.folders || []).length && !(st.files || []).length ? '<div class="empty">Tady zatím nic není.</div>' : ''}`}
+    <div class="aprv"><button class="btn ghost" onclick="vyberPodkladZavrit()">Zavřít</button></div>`);
+}
+function vyberPodkladDo(id, nazev) { S.usVyber.cesta.push({ id, nazev }); ukolSouborZPodkladu(S.usVyber.tid, S.usVyber.pid, id); }
+function vyberPodkladZpet() { const v = S.usVyber; v.cesta.pop(); const posl = v.cesta[v.cesta.length - 1]; ukolSouborZPodkladu(v.tid, v.pid, posl ? posl.id : ''); }
+function vyberPodkladZavrit() { const v = S.usVyber; S.usVyber = null; closeModal(); if (v && v.tid && S.view !== 'projdetail' && jsemVedeni()) ukolModal(v.tid); else render(); }
+async function vyberPodkladHotovo(id, name, mime) {
+  const v = S.usVyber; if (!v) return;
+  try { await ukolSouborPridej(v.tid, { name, driveId: id, mime: mime || '' }); } catch (e) { toast('Nepřipojilo se — ' + dbErrText(e)); return; }
+  vyberPodkladZavrit();
+}
+/* Blok „Soubory" — v okne ukolu, v rozbalenem ukolu party i ve formulari
+   noveho ukolu (tid = null, pidSelect = '#tk-p' / '#wtk-p'). */
+function ukolSouboryHtml(t, pidSelect) {
+  const tid = t ? t.id : null;
+  const seznam = t ? (t.soubory || []) : S.ukolSoubory;
+  const smi = !t || jsemVedeni() || t.zadalId === mojeId() || t.respId === mojeId();
+  const pidArg = t ? t.pid : pidSelect;
+  return `<div style="margin-top:8px" onclick="event.stopPropagation()">
+    ${seznam.length ? `<div class="muted" style="font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px">📎 Soubory</div>` : ''}
+    ${seznam.map((d, i) => `<div class="urow" style="padding:4px 0"><span style="cursor:pointer" onclick="openDriveDoc('${d.driveId}','${jsAttr(d.name)}')">${ikonaSouboru(d.mime, d.name)}</span>
+      <b class="lnk" style="color:inherit;min-width:0;overflow:hidden;text-overflow:ellipsis" onclick="openDriveDoc('${d.driveId}','${jsAttr(d.name)}')">${esc(d.name)}</b>
+      ${smi ? `<span class="lnk muted" style="margin-left:auto;font-size:12px" title="Odebrat od úkolu" onclick="ukolSouborOdeber(${tid ? `'${tid}'` : 'null'},${i})">✕</span>` : ''}</div>`).join('')}
+    ${smi ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+      <label class="btn ghost sm" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer">⬆ Soubor z počítače<input type="file" multiple hidden onchange="ukolSouborZPocitace(${tid ? `'${tid}'` : 'null'},'${pidArg}',this.files);this.value=''"></label>
+      <button class="btn ghost sm" onclick="ukolSouborZPodkladu(${tid ? `'${tid}'` : 'null'},'${pidArg}')">📐 Z podkladů stavby</button>
+    </div>` : ''}
+  </div>`;
+}
 /* ============ ODPOVEDI U UKOLU ============
    Kratka konverzace primo pod ukolem ("hotovo, ale chybelo lepidlo").
    Od 23. 10. 2026 (zadani Marca) bydli kazda odpoved jako vlastni doklad
@@ -862,6 +999,7 @@ function ukolDetailHtml(t) {
   const nacita = !jsemVedeni() && !S.odpovedi[t.id];
   return `
     ${t.popis ? `<div class="muted" style="font-size:13.5px;margin-top:4px;white-space:pre-line">${esc(t.popis)}</div>` : ''}
+    ${ukolSouboryHtml(t)}
     ${koreny.length ? `<div style="margin-top:8px;display:flex;flex-direction:column;gap:5px" onclick="event.stopPropagation()">
       ${koreny.map(o => odpHtml(t, o, 0)).join('')}
     </div>` : (nacita ? '<div class="muted" style="font-size:12px;margin-top:6px">načítám odpovědi…</div>' : '')}
@@ -5888,6 +6026,7 @@ function pgUkoly() {
         <div><label>Odpovědná osoba</label><select id="tk-r">${lideProUkoly().map(u => `<option value="${u.id}">${esc(fullName(u))}</option>`).join('')}</select></div>
       </div>
       <label>Termín</label><input type="date" id="tk-d" value="${shiftISO(isoToday(), 3)}">
+      ${ukolSouboryHtml(null, '#tk-p')}
       <div class="aprv"><button class="btn amber" onclick="addTask()">💾 ULOŽIT ÚKOL</button></div>
     </div>` : ''}
     ${ukolyFiltrHtml()}
@@ -5931,7 +6070,7 @@ function ukolySeznam() {
       ${rows.map(t => `
       <tr style="${isOverdue(t) ? 'background:#fdeceb' : ''}">
         <td><input type="checkbox" ${t.stav === 'hotovo' ? 'checked' : ''} onclick="taskDone('${t.id}')"></td>
-        <td style="cursor:pointer" onclick="ukolModal('${t.id}')"><b>${esc(t.title)}</b>${pocetOdpovedi(t) ? ` <span class="muted">💬${pocetOdpovedi(t)}</span>` : ''}${(t.photos || []).length ? ` <span class="muted">📷${t.photos.length}</span>` : ''}${t.popis ? `<br><span class="muted" style="font-weight:400">${esc(t.popis.slice(0, 90))}</span>` : ''}${t.src ? ` <span class="badge b-int">${esc(t.src)}</span>` : ''}</td>
+        <td style="cursor:pointer" onclick="ukolModal('${t.id}')"><b>${esc(t.title)}</b>${pocetOdpovedi(t) ? ` <span class="muted">💬${pocetOdpovedi(t)}</span>` : ''}${(t.photos || []).length ? ` <span class="muted">📷${t.photos.length}</span>` : ''}${(t.soubory || []).length ? ` <span class="muted">📎${t.soubory.length}</span>` : ''}${t.popis ? `<br><span class="muted" style="font-weight:400">${esc(t.popis.slice(0, 90))}</span>` : ''}${t.src ? ` <span class="badge b-int">${esc(t.src)}</span>` : ''}</td>
         <td>${esc((proj(t.pid) || {}).name || '')}</td>
         <td>${esc(respName(t))}</td>
         <td><span class="badge ${STAVCOLOR[t.stav]}">${STAVY[t.stav]}</span></td>
@@ -6110,10 +6249,10 @@ async function addTask() {
     await db.collection('tasks').add({
       title, popis: ($('#tk-popis') ? $('#tk-popis').value.trim() : ''),
       zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}), pid: $('#tk-p').value, respId, resp: fullName(ru), created: isoToday(),
-      term: $('#tk-d').value || shiftISO(isoToday(), 3), stav: 'nove', res: [fullName(ru)], createdAt: FV()
+      term: $('#tk-d').value || shiftISO(isoToday(), 3), stav: 'nove', res: [fullName(ru)], soubory: S.ukolSoubory, createdAt: FV()
     });
   } catch (e) { toast('Nepovedlo se uložit: ' + dbErrText(e)); return; }
-  S.ukolPredloha = null;
+  S.ukolPredloha = null; S.ukolSoubory = [];
   /* Zapomenout se musi i popis — drive se cistil jen nadpis, takze popis
      predchoziho ukolu se pri dalsim otevreni formulare vratil zpatky
      a odpovedny dostal cizi zadani. */
@@ -8585,6 +8724,7 @@ function kartaUkoly(p) {
         <label>Fotka k úkolu <span class="muted" style="text-transform:none;font-weight:400">— vyfoť nebo přilož · po vyřízení úkolu se fotky smažou</span></label>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">📸 Vyfotit<input type="file" accept="image/*" capture="environment" hidden onchange="ukolFotoPridat(this.files)"></label><label class="btn dark sm" style="display:inline-flex;align-items:center;gap:7px;cursor:pointer">🖼 Z galerie<input type="file" accept="image/*" multiple hidden onchange="ukolFotoPridat(this.files)"></label></div>
         ${(S.taskFoto || []).length ? `<div class="photos">${S.taskFoto.map((f, i) => `<div class="ph"><img src="${f.thumb}"><span class="del" onclick="S.taskFoto.splice(${i},1);render()">✕</span></div>`).join('')}</div>` : ''}
+        ${ukolSouboryHtml(null, '#wtk-p')}
         <div class="aprv"><button class="btn amber" onclick="workerAddTask()">➕ Zadat úkol</button></div>
       </div>` : ''}
       <div class="uktabs">
@@ -9217,9 +9357,9 @@ async function workerAddTask() {
       pid: $('#wtk-p').value, respId, resp: ru ? fullName(ru) : '',
       created: isoToday(), term: $('#wtk-d').value || shiftISO(isoToday(), 3),
       popis: ($('#wtk-popis') ? $('#wtk-popis').value.trim() : ''),
-      stav: 'nove', res: ru ? [fullName(ru)] : [], photos: fotky, createdAt: FV()
+      stav: 'nove', res: ru ? [fullName(ru)] : [], photos: fotky, soubory: S.ukolSoubory, createdAt: FV()
     });
-    S.taskFoto = [];
+    S.taskFoto = []; S.ukolSoubory = [];
     /* Skocit na zalozku, kde ukol doopravdy skoncil — at ho clovek nehleda. */
     const sobe = S.me && respId === S.me.id;
     S.ukolTab = sobe ? 'moje' : 'zadal';
