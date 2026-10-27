@@ -116,7 +116,7 @@ function navodWorker() {
 
     ${CFG.vapidKey ? navodKrok('🔔', 'Ať ti telefon dá vědět',
         'Dole na téhle stránce je <b>🔔 Zapnout upozornění</b>. Ťukni a povol je. '
-      + 'Pak ti telefon cinkne, když ti někdo zadá <b>nový úkol</b>, a večer připomene, '
+      + 'Pak ti telefon cinkne, když ti někdo zadá <b>nový úkol</b>, odpoví u tvého úkolu nebo ho odškrtne, a večer připomene, '
       + 'kdyby ses zapomněl odepsat ze stavby. Nic jiného ti chodit nebude. '
       + '<b>Na iPhonu to jde jen tehdy, když máš Deník přidaný na ploše</b> — '
       + 'v Safari jako záložka to Apple nedovolí.') : ''}
@@ -174,7 +174,7 @@ function navodSub() {
 
     ${CFG.vapidKey ? navodKrok('🔔', 'Ať ti telefon dá vědět',
         'Dole na téhle stránce je <b>🔔 Zapnout upozornění</b>. Ťukni a povol je. '
-      + 'Pak ti telefon cinkne, když ti někdo zadá <b>nový úkol</b>, a večer připomene, '
+      + 'Pak ti telefon cinkne, když ti někdo zadá <b>nový úkol</b>, odpoví u tvého úkolu nebo ho odškrtne, a večer připomene, '
       + 'kdyby ses zapomněl odepsat ze stavby. Nic jiného ti chodit nebude. '
       + '<b>Na iPhonu to jde jen tehdy, když máš Deník přidaný na ploše</b> — '
       + 'v Safari jako záložka to Apple nedovolí.') : ''}

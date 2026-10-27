@@ -13,9 +13,11 @@
    kdy nikdo aplikaci otevřenou nemá, takže ho musí odeslat něco, co běží
    pořád. Tohle je to něco.
 
-   Posílají se JEN dvě věci — vědomé rozhodnutí Marca 1. 9. 2026:
+   Posílají se JEN tři věci — vědomé rozhodnutí Marca 1. 9. 2026,
+   rozšířené 27. 10. 2026 o dění u úkolu:
      1) nový úkol pro mě
-     2) večer připomenutí, že jsem pořád píchnutý na stavbě
+     2) odpověď nebo změna stavu u úkolu, který jsem zadal nebo mám přidělený
+     3) večer připomenutí, že jsem pořád píchnutý na stavbě
    Víc upozornění znamená, že si je lidi vypnou, a pak jim nedorazí ani to
    jedno důležité.
 
@@ -134,7 +136,59 @@ function upozorneniUkoly() {
     posliCloveku_(kdo, titul, telo, url, 'ukoly');
   });
 
+  upozorneniDeniUUkolu_(od);
   vl.setProperty('UKOLY_OD', ted);
+}
+
+/* ---------- 1b. DĚNÍ U ÚKOLU (odpověď, změna stavu) ----------
+   Zadal Marco 27. 10. 2026. Aplikace při odpovědi a při změně stavu
+   razítkuje na úkol pole zmenaTs / zmenaTyp ('odpoved' | 'stav') /
+   zmenaKdoId / zmenaKdo / zmenaText. Dá se vědět oběma stranám úkolu —
+   tomu, kdo ho zadal, i tomu, kdo ho má — kromě toho, kdo změnu udělal.
+   Když u jednoho úkolu přibude v pěti minutách víc věcí, vidí most jen
+   tu poslední (razítko se přepisuje); to je záměr — jedno cinknutí, ťuknutí
+   otevře úkol a tam je všechno. */
+function upozorneniDeniUUkolu_(od) {
+  var zmenene = fsDotaz_('tasks', [
+    { field: 'zmenaTs', op: 'GREATER_THAN', ts: od }
+  ]).filter(function (t) { return t.stav !== 'sablona' && t.zmenaTyp; });
+
+  var podleLidi = {};
+  zmenene.forEach(function (t) {
+    var komu = {};
+    [t.zadalId, t.respId].forEach(function (k) { if (k && k !== t.zmenaKdoId) komu[k] = true; });
+    Object.keys(komu).forEach(function (k) { (podleLidi[k] = podleLidi[k] || []).push(t); });
+  });
+
+  Object.keys(podleLidi).forEach(function (kdo) {
+    var ukoly = podleLidi[kdo];
+    var titul, telo, url, znacka;
+    if (ukoly.length === 1) {
+      var t = ukoly[0];
+      if (t.zmenaTyp === 'odpoved') {
+        titul = '💬 ' + (t.zmenaKdo || 'Někdo') + ' odpovídá' + nazevStavby_(t.pid);
+        telo = (t.title || '') + ': ' + (t.zmenaText || '');
+      } else {
+        titul = popisStavu_(t.zmenaText) + nazevStavby_(t.pid);
+        telo = (t.title || '') + '  ·  ' + (t.zmenaKdo || '');
+      }
+      url = './#ukol=' + t.__id;
+      znacka = 'ukol-' + t.__id;
+    } else {
+      titul = 'Novinky u ' + ukoly.length + ' úkolů' + nazevStavby_(spolecnaStavba_(ukoly));
+      telo = ukoly.slice(0, 3).map(function (t) { return t.title || ''; }).join(' · ');
+      if (ukoly.length > 3) telo += ' …';
+      url = './';
+      znacka = 'ukoly-deni';
+    }
+    posliCloveku_(kdo, titul, telo, url, znacka);
+  });
+}
+
+function popisStavu_(stav) {
+  if (stav === 'kontrola') return '🔍 Úkol hlášen jako hotový — ke kontrole';
+  if (stav === 'hotovo') return '✅ Úkol potvrzen jako hotový';
+  return '↩ Úkol vrácen k udělání';
 }
 
 /* ---------- 2. ZAPOMENUTÝ ODCHOD ---------- */

@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '27. 10. 2026 b';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '27. 10. 2026 c';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -113,6 +113,24 @@ function obnovMisto() {
   if (!m || !S.authUser || m.uid !== S.authUser.uid) return;
   MISTO_KLICE.forEach(k => { if (m[k] !== undefined) S[k] = m[k]; });
   setTimeout(() => window.scrollTo(0, m.scrollY || 0), 400);
+}
+/* Odkaz z upozorneni: most posila ./#ukol=ID (viz most-upozorneni.gs a
+   sw.js). Ukoly dorazi az po prihlaseni a nacteni z databaze, proto se id
+   jen zapamatuje a okno ukolu se otevre pri prvnim prekresleni, ktere ten
+   ukol uz zna (render). Do 27. 10. 2026 tuhle cast nikdo nenapsal — tuknuti
+   na upozorneni proto konci na domovske strance (nahlasil Marco). */
+function prectiOdkazUkolu() {
+  const m = /#ukol=([A-Za-z0-9_-]+)/.exec(location.hash || '');
+  if (!m) return;
+  S.otevritUkol = m[1];
+  try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+}
+window.addEventListener('hashchange', () => { prectiOdkazUkolu(); render(); });
+function otevriUkolZOdkazu() {
+  if (!S.otevritUkol || S.authState !== 'in') return;
+  const t = S.tasks.find(x => x.id === S.otevritUkol); if (!t) return;
+  const id = S.otevritUkol; S.otevritUkol = null;
+  ukolModal(id);
 }
 async function aktualizovatApp() {
   if (S.updating) return;
@@ -1045,6 +1063,12 @@ function pocetOdpovedi(t) {
   if (typeof t.odpPocet === 'number') return t.odpPocet + (t.odpovedi || []).length;
   return (t.odpovedi || []).length;
 }
+/* Razitko posledni zmeny na ukolu. Most (most-upozorneni.gs) podle nej
+   posle upozorneni zadavateli i prideleneho — krome toho, kdo zmenu udelal.
+   Zadal Marco 27. 10. 2026 („upozorneni i pri komentari nebo zmene stavu"). */
+function zmenaUkolu(typ, text) {
+  return { zmenaTs: FV(), zmenaTyp: typ, zmenaKdoId: mojeId(), zmenaKdo: fullName(S.me || {}), zmenaText: String(text || '').slice(0, 160) };
+}
 async function ukolOdpovedet(id, naId) {
   const inp = $('#up-' + id + (naId ? '-' + naId : '')); if (!inp) return;
   const text = inp.value.trim(); if (!text) { toast('Napiš odpověď'); return; }
@@ -1054,7 +1078,7 @@ async function ukolOdpovedet(id, naId) {
       text, date: isoToday(), time: nowTime(), naId: naId || null, upraveno: [], smazano: null, createdAt: FV()
     });
     /* pocitadlo na ukolu — podle nej parta vidi "💬 3" i bez nacteni odpovedi */
-    db.collection('tasks').doc(id).update({ odpPocet: firebase.firestore.FieldValue.increment(1) }).catch(() => {});
+    db.collection('tasks').doc(id).update({ odpPocet: firebase.firestore.FieldValue.increment(1), ...zmenaUkolu('odpoved', text) }).catch(() => {});
     inp.value = ''; zapomen(inp.id); S.odpReagujNa = null; toast('Odpověď přidána ✓');
     render();
   } catch (e) { toast('Nepřidalo se — ' + dbErrText(e)); }
@@ -2718,6 +2742,7 @@ function render() {
   else root.innerHTML = (S.meAuth.role === 'admin') ? viewAdmin() : (S.meAuth.role === 'sub' ? viewSub() : viewWorker());
   vratitFormulare();
   if (S.ukolModalId) ukolModalObnov();   /* otevrene okno ukolu zije z tehoz stavu */
+  otevriUkolZOdkazu();
   setTimeout(srovnejLepeni, 0);      /* kam se ma prilepit hlavicka tabulky */
   setTimeout(hlidejPrilepeni, 0);
   etapaBublinaPryc();                /* bublina u cihlicky nesmi prezit prekresleni */
@@ -2756,7 +2781,7 @@ function initAuth() {
           S.meAuth = d.data();
           const me = await ctiSPokusem(() => db.collection('users').doc(S.meAuth.userDocId).get());
           S.me = me.exists ? { id: me.id, ...me.data() } : null;
-          S.authState = 'in'; obnovMisto(); startData(); render();
+          S.authState = 'in'; prectiOdkazUkolu(); obnovMisto(); startData(); render();
           /* Adresa zarizeni se casem sama meni. Bez tichého obnoveni pri
              kazdem spusteni by upozorneni jednoho dne prestala chodit
              a nikdo by se to nedozvedel. */
@@ -3024,9 +3049,11 @@ async function doLogout() {
    o ně řekne a uloží adresu TOHOTO zařízení; zobrazení už dělá service
    worker (viz sw.js), protože ten běží i se zavřenou aplikací.
 
-   Posílají se JEN dvě věci — vědomé rozhodnutí Marca 1. 9. 2026:
+   Posílají se JEN tři věci — vědomé rozhodnutí Marca 1. 9. 2026,
+   rozšířené 27. 10. 2026 o dění u úkolu:
      1) nový úkol pro mě
-     2) večerní připomenutí, že jsem pořád píchnutý na stavbě
+     2) odpověď nebo změna stavu u úkolu, který jsem zadal nebo mám přidělený
+     3) večerní připomenutí, že jsem pořád píchnutý na stavbě
    Víc upozornění znamená, že si je lidi vypnou — a pak jim nedorazí ani to
    jedno důležité. Přidávat jde kdykoli, couvat z toho špatně.
 
@@ -6364,7 +6391,7 @@ function ukolTerminText(t) {
 
 async function nastavStavUkolu(id, stav) {
   const t = S.tasks.find(x => x.id === id); if (!t || t.stav === stav) return;
-  try { await db.collection('tasks').doc(id).update({ stav, hotovoDne: stav === 'hotovo' ? isoToday() : '' }); }
+  try { await db.collection('tasks').doc(id).update({ stav, hotovoDne: stav === 'hotovo' ? isoToday() : '', ...zmenaUkolu('stav', stav) }); }
   catch (e) { toast('Nezměnilo se — ' + dbErrText(e)); render(); }
 }
 /* Ovladac stavu na karte: K udelani -> tlacitko „Hotovo"; Ke kontrole ->
@@ -6481,8 +6508,8 @@ async function tplApply() {
 /* Prechod na hotovo musi zapsat i hotovoDne (stejne jako taskDone) — je to
    ochranna lhuta pro uklid fotek. Bez nej by uklid smazal fotky ukolu jeste
    tyz den. Pri odchodu z hotovo se hotovoDne cisti, aby slo vraceni. */
-async function taskNext(id) { const t = S.tasks.find(x => x.id === id); const stav = nextStav(t.stav); await db.collection('tasks').doc(id).update({ stav, hotovoDne: stav === 'hotovo' ? isoToday() : '' }); }
-async function taskMove(id, dir) { const order = ['nove', 'kontrola', 'hotovo']; const t = S.tasks.find(x => x.id === id); const i = order.indexOf(t.stav === 'probiha' ? 'nove' : t.stav) + dir; if (i >= 0 && i < 3) await db.collection('tasks').doc(id).update({ stav: order[i], hotovoDne: order[i] === 'hotovo' ? isoToday() : '' }); }
+async function taskNext(id) { const t = S.tasks.find(x => x.id === id); const stav = nextStav(t.stav); await db.collection('tasks').doc(id).update({ stav, hotovoDne: stav === 'hotovo' ? isoToday() : '', ...zmenaUkolu('stav', stav) }); }
+async function taskMove(id, dir) { const order = ['nove', 'kontrola', 'hotovo']; const t = S.tasks.find(x => x.id === id); const i = order.indexOf(t.stav === 'probiha' ? 'nove' : t.stav) + dir; if (i >= 0 && i < 3) await db.collection('tasks').doc(id).update({ stav: order[i], hotovoDne: order[i] === 'hotovo' ? isoToday() : '', ...zmenaUkolu('stav', order[i]) }); }
 /* Ukol si pamatuje, KDY byl odskrtnut — aby ho pracovnik jeste tentyz den
    videl a mohl vratit, kdyz ho ťuknul omylem. Druhy den uz zmizi. */
 async function taskDone(id) {
@@ -6494,7 +6521,7 @@ async function taskDone(id) {
   if (t.stav === 'hotovo' || t.stav === 'kontrola') stav = 'nove';
   else stav = vedeni ? 'hotovo' : 'kontrola';
   try {
-    await db.collection('tasks').doc(id).update({ stav, hotovoDne: stav === 'nove' ? '' : isoToday() });
+    await db.collection('tasks').doc(id).update({ stav, hotovoDne: stav === 'nove' ? '' : isoToday(), ...zmenaUkolu('stav', stav) });
   } catch (e) { toast('Nezměnilo se — ' + dbErrText(e)); }
 }
 /* Posouva se od DNESKA, ne od stareho terminu. U ukolu 14 dni po terminu

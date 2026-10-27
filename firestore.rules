@@ -3,11 +3,15 @@
 //  ZÁLOŽNÍ KOPIE pravidel přístupu k databázi (Firestore)
 //
 //  Toto je věrný opis toho, co je nasazené v ostrém provozu.
-//  Ověřeno proti Firebase konzoli 23. 10. 2026 (publikováno z této kopie, otisk sedí).
+//  Ověřeno proti Firebase konzoli 27. 10. 2026 (publikováno z této kopie, otisk 46ceadda74970d25).
 //  Živá verze: Firebase konzole → Firestore → Rules
 //  Když se změní tam, změň i tady, ať kopie nezastará.
 //
-//  Poslední změna 26. 10. 2026 (závozy):
+//  Poslední změna 27. 10. 2026 (upozornění na dění u úkolu):
+//  26) /tasks: účastník úkolu smí k odpovědi a změně stavu zapsat i razítko
+//      zmenaTs/zmenaTyp/zmenaKdoId/zmenaKdo/zmenaText. Nic jiného se nemění.
+//
+//  Změna 26. 10. 2026 (závozy):
 //  25) Přibyla /zavozy — co na stavbě chybí. Čte a zakládá každý s rolí
 //      (pod svým jménem, stav 'chybi', fotka do 60 kB), odškrtnout
 //      „dovezeno" smí kdokoli s rolí (mění jen pole stavu), text opraví
@@ -367,7 +371,10 @@ service cloud.firestore {
       //
       // (a) KDOKOLI U ÚKOLU (přidělený i zadavatel) smí odškrtnout a odpovědět
       //     (taskDone: stav+hotovoDne, ukolOdpovedet: odpovedi). Zadání si
-      //     přes REST nepřepíše a úkolu se tak nezbaví.
+      //     přes REST nepřepíše a úkolu se tak nezbaví. Pole zmena* jsou
+      //     razítko „co se u úkolu naposledy stalo a kdo to udělal" — píše ho
+      //     aplikace při odpovědi a změně stavu, most podle něj posílá
+      //     upozornění druhé straně (26).
       //
       // (b) ZADAVATEL smí navíc opravit samotné zadání (ukolUpravit/ulozUkol,
       //     rozhodnutí Marca 29. 8. 2026): nadpis, popis, stavbu, komu to patří
@@ -385,7 +392,8 @@ service cloud.firestore {
         || (hasRole() && (resource.data.respId == mujDocId()
                           || resource.data.zadalId == mujDocId())
             && request.resource.data.diff(resource.data).affectedKeys()
-                 .hasOnly(['stav', 'hotovoDne', 'odpovedi', 'odpPocet', 'soubory']))
+                 .hasOnly(['stav', 'hotovoDne', 'odpovedi', 'odpPocet', 'soubory',
+                           'zmenaTs', 'zmenaTyp', 'zmenaKdoId', 'zmenaKdo', 'zmenaText']))
         || (hasRole() && resource.data.zadalId == mujDocId()
             && request.resource.data.diff(resource.data).affectedKeys()
                  .hasOnly(['title', 'popis', 'pid', 'respId', 'resp', 'res', 'term', 'respOd']));
