@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '26. 10. 2026 f';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '27. 10. 2026';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -1489,6 +1489,23 @@ async function frontaZahodit() {
   await frontaSpocitat();
   toast('Zahozeno');
 }
+/* Technicka chyba -> lidska veta. Co clovek s tim ma udelat, ne kde to padlo. */
+function frontaChybaText(e) {
+  const kod = (e && e.code) || '', txt = String((e && e.message) || e || '');
+  if (kod === 'not-found' || /No document to update/i.test(txt)) return 'Záznam, ke kterému fotka patřila, už neexistuje — smaž ji tlačítkem Zahodit';
+  if (kod === 'permission-denied') return 'Do záznamu už nejde zapsat (vedení ho mezitím uzavřelo)';
+  if (/most vratil chybu|most neodpovedel|nenalezen/i.test(txt)) return 'Disk neodpověděl — zkus to znovu';
+  if (/moc velk|too large|exceeds/i.test(txt)) return 'Soubor je moc velký';
+  if (/slo[žz]k/i.test(txt)) return txt.slice(0, 120);
+  return 'Nepovedlo se (' + txt.slice(0, 80) + ')';
+}
+/* Co je ta polozka: druh + stavba + den — jen „Falat.jpg" nikomu nic nerekne. */
+function frontaPolozkaPopis(x) {
+  const druh = x.druh === 'selfie' ? '🤳 ověřovací fotka' : x.druh === 'priloha' ? '📄 příloha' : x.druh === 'nahled' ? '🖼 fotka' : x.original ? '🖼 fotka (plná)' : '📎 soubor';
+  const kam = x.fotkaStavbyId ? 'ke stavbě' : x.entryId ? 'k zápisu' : x.attendanceId ? 'k docházce' : '';
+  const p = proj(x.pid) || {};
+  return `<b>${druh}</b>${kam ? ' ' + kam : ''}${p.name ? ` · 🏗 ${esc(p.name)}` : ''}${x.date ? ` · 📅 ${fmtISO(x.date)}` : ''}`;
+}
 /* Karta na nastence: co se nepodarilo odeslat. Driv se to reklo jen bublinou
    na tri vteriny — a fotka se pritom mazala. */
 function kartaFrontaSelhala() {
@@ -1497,9 +1514,10 @@ function kartaFrontaSelhala() {
   return `<div class="card" style="border-color:var(--red)">
     <h3>⚠ Nepodařilo se odeslat na Disk (${v.length})</h3>
     <div class="note" style="margin-top:0">Soubory zůstaly v telefonu, nic se neztratilo.
-      Nejčastěji za to může výpadek Disku — zkus je poslat znovu.</div>
-    ${v.slice(0, 8).map(x => `<div class="urow"><span>📎</span><b>${esc(x.name || 'soubor')}</b>
-      <span class="muted" style="margin-left:auto;font-size:11.5px">${esc(x.chyba || '')}</span></div>`).join('')}
+      Nejčastěji za to může výpadek Disku — zkus je poslat znovu. Když u položky stojí, že záznam už neexistuje, dej Zahodit.</div>
+    ${v.slice(0, 8).map(x => `<div class="urow" style="align-items:flex-start">${x.thumb ? `<img src="${x.thumb}" style="width:40px;height:40px;object-fit:cover;border-radius:7px;flex:none">` : '<span>📎</span>'}
+      <div style="min-width:0;flex:1"><div style="font-size:13px">${frontaPolozkaPopis(x)}</div>
+      <div style="font-size:12px;color:var(--red);margin-top:2px">${esc(x.chyba || 'Nepovedlo se')}</div></div></div>`).join('')}
     ${v.length > 8 ? `<div class="muted" style="font-size:12px">… a další ${v.length - 8}</div>` : ''}
     <div class="aprv"><button class="btn amber sm" onclick="frontaZkusitZnovu()">↻ Zkusit znovu</button>
       <button class="btn ghost sm" onclick="frontaZahodit()">🗑 Zahodit</button></div>
@@ -1727,8 +1745,8 @@ async function frontaOdeslat() {
            pending (vedeni ho schvalilo / dalo jen interni / smazalo) a autor
            uz do nej zapsat nesmi. Polozku vyradime — jinak by navzdy
            blokovala celou frontu (selfie z dochazky, dalsi fotky). */
-        if (e && e.code === 'permission-denied') {
-          console.warn('fronta: polozka vyrazena — do zaznamu uz nejde zapsat', it.entryId || it.attendanceId || '', e);
+        if (e && (e.code === 'permission-denied' || e.code === 'not-found')) {
+          console.warn('fronta: polozka vyrazena — do zaznamu uz nejde zapsat (' + e.code + ')', it.entryId || it.attendanceId || it.fotkaStavbyId || '', e);
           await frontaSmazat(it.id);
           continue;
         }
@@ -1756,7 +1774,7 @@ async function frontaOdeslat() {
              a muze ji poslat znovu. */
           console.warn('fronta: polozka vzdana po ' + it.pokusy + ' pokusech', it.name || '', e);
           it.selhalo = true;
-          it.chyba = String((e && e.message) || e).slice(0, 120);
+          it.chyba = frontaChybaText(e);
           try { await frontaTx('readwrite', st => st.put(it)); } catch (e3) {}
           zmeskano++;
           continue;
@@ -1781,7 +1799,14 @@ async function frontaZapsatDoZaznamu(it, fileId) {
      zapisu. Stejne dve pole jako u fotky v zapisu. */
   if (it.fotkaStavbyId) {
     const pole = (it.druh === 'foto' && it.original) ? 'origId' : 'driveId';
-    await db.collection('fotky_stavby').doc(it.fotkaStavbyId).update({ [pole]: fileId });
+    const ref = db.collection('fotky_stavby').doc(it.fotkaStavbyId);
+    /* Fotku mezitim nekdo smazal nebo nahrani zahodil — neni kam odkaz
+       dopsat. Driv to padalo petkrat na „No document to update" a viselo
+       v „Nepodarilo se odeslat" (Falat, 27. 10. 2026). Soubor na Disku
+       zustava, polozka se povazuje za vyrizenou. */
+    const snap = await ref.get();
+    if (!snap.exists) { console.warn('fronta: fotka ke stavbe uz neexistuje, polozka vyrazena', it.fotkaStavbyId); return; }
+    await ref.update({ [pole]: fileId });
     /* fotku už mohl převzít zápis — ten potřebuje odkaz taky, jinak by měl navždy jen dlaždici */
     for (const e of (S.entries || []).filter(x => (x.photos || []).some(ph => ph.fotkaStavbyId === it.fotkaStavbyId))) {
       try { const fresh = await cerstveFotky(e.id, e.photos); await db.collection('entries').doc(e.id).update({ photos: fresh.map(ph => ph.fotkaStavbyId === it.fotkaStavbyId ? { ...ph, [pole]: fileId } : ph) }); }
@@ -2066,7 +2091,7 @@ async function fotkyStavbyUlozit(pid) {
    jen ciluji na doklad ve /fotky_stavby misto na zapis. */
 async function zaraditFotkuStavby(p, ph, docId, den) {
   const jmeno = (S.me && S.me.prijmeni) || fullName(S.me || {}) || 'foto';
-  const spol = { fotkaStavbyId: docId, folderId: (p && p.driveFolderId) || '', pid: (p && p.id) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', folderName: nazevSlozkyZakazky(p), date: den };
+  const spol = { fotkaStavbyId: docId, folderId: (p && p.driveFolderId) || '', pid: (p && p.id) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', folderName: nazevSlozkyZakazky(p), date: den, thumb: ph.thumb || null };
   let mamNahled = false;
   try { if (ph.full) { await frontaPridat({ druh: 'nahled', name: jmeno + '.jpg', mime: 'image/jpeg', data: ph.full, ...spol }); mamNahled = true; } } catch (e) { console.warn('fronta nahled', e); }
   try { if (ph.orig) await frontaPridat({ druh: 'foto', original: true, name: jmeno + priponaSouboru(ph.orig.name, ph.orig.mime), mime: ph.orig.mime, data: ph.orig.data, ...spol }); }
@@ -2131,7 +2156,7 @@ async function zaraditFotky(p, entryId, den, seznam = S.draftPhotos) {
     /* Datum patri ZAPISU, ne dnesku — u zpetne psaneho zapisu se jinak
        fotky na Disku pojmenovaly podle dne odeslani a pri dohledavani
        "co bylo v patek" nesedely. Totez plati pro prilohy. */
-    const spol = { entryId, photoId: id, folderId: (p && p.driveFolderId) || '', pid: (p && p.id) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', folderName: nazevSlozkyZakazky(p), date: den || isoToday() };
+    const spol = { entryId, photoId: id, folderId: (p && p.driveFolderId) || '', pid: (p && p.id) || '', cn: (p && p.cn) || '', client: (p && p.client) || '', folderName: nazevSlozkyZakazky(p), date: den || isoToday(), thumb: ph.thumb || null };
     /* Kazda polozka ma svuj try. Kdyby byly spolecne a selhala prvni
        (typicky plna pamet telefonu), druha by se uz ani nezkusila. */
     let mamNahled = false;
