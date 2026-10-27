@@ -3,11 +3,16 @@
 //  ZÁLOŽNÍ KOPIE pravidel přístupu k databázi (Firestore)
 //
 //  Toto je věrný opis toho, co je nasazené v ostrém provozu.
-//  Ověřeno proti Firebase konzoli 27. 10. 2026 (publikováno z této kopie, otisk 46ceadda74970d25).
+//  Ověřeno proti Firebase konzoli 27. 10. 2026 (publikováno z této kopie, otisk c38d2819256676c5).
 //  Živá verze: Firebase konzole → Firestore → Rules
 //  Když se změní tam, změň i tady, ať kopie nezastará.
 //
-//  Poslední změna 27. 10. 2026 (upozornění na dění u úkolu):
+//  Poslední změna 27. 10. 2026 (mazání odpovědí vedením):
+//  27) /tasks/{id}/odpovedi delete: vedení smí odpověď smazat úplně (bylo
+//      „nikdo"). Rozhodnutí Marca 27. 10. 2026 — „vedení může mazat komentáře
+//      kompletně". Autor dál jen označuje (smazano), stopa zůstává.
+//
+//  Změna 27. 10. 2026 (upozornění na dění u úkolu):
 //  26) /tasks: účastník úkolu smí k odpovědi a změně stavu zapsat i razítko
 //      zmenaTs/zmenaTyp/zmenaKdoId/zmenaKdo/zmenaText. Nic jiného se nemění.
 //
@@ -22,7 +27,7 @@
 //      vedení a účastníci úkolu (přidělený, zadavatel). Přidat smí účastník
 //      jen pod svým jménem. UPRAVIT smí jen autor a jen text + historii
 //      (upraveno roste přesně o jednu položku). SMAZAT = jen označit
-//      (smazano), smí autor nebo vedení; opravdové mazání nikdo. Vedení
+//      (smazano), smí autor nebo vedení; opravdové mazání od 27. 10. vedení (27). Vedení
 //      cizí odpověď upravit NESMÍ (rozhodnutí Marca 23. 10. 2026).
 //      Převod starých odpovědí (pole v úkolu) zapisuje vedení s příznakem
 //      prevedeno — takové doklady nemají autorUid, nikdo je neupraví.
@@ -437,7 +442,8 @@ service cloud.firestore {
           || ((resource.data.autorUid == request.auth.uid || isAdmin())
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['smazano'])
               && request.resource.data.smazano != null));
-        allow delete: if false;
+        // vedení maže úplně, i reakce pod odpovědí (27); autor jen označuje
+        allow delete: if isAdmin();
       }
     }
     // kolekční dotaz vedení přes odpovědi všech úkolů (24)

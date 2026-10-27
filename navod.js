@@ -73,7 +73,7 @@ function navodWorker() {
     ${navodKrok('💬', 'Odpovědi u úkolu',
         'Ťukni na úkol a dole napiš odpověď. U každé odpovědi můžeš <b>↩ reagovat</b> (vznikne '
       + 'podvlákno), svou odpověď <b>✏️ upravit</b> nebo <b>🗑 smazat</b> — původní znění zůstane '
-      + 'v historii („upraveno"). Cizí odpověď upravit nejde, smazat ji může jen vedení. '
+      + 'v historii („upraveno"). Cizí odpověď upravit nejde. Vedení může jakoukoli odpověď smazat úplně, i s reakcemi pod ní a bez stopy. '
       + '<b>➕ úkol z toho</b> založí z odpovědi nový úkol.')}
 
     ${navodKrok('⬆', 'Fotky se posílají na Disk samy',

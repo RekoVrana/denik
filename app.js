@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '27. 10. 2026 c';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '27. 10. 2026 d';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -1107,6 +1107,30 @@ async function odpSmazat(tid, oid) {
     toast('Odpověď smazána'); if (bylModal) ukolModal(tid); else render();
   } catch (e) { toast('Nesmazalo se — ' + dbErrText(e)); if (bylModal) ukolModal(tid); }
 }
+/* Vedeni maze odpoved UPLNE — doklad zmizi i s reakcemi pod ni a bez stopy.
+   Zmena rozhodnuti Marca 27. 10. 2026 („vedeni muze mazat komentare
+   kompletne"); autor sam dal maze jen oznacenim (odpSmazat). */
+async function odpSmazatUplne(tid, oid) {
+  if (!jsemVedeni()) return;
+  const t = S.tasks.find(x => x.id === tid) || { id: tid };
+  const vse = odpovediUkolu(t);
+  const o = vse.find(x => x.id === oid); if (!o || o.stare) return;
+  const deti = vse.filter(x => x.naId === oid && !x.stare);
+  const bylModal = ukolModalOtevren(tid);
+  const text = (o.text || '').slice(0, 120) + ((o.text || '').length > 120 ? '…' : '');
+  if (!await potvrd('Smazat tuhle odpověď úplně?\n\n„' + text + '"'
+      + (deti.length ? '\n\nSmažou se s ní i ' + deti.length + (deti.length === 1 ? ' reakce' : deti.length < 5 ? ' reakce' : ' reakcí') + ' pod ní.' : '')
+      + '\n\nNezůstane po ní žádná stopa, tohle nejde vrátit.', '🗑 Smazat úplně')) { if (bylModal) ukolModal(tid); return; }
+  try {
+    const kol = db.collection('tasks').doc(tid).collection('odpovedi');
+    const davka = db.batch();
+    let zivych = 0;
+    [o, ...deti].forEach(x => { davka.delete(kol.doc(x.id)); if (!x.smazano) zivych++; });
+    await davka.commit();
+    if (zivych) db.collection('tasks').doc(tid).update({ odpPocet: firebase.firestore.FieldValue.increment(-zivych) }).catch(() => {});
+    toast('Odpověď smazána'); if (bylModal) ukolModal(tid); else render();
+  } catch (e) { toast('Nesmazalo se — ' + dbErrText(e)); if (bylModal) ukolModal(tid); }
+}
 /* Z odpovedi novy ukol: predvyplni formular (nadpis = zacatek odpovedi,
    popis = cela odpoved s odkazem, odkud je, stavba = stavba ukolu). */
 function odpNovyUkol(tid, oid) {
@@ -1137,7 +1161,9 @@ function odpHtml(t, o, hloubka) {
   const akce = [];
   if (!o.smazano && !o.stare && hloubka === 0) akce.push(`<span class="lnk" onclick="event.stopPropagation();S.odpReagujNa=S.odpReagujNa==='${o.id}'?null:'${o.id}';S.odpEdit=null;prekresliUkol('${t.id}')">↩ reagovat</span>`);
   if (moje && !o.smazano && S.odpEdit !== o.id) akce.push(`<span class="lnk" onclick="event.stopPropagation();S.odpEdit='${o.id}';S.odpReagujNa=null;prekresliUkol('${t.id}')">✏️ upravit</span>`);
-  if ((moje || jsemVedeni()) && !o.smazano && !o.stare) akce.push(`<span class="lnk" onclick="event.stopPropagation();odpSmazat('${t.id}','${o.id}')">🗑 smazat</span>`);
+  if (moje && !o.smazano && !o.stare) akce.push(`<span class="lnk" onclick="event.stopPropagation();odpSmazat('${t.id}','${o.id}')">🗑 smazat</span>`);
+  /* vedeni maze bez stopy — i uz oznacenou (smazanou) odpoved, aby po ni nezustal zbytek */
+  if (jsemVedeni() && !o.stare) akce.push(`<span class="lnk" style="color:#b23b3b" onclick="event.stopPropagation();odpSmazatUplne('${t.id}','${o.id}')">${o.smazano ? '🗑 odstranit stopu' : '🗑 smazat úplně'}</span>`);
   if (!o.smazano && !o.stare) akce.push(`<span class="lnk" onclick="event.stopPropagation();odpNovyUkol('${t.id}','${o.id}')">➕ úkol z toho</span>`);
   const deti = hloubka === 0 ? odpovediUkolu(t).filter(x => x.naId === o.id) : [];
   return `<div style="background:${hloubka ? '#eef1f5' : '#f4f6f9'};border-radius:8px;padding:6px 10px;font-size:13px${hloubka ? ';margin-left:18px;border-left:3px solid #cbd4dd' : ''}">
