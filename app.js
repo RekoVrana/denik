@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '27. 10. 2026';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '27. 10. 2026 b';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -280,7 +280,7 @@ const S = {
   odpovedi: {}, odpSleduji: null, odpUnsub: null, odpEdit: null, odpReagujNa: null, odpHistorie: {},
   ukolFiltrPid: '', ukolFiltrResp: '', ukolPredloha: null, ukolModalId: null, ukolHledat: '', ukolHotoveVse: false,
   ukolSoubory: [], usVyber: null,   // soubory u noveho ukolu; otevreny vyber z podkladu
-  zavozy: [], zavozFoto: null, zavozUkazDovezene: false,   // zavozy: co na stavbe chybi (viz sekce ZAVOZY)
+  zavozy: [], zavozFoto: null, zavozUkazDovezene: false, zavozFormOpen: false,   // zavozy: co na stavbe chybi (viz sekce ZAVOZY)
   hlaseni: [], subProject: null, subPocet: 1, subOdchodOpen: false, subZaznam: '',
   podkladyStav: null, podkladyCesta: [], podkladyPid: null, poznamky: [], poznamkaEdit: null, entryEdit: null,
   poznamkyProjekt: '', poznamkyHledat: '',
@@ -752,6 +752,7 @@ async function zavozFotoVybrat(files) {
   render();
 }
 async function zavozPridat(pid) {
+  if (!pid || !proj(pid)) { toast('Vyber stavbu'); return; }
   const inp = $('#zv-text'); const text = inp ? inp.value.trim() : '';
   if (!text) { toast('Napiš, co chybí'); return; }
   const mn = $('#zv-mn') ? $('#zv-mn').value.trim() : '';
@@ -827,9 +828,24 @@ function pgZavozy() {
   const poStavbach = {};
   chybi.forEach(z => (poStavbach[z.pid] = poStavbach[z.pid] || []).push(z));
   const pids = Object.keys(poStavbach).sort((a, b) => ((proj(a) || {}).name || '').localeCompare((proj(b) || {}).name || '', 'cs'));
+  const stavby = S.projects.filter(x => x.active);
   return `
-  <div class="strip"><h1>Závozy</h1><span class="sp"></span><span class="muted">${chybi.length ? `${chybi.length} ${chybi.length === 1 ? 'věc' : chybi.length < 5 ? 'věci' : 'věcí'} na ${pids.length} ${pids.length === 1 ? 'stavbě' : 'stavbách'}` : 'nic nechybí'}</span></div>
+  <div class="strip"><h1>Závozy</h1><span class="sp"></span><span class="muted">${chybi.length ? `${chybi.length} ${chybi.length === 1 ? 'věc' : chybi.length < 5 ? 'věci' : 'věcí'} na ${pids.length} ${pids.length === 1 ? 'stavbě' : 'stavbách'}` : 'nic nechybí'}</span>
+    <button class="btn amber" onclick="S.zavozFormOpen=!S.zavozFormOpen;render()">${S.zavozFormOpen ? '✕ Zavřít' : '➕ PŘIDAT'}</button></div>
   <main>
+    ${S.zavozFormOpen ? `<div class="card">
+      <h3>➕ Co chybí na stavbě</h3>
+      <div class="frow">
+        <div><label>Stavba</label><select id="zv-pid">${stavby.map(x => `<option value="${x.id}" ${S.ukolFiltrPid === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
+        <div><label>Kolik <span class="muted" style="text-transform:none;font-weight:400">— nepovinné</span></label><input type="text" id="zv-mn" placeholder="2 pytle"></div>
+      </div>
+      <label>Co chybí *</label><input type="text" id="zv-text" placeholder="lepidlo na obklady" onkeydown="if(event.key==='Enter')zavozPridat($('#zv-pid').value)">
+      <div class="aprv" style="align-items:center">
+        <label class="btn ghost sm" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer">📸 Fotka${S.zavozFoto ? ' ✓' : ''}<input type="file" accept="image/*" hidden onchange="zavozFotoVybrat(this.files);this.value=''"></label>
+        ${S.zavozFoto ? `<img src="${S.zavozFoto}" style="width:36px;height:36px;object-fit:cover;border-radius:7px"><span class="lnk muted" style="font-size:12px" onclick="S.zavozFoto=null;render()">✕</span>` : ''}
+        <button class="btn amber" onclick="zavozPridat($('#zv-pid').value)">💾 Zapsat</button>
+      </div>
+    </div>` : ''}
     ${pids.map(pid => `<div class="card">
       <h3>🛠 ${esc((proj(pid) || {}).name || '—')} <span class="muted" style="font-weight:400">· ${poStavbach[pid].length}</span></h3>
       ${poStavbach[pid].map(z => zavozRadek(z, true)).join('')}
