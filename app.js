@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '27. 10. 2026 d';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '29. 10. 2026';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -298,7 +298,7 @@ const S = {
   odpovedi: {}, odpSleduji: null, odpUnsub: null, odpEdit: null, odpReagujNa: null, odpHistorie: {},
   ukolFiltrPid: '', ukolFiltrResp: '', ukolPredloha: null, ukolModalId: null, ukolHledat: '', ukolHotoveVse: false,
   ukolSoubory: [], usVyber: null,   // soubory u noveho ukolu; otevreny vyber z podkladu
-  zavozy: [], zavozFoto: null, zavozUkazDovezene: false, zavozFormOpen: false,   // zavozy: co na stavbe chybi (viz sekce ZAVOZY)
+  zavozy: [], zavozFoto: null, zavozSoubory: [], zavozUkazDovezene: false, zavozFormOpen: false,   // zavozy: co na stavbe chybi (viz sekce ZAVOZY)
   hlaseni: [], subProject: null, subPocet: 1, subOdchodOpen: false, subZaznam: '',
   podkladyStav: null, podkladyCesta: [], podkladyPid: null, poznamky: [], poznamkaEdit: null, entryEdit: null,
   poznamkyProjekt: '', poznamkyHledat: '',
@@ -776,11 +776,11 @@ async function zavozPridat(pid) {
   const mn = $('#zv-mn') ? $('#zv-mn').value.trim() : '';
   try {
     await db.collection('zavozy').add({
-      pid, text, mnozstvi: mn, foto: S.zavozFoto || null,
+      pid, text, mnozstvi: mn, foto: S.zavozFoto || null, soubory: S.zavozSoubory,
       autorId: mojeId(), autorUid: S.authUser.uid, autorJmeno: fullName(S.me || {}),
       date: isoToday(), time: nowTime(), stav: 'chybi', dovezlJmeno: '', dovezenoDen: '', dovezenoCas: '', createdAt: FV()
     });
-    inp.value = ''; if ($('#zv-mn')) $('#zv-mn').value = ''; zapomen('zv-text', 'zv-mn'); S.zavozFoto = null;
+    inp.value = ''; if ($('#zv-mn')) $('#zv-mn').value = ''; zapomen('zv-text', 'zv-mn'); S.zavozFoto = null; S.zavozSoubory = [];
     toast('Zapsáno — doveze se při příštím závozu ✓'); render();
   } catch (e) { toast('Nezapsalo se — ' + dbErrText(e)); }
 }
@@ -797,6 +797,54 @@ async function zavozSmazat(id) {
   if (!await potvrd('Smazat „' + z.text + '" ze seznamu?', '🗑 Smazat')) return;
   try { await db.collection('zavozy').doc(id).delete(); } catch (e) { toast('Nesmazalo se — ' + dbErrText(e)); }
 }
+/* Soubory u zavozu (Marco 29. 10. 2026: „k zavozu SIKO chci nahrat PDF
+   objednavku"). Stejny mechanismus jako u ukolu: soubor jde pres most na
+   Disk do 09_Denik_staveb/Zavozy (druh 'zavoz'), u polozky zustane jen
+   odkaz {name, driveId, mime}. Prikladat a odebirat smi vedeni a autor
+   polozky, otevrit kazdy, kdo zavoz vidi. */
+async function zavozSouborNahrat(pid, files) {
+  const p = proj(pid); if (!p) { toast('Nejdřív vyber stavbu'); return []; }
+  const out = [];
+  for (const f of [...files]) {
+    S.uploading++; updBadge(); toast('Nahrávám ' + f.name + '…');
+    try { out.push(await nahrajDoPodkladu(p, f, 'zavoz')); }
+    catch (e) { console.warn('soubor zavozu', e); toast('⚠ ' + (e.message || 'Nenahrálo se')); }
+    finally { S.uploading--; }
+  }
+  return out;
+}
+/* do rozepsane polozky (formular party i vedeni) */
+async function zavozSouborDoFormulare(pidNeboSelect, files) {
+  const pid = pidNeboSelect && pidNeboSelect.startsWith('#') ? ($(pidNeboSelect) && $(pidNeboSelect).value) : pidNeboSelect;
+  const nove = await zavozSouborNahrat(pid, files);
+  S.zavozSoubory = [...S.zavozSoubory, ...nove]; render();
+}
+/* k uz existujici polozce (typicky: parta napise „chybi dlazba", vedeni objedna a priloz objednavku) */
+async function zavozSouborPridat(id, files) {
+  const z = S.zavozy.find(x => x.id === id); if (!z) return;
+  const nove = await zavozSouborNahrat(z.pid, files);
+  if (!nove.length) return;
+  const soubory = [...(z.soubory || [])];
+  nove.forEach(n => { if (!soubory.some(d => d.driveId === n.driveId)) soubory.push(n); });
+  try { await db.collection('zavozy').doc(id).update({ soubory }); toast('Soubor připojen ✓'); }
+  catch (e) { toast('Nepřipojilo se — ' + dbErrText(e)); }
+}
+async function zavozSouborOdeber(id, i) {
+  const z = S.zavozy.find(x => x.id === id); if (!z) return;
+  const soubory = (z.soubory || []).slice(); const od = soubory.splice(i, 1)[0];
+  if (!await potvrd('Odebrat soubor „' + (od ? od.name : '') + '" od závozu?\n\nNa Disku ve složce Závozy zůstane.', 'Odebrat')) return;
+  try { await db.collection('zavozy').doc(id).update({ soubory }); }
+  catch (e) { toast('Neodebralo se — ' + dbErrText(e)); }
+}
+function zavozSouboryHtml(z, smi) {
+  const s = z.soubory || []; if (!s.length) return '';
+  return `<div style="display:flex;flex-wrap:wrap;gap:3px 12px;margin-top:3px">${s.map((d, i) => `<span style="font-size:12.5px;display:inline-flex;align-items:center;gap:4px"><span class="lnk" onclick="openDriveDoc('${d.driveId}','${jsAttr(d.name)}')">${ikonaSouboru(d.mime, d.name)} ${esc(d.name)}</span>${smi ? `<span class="lnk muted" title="Odebrat od závozu" onclick="zavozSouborOdeber('${z.id}',${i})">✕</span>` : ''}</span>`).join('')}</div>`;
+}
+/* rozepsane soubory ve formulari (pred zapsanim polozky) */
+function zavozSouboryFormHtml() {
+  if (!S.zavozSoubory.length) return '';
+  return `<div style="display:flex;flex-wrap:wrap;gap:3px 12px;margin-top:6px">${S.zavozSoubory.map((d, i) => `<span style="font-size:12.5px;display:inline-flex;align-items:center;gap:4px">${ikonaSouboru(d.mime, d.name)} ${esc(d.name)} <span class="lnk muted" onclick="S.zavozSoubory.splice(${i},1);render()">✕</span></span>`).join('')}</div>`;
+}
 function zavozRadek(z, admin) {
   const moje = z.autorUid && S.authUser && z.autorUid === S.authUser.uid;
   const hot = z.stav === 'dovezeno';
@@ -805,10 +853,12 @@ function zavozRadek(z, admin) {
     <div style="min-width:0;flex:1">
       <b style="${hot ? 'text-decoration:line-through;text-decoration-color:#9aa7b5' : ''}">${esc(z.text)}</b>${z.mnozstvi ? ` <span class="badge b-int">${esc(z.mnozstvi)}</span>` : ''}<br>
       <span class="muted" style="font-size:12px">${esc(z.autorJmeno || '')} · ${fmtISO(z.date)} ${z.time || ''}${hot ? ` · <b>dovezeno</b> ${fmtISO(z.dovezenoDen)}${z.dovezlJmeno ? ' (' + esc(z.dovezlJmeno) + ')' : ''}` : ''}</span>
+      ${zavozSouboryHtml(z, moje || admin)}
     </div>
     <span style="display:flex;gap:6px;flex:none;align-items:center">
       ${hot ? `<span class="lnk muted" style="font-size:12px" title="Vrátit mezi chybějící" onclick="zavozVratit('${z.id}')">↩</span>`
             : `<button class="btn ok sm" title="Je na stavbě" onclick="zavozDovezeno('${z.id}')">✓ Dovezeno</button>`}
+      ${(moje || admin) ? `<label class="lnk muted" title="Přiložit soubor — objednávku, PDF" style="cursor:pointer">📎<input type="file" multiple hidden onchange="zavozSouborPridat('${z.id}',this.files);this.value=''"></label>` : ''}
       ${(moje || admin) ? `<span class="lnk muted" title="Smazat" onclick="zavozSmazat('${z.id}')">🗑</span>` : ''}
     </span>
   </div>`;
@@ -831,8 +881,10 @@ function kartaZavoz(p) {
       <input type="text" id="zv-text" placeholder="Co chybí — třeba „lepidlo na obklady“" style="flex:1 1 180px;min-width:0" onkeydown="if(event.key==='Enter')zavozPridat('${p.id}')">
       <input type="text" id="zv-mn" placeholder="kolik" style="width:84px;flex:none">
       <label class="btn ghost sm" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;flex:none" title="Fotka obalu řekne víc než název">📸${S.zavozFoto ? ' ✓' : ''}<input type="file" accept="image/*" capture="environment" hidden onchange="zavozFotoVybrat(this.files);this.value=''"></label>
+      <label class="btn ghost sm" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;flex:none" title="Přiložit soubor — objednávku, PDF">📎${S.zavozSoubory.length ? ' ' + S.zavozSoubory.length : ''}<input type="file" multiple hidden onchange="zavozSouborDoFormulare('${p.id}',this.files);this.value=''"></label>
       <button class="btn amber sm" style="flex:none" onclick="zavozPridat('${p.id}')">➕ Přidat</button>
     </div>
+    ${zavozSouboryFormHtml()}
     ${S.zavozFoto ? `<div style="margin-top:6px;display:flex;gap:8px;align-items:center"><img src="${S.zavozFoto}" style="width:44px;height:44px;object-fit:cover;border-radius:8px"><span class="lnk muted" style="font-size:12px" onclick="S.zavozFoto=null;render()">✕ bez fotky</span></div>` : ''}
     <div style="margin-top:8px">${chybi.map(z => zavozRadek(z, false)).join('') || '<div class="muted" style="font-size:13px;padding:4px 0">Zatím nic. Když ti něco chybí, napiš to sem — doveze se při příštím závozu.</div>'}</div>
     ${dovezene.length ? `<div style="margin-top:6px"><span class="lnk muted" style="font-size:12px" onclick="S.zavozUkazDovezene=!S.zavozUkazDovezene;render()">${S.zavozUkazDovezene ? '▴ skrýt dovezené' : `▾ dovezené (${dovezene.length})`}</span>
@@ -861,8 +913,10 @@ function pgZavozy() {
       <div class="aprv" style="align-items:center">
         <label class="btn ghost sm" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer">📸 Fotka${S.zavozFoto ? ' ✓' : ''}<input type="file" accept="image/*" hidden onchange="zavozFotoVybrat(this.files);this.value=''"></label>
         ${S.zavozFoto ? `<img src="${S.zavozFoto}" style="width:36px;height:36px;object-fit:cover;border-radius:7px"><span class="lnk muted" style="font-size:12px" onclick="S.zavozFoto=null;render()">✕</span>` : ''}
+        <label class="btn ghost sm" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer" title="Objednávka, PDF — uloží se na Disk do složky Závozy">📎 Soubor${S.zavozSoubory.length ? ' (' + S.zavozSoubory.length + ')' : ''}<input type="file" multiple hidden onchange="zavozSouborDoFormulare('#zv-pid',this.files);this.value=''"></label>
         <button class="btn amber" onclick="zavozPridat($('#zv-pid').value)">💾 Zapsat</button>
       </div>
+      ${zavozSouboryFormHtml()}
     </div>` : ''}
     ${pids.map(pid => `<div class="card">
       <h3>🛠 ${esc((proj(pid) || {}).name || '—')} <span class="muted" style="font-weight:400">· ${poStavbach[pid].length}</span></h3>
@@ -879,8 +933,9 @@ function pgZavozy() {
 /* ============ SOUBORY U UKOLU ============
    K ukolu jde pripojit soubor (vykres, nabidka, foto detailu) — bud
    z pocitace/telefonu, nebo vyberem z podkladu stavby. Soubor z pocitace
-   se ULOZI DO PODKLADU STAVBY na Disku (slozka Podklady zakazky), takze
-   u stavby zustane i po vyrizeni ukolu; ukol si drzi jen odkaz. Zadal
+   se ULOZI NA DISK STAVBY do slozky 09_Denik_staveb/Ukoly (do 29. 10. 2026
+   do Podkladu — Marco chtel vlastni slozku, at v Podkladech neni neporadek),
+   takze u stavby zustane i po vyrizeni ukolu; ukol si drzi jen odkaz. Zadal
    Marco 26. 10. 2026. Pole ukolu: soubory [{name, driveId, mime}]. */
 const SOUBOR_MAX = 15 * 1024 * 1024;
 function ikonaSouboru(mime, name) {
@@ -893,15 +948,21 @@ function ikonaSouboru(mime, name) {
 function ctiSouborBase64(f) {
   return new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = () => no(r.error); r.readAsDataURL(f); });
 }
-/* Nahrani do Podkladu stavby s klicem proti duplikatum: kdyz Google
-   odpoved ztrati, soubor se dohleda podle klice misto druheho nahrani. */
-async function nahrajDoPodkladu(p, f) {
+/* Nahrani souboru na Disk stavby s klicem proti duplikatum: kdyz Google
+   odpoved ztrati, soubor se dohleda podle klice misto druheho nahrani.
+   druh urcuje podslozku v 09_Denik_staveb (tabulka KATEGORIE v mostu):
+   'podklad' -> Podklady, 'ukol' -> Ukoly, 'zavoz' -> Zavozy. Oddelene
+   slozky pro ukoly a zavozy zadal Marco 29. 10. 2026 („ne jen v Podkladech,
+   byl by v tom neporadek"). POZOR: most pred verzi 17 druhy ukol/zavoz
+   nezna a dal by soubor do Fotodokumentace — nasadit most driv nez appku. */
+async function nahrajDoPodkladu(p, f, druh) {
+  druh = druh || 'podklad';
   if (f.size > SOUBOR_MAX) throw new Error('Moc velký soubor (max 15 MB): ' + f.name);
   const slozka = await slozkaProUpload(p.cn, p.id);
   if (!slozka) throw new Error('Stavba nemá na Disku složku — napoj ji u zakázky');
   const klic = frontaKlic();
   const data = await ctiSouborBase64(f);
-  const telo = { action: 'upload', folderId: slozka, rootId: CFG.driveRootFolderId, cn: p.cn, client: p.client, date: isoToday(), name: f.name, druh: 'podklad', klic, data, mime: f.type || 'application/octet-stream' };
+  const telo = { action: 'upload', folderId: slozka, rootId: CFG.driveRootFolderId, cn: p.cn, client: p.client, date: isoToday(), name: f.name, druh, klic, data, mime: f.type || 'application/octet-stream' };
   let fileId = '';
   try { fileId = (await driveCall(telo)).fileId || ''; }
   catch (e) { if (!(e && e.docasne)) throw e; fileId = await frontaNajdiPodleKlice(slozka, klic); if (!fileId) throw e; }
@@ -910,7 +971,7 @@ async function nahrajDoPodkladu(p, f) {
   /* Vedeni ma u stavby i rucni seznam podkladu — doplnit, at je soubor
      videt hned, nejen ve vypisu z Drive. Parta do /projects psat nesmi,
      u ni staci, ze soubor lezi ve slozce Podklady. */
-  if (jsemVedeni()) {
+  if (druh === 'podklad' && jsemVedeni()) {
     const cur = (proj(p.id) || {}).stavbaDocs || [];
     if (!cur.some(d => d.driveId === fileId)) await db.collection('projects').doc(p.id).update({ stavbaDocs: [...cur, zaznam] }).catch(() => {});
   }
@@ -930,7 +991,7 @@ async function ukolSouborOdeber(tid, i) {
   const t = S.tasks.find(x => x.id === tid); if (!t) return;
   const soubory = (t.soubory || []).slice(); const odebrany = soubory.splice(i, 1)[0];
   const bylModal = ukolModalOtevren(tid);
-  if (!await potvrd('Odebrat soubor „' + (odebrany ? odebrany.name : '') + '" od úkolu?\n\nV podkladech stavby zůstane.', 'Odebrat')) { if (bylModal) ukolModal(tid); return; }
+  if (!await potvrd('Odebrat soubor „' + (odebrany ? odebrany.name : '') + '" od úkolu?\n\nNa Disku ve složce Úkoly zůstane.', 'Odebrat')) { if (bylModal) ukolModal(tid); return; }
   try { await db.collection('tasks').doc(tid).update({ soubory }); if (bylModal) ukolModal(tid); else render(); }
   catch (e) { toast('Neodebralo se — ' + dbErrText(e)); if (bylModal) ukolModal(tid); }
 }
@@ -941,7 +1002,7 @@ async function ukolSouborZPocitace(tid, pidNeboSelect, files) {
   if (!p) { toast('Nejdřív vyber stavbu'); return; }
   for (const f of [...files]) {
     S.uploading++; updBadge(); toast('Nahrávám ' + f.name + '…');
-    try { const z = await nahrajDoPodkladu(p, f); await ukolSouborPridej(tid, z); }
+    try { const z = await nahrajDoPodkladu(p, f, 'ukol'); await ukolSouborPridej(tid, z); }
     catch (e) { console.warn('soubor ukolu', e); toast('⚠ ' + (e.message || 'Nenahrálo se')); }
     finally { S.uploading--; }
   }

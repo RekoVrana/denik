@@ -3,11 +3,16 @@
 //  ZÁLOŽNÍ KOPIE pravidel přístupu k databázi (Firestore)
 //
 //  Toto je věrný opis toho, co je nasazené v ostrém provozu.
-//  Ověřeno proti Firebase konzoli 27. 10. 2026 (publikováno z této kopie, otisk c38d2819256676c5).
+//  Ověřeno proti Firebase konzoli 27. 10. 2026 (publikováno z této kopie, otisk d54b772cba2c6c49).
 //  Živá verze: Firebase konzole → Firestore → Rules
 //  Když se změní tam, změň i tady, ať kopie nezastará.
 //
-//  Poslední změna 27. 10. 2026 (mazání odpovědí vedením):
+//  Poslední změna 29. 10. 2026 (soubory u závozu):
+//  28) /zavozy: pole soubory [{name, driveId, mime}] — odkazy na soubory ve
+//      složce 09_Denik_staveb/Zavozy na Disku (objednávka v PDF apod.).
+//      Zapsat je smí autor při založení, měnit vedení nebo autor položky.
+//
+//  Změna 27. 10. 2026 (mazání odpovědí vedením):
 //  27) /tasks/{id}/odpovedi delete: vedení smí odpověď smazat úplně (bylo
 //      „nikdo"). Rozhodnutí Marca 27. 10. 2026 — „vedení může mazat komentáře
 //      kompletně". Autor dál jen označuje (smazano), stopa zůstává.
@@ -534,12 +539,15 @@ service cloud.firestore {
         && request.resource.data.stav == 'chybi'
         && request.resource.data.text is string && request.resource.data.text.size() > 0 && request.resource.data.text.size() <= 300
         && (request.resource.data.foto == null || (request.resource.data.foto is string && request.resource.data.foto.size() < 60000))
-        && request.resource.data.keys().hasOnly(['pid', 'text', 'mnozstvi', 'foto', 'autorId', 'autorUid', 'autorJmeno', 'date', 'time', 'stav', 'dovezlJmeno', 'dovezenoDen', 'dovezenoCas', 'createdAt']);
+        && request.resource.data.keys().hasOnly(['pid', 'text', 'mnozstvi', 'foto', 'soubory', 'autorId', 'autorUid', 'autorJmeno', 'date', 'time', 'stav', 'dovezlJmeno', 'dovezenoDen', 'dovezenoCas', 'createdAt']);
       allow update: if hasRole() && (
              (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stav', 'dovezlJmeno', 'dovezenoDen', 'dovezenoCas'])
               && request.resource.data.stav in ['chybi', 'dovezeno'])
           || (resource.data.autorUid == request.auth.uid
-              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'mnozstvi', 'foto'])));
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'mnozstvi', 'foto']))
+          // soubory (28): odkazy na Disk — pripoji/odebere vedeni nebo autor polozky
+          || ((isAdmin() || resource.data.autorUid == request.auth.uid)
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['soubory'])));
       allow delete: if isAdmin() || (hasRole() && resource.data.autorUid == request.auth.uid);
     }
 
