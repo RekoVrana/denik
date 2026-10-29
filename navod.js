@@ -101,6 +101,7 @@ function navodWorker() {
       + '<b>🚚 Závoz — co chybí</b> — když ti něco dojde nebo chybí, napiš to sem jedním řádkem '
       + '(klidně s fotkou obalu). Doveze se při příštím závozu; kdo to převezme, ťukne <b>✓ Dovezeno</b>. '
       + 'Přes <b>📎</b> jde k položce přiložit soubor, třeba objednávku v PDF — ukládá se na Disk stavby do složky Závozy a otevřeš ho ťuknutím na název. '
+      + 'Když to potřebuješ do určitého dne, vyplň <b>📅 potřebuju do</b> — po termínu položka zčervená a vedení ji vidí nahoře. '
       + '<b>📐 Podklady stavby</b> — ťukni <b>📂 Zobrazit podklady</b>, jsou tam výkresy a přílohy. '
       + '<b>📝 Poznámky ke stavbě</b> — kódy, kontakty, kde se zavírá voda. '
       + '<b>🔑 Klíče u mě</b> — když klíč někomu dáš, hned ťukni <b>Předat</b>.')}
