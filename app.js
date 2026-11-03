@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '3. 11. 2026 c';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '3. 11. 2026 d';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -5266,15 +5266,24 @@ async function openDriveDoc(driveId, title) {
    nebo null pri zruseni. */
 /* Nahrada za confirm()/await oznam() — v aplikaci pridane na plochu se
    systemova okna na iPhonu vubec nezobrazi (stejne jako prompt). */
+/* Potvrzovaci okno jde odsouhlasit i Enterem a zrusit Escapem — kdo odbavuje
+   hromadu GPS odchylek, nemusi po kazdem ✓ Proverenem znovu sahat po mysi. */
 function potvrd(text, tlacitko) {
   return new Promise(hotovo => {
-    window._potvrdHotovo = v => { window._potvrdHotovo = null; closeModal(); hotovo(v); };
+    const klavesa = ev => {
+      if (!window._potvrdHotovo) return;
+      if (ev.key === 'Enter') { ev.preventDefault(); window._potvrdHotovo(true); }
+      else if (ev.key === 'Escape' || ev.key === 'Esc') { ev.preventDefault(); window._potvrdHotovo(false); }
+    };
+    window._potvrdHotovo = v => { window._potvrdHotovo = null; document.removeEventListener('keydown', klavesa, true); closeModal(); hotovo(v); };
     modal(`<h3>❓ Opravdu?</h3>
       <div style="white-space:pre-line;margin:6px 0 2px">${esc(text)}</div>
       <div class="aprv">
-        <button class="btn amber" onclick="window._potvrdHotovo(true)">${esc(tlacitko || 'Ano')}</button>
+        <button class="btn amber" id="potvrd-ano" onclick="window._potvrdHotovo(true)">${esc(tlacitko || 'Ano')}</button>
         <button class="btn ghost" onclick="window._potvrdHotovo(false)">Zrušit</button>
       </div>`);
+    document.addEventListener('keydown', klavesa, true);
+    setTimeout(() => { const b = document.getElementById('potvrd-ano'); if (b) b.focus(); }, 30);
   });
 }
 function oznam(text) {
@@ -6333,7 +6342,7 @@ function pgOrganizace() {
         ${rows.length > (S.orgZobrazeno || ORG_STRANKA)
           ? `<button class="btn ghost sm" onclick="S.orgZobrazeno=(S.orgZobrazeno||ORG_STRANKA)+ORG_STRANKA;render()">⤓ Zobrazit dalších ${Math.min(ORG_STRANKA, rows.length - (S.orgZobrazeno || ORG_STRANKA))}</button>` : ''}</div>
     </div>
-    <div class="note">GPS nad povolenou odchylku (${TOL} m) se hlásí ⚠ — ale jen tehdy, když telefon polohu opravdu změřil. Když ji jen odhadl ze sítě, píše se „poloha nepřesná" a za podezřelou se to nepočítá. Odchylku, kterou jsi prověřil tlačítkem <b>✓ Prověřeno</b>, zešedne a zmizí z počítadla. Záznam jde <b>✏️ opravit</b> nebo <b>🗑 smazat</b> — u opravy se uloží kdo, kdy a proč, ať je to při sporu o výplatu dohledatelné. Měsíční kontrolu hodin najdeš v záložce Reporty.</div>
+    <div class="note">GPS nad povolenou odchylku (${TOL} m) se hlásí ⚠ — ale jen tehdy, když telefon polohu opravdu změřil. Když ji jen odhadl ze sítě, píše se „poloha nepřesná" a za podezřelou se to nepočítá. Odchylku, kterou jsi prověřil tlačítkem <b>✓ Prověřeno</b> (dotaz potvrdíš i Enterem, Escape ho zruší), zešedne a zmizí z počítadla. Záznam jde <b>✏️ opravit</b> nebo <b>🗑 smazat</b> — u opravy se uloží kdo, kdy a proč, ať je to při sporu o výplatu dohledatelné. Měsíční kontrolu hodin najdeš v záložce Reporty.</div>
   </main>`}`;
 }
 /* POZOR na authUid: rozhoduje o tom, komu se zaznam v mobilu ZOBRAZI.
