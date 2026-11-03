@@ -67,8 +67,13 @@
           nedokoncene = 1;
         } else {
           var konec = minutyZaznamu(z);
-          if (konec > otevrena) out.push({ od: otevrena, do: konec });
-          else nedokoncene = 1;      /* konec driv nez zacatek je taky neuplny den */
+          /* Prichod a odchod ve stejne minute je hotova smena o nule minut —
+             clovek si spletl stavbu a hned to zrusil (Richard, 3. 11. 2026).
+             Driv se to bralo jako neuplny den a jemu se cely den cervenal
+             ve Hodinach, i kdyz mel vsechno zapsane. Neuplny je az odchod
+             DRIV nez prichod — ten vznika jen rucni opravou zaznamu. */
+          if (konec >= otevrena) out.push({ od: otevrena, do: konec });
+          else nedokoncene = 1;
           otevrena = null;
         }
       }

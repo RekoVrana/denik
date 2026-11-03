@@ -154,8 +154,18 @@ testSmena('Pauza otevřená před příchodem den nevynuluje',
 
 /* ---- 22. prichod a odchod ve stejnou minutu ---- */
 testSmena('Příchod a odchod ve stejné minutě',
-  'Oba záznamy 7:00 → nula hodin, žádné záporné, den označen jako neúplný',
-  [zd('Příchod','7:00','2026-08-10'), zd('Odchod','7:00','2026-08-10')], 1, 0, { nedokonceno: true });
+  'Oba záznamy 7:00 (spletl si stavbu a hned zrušil) → nula hodin, žádné záporné, den je ÚPLNÝ',
+  [zd('Příchod','7:00','2026-08-10'), zd('Odchod','7:00','2026-08-10')], 1, 0, { nedokonceno: false });
+
+/* ---- 23. Richard 3. 11. 2026: tri smeny za den, jedna omylem nulova ---- */
+test('Víc příchodů a odchodů za den, jeden omyl ve stejné minutě',
+  'Office 7:30–10:58, omyl 14:55–14:55, office 14:56–18:02 → 6 h 34 min, den úplný',
+  [z('Příchod','7:30'), z('Odchod','10:58'), z('Příchod','14:55'), z('Odchod','14:55'), z('Příchod','14:56'), z('Odchod','18:02')], 394, { nedokonceno: false });
+
+/* ---- 24. odchod driv nez prichod zustava neuplny ---- */
+test('Odchod dřív než příchod',
+  'Příchod 9:00, odchod 8:00 (ruční oprava vedení) → nula hodin, den neúplný',
+  [z('Příchod','9:00'), z('Odchod','8:00')], 0, { nedokonceno: true });
 
 /* ---- vypis ---- */
 var padlo = testy.filter(function (t) { return !t.ok; }).length;
