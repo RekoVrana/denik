@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '3. 11. 2026';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '3. 11. 2026 b';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -291,7 +291,7 @@ const S = {
      poznamky bydli v samostatnych kolekcich, ktere cte jen vedeni */
   portaly: {}, kontakty: {}, entriesInterni: {},
   view: 'nastenka', nastenkaTab: 'prehled', tickety: [], adminFilter: null, detail: null,
-  projDetailId: null, projDetailTab: 'info', newUserType: null, editUserId: null, newUserActive: null,
+  projDetailId: null, projDetailTab: 'info', newUserType: null, editUserId: null, newUserActive: null, newUserHod: null,
   ukolyView: 'seznam', orgFilter: 'vse', taskFormOpen: false, attFormOpen: false, vpFormOpen: false,
   /* odpovedi u ukolu (viz sekce ODPOVEDI U UKOLU): vedeni je ma vsechny
      naraz, parta jen pro prave rozbaleny ukol */
@@ -2888,7 +2888,7 @@ function render() {
   if (!CONFIGURED) root.innerHTML = viewNotConfigured();
   else if (S.portalToken) root.innerHTML = viewPortal();
   else if (!S.authUser || !S.meAuth) root.innerHTML = viewLogin();
-  else root.innerHTML = (S.meAuth.role === 'admin') ? viewAdmin() : (S.meAuth.role === 'sub' ? viewSub() : viewWorker());
+  else root.innerHTML = (S.meAuth.role === 'admin') ? ((S.view === 'mojesmena' && !S.detail) ? viewWorker() : viewAdmin()) : (S.meAuth.role === 'sub' ? viewSub() : viewWorker());
   vratitFormulare();
   if (S.ukolModalId) ukolModalObnov();   /* otevrene okno ukolu zije z tehoz stavu */
   otevriUkolZOdkazu();
@@ -3362,6 +3362,8 @@ function sidebar() {
     { k: 'ukoly', ic: '📌', t: 'Úkoly', bdg: S.tasks.filter(isOverdue).length || '' },
     { k: 'viceprace', ic: '🧾', t: 'Vícepráce', bdg: S.viceprace.filter(v => v.stav === 'navrh' || v.stav === 'u_investora').length || '' },
     { k: 'zavozy', ic: '🚚', t: 'Závozy', bdg: S.zavozy.filter(z => z.stav === 'chybi').length || '' },
+    /* vedeni na hodiny (Katka): vlastni pichacka = obrazovka party */
+    ...(S.me && S.me.naHodiny ? [{ k: 'mojesmena', ic: '⏱', t: 'Moje směna', bdg: mojeSmena().vPraci ? '●' : '' }] : []),
     { k: 'poznamky', ic: '📝', t: 'Poznámky' },
     { k: 'reporty', ic: '📈', t: 'Reporty' },
   ];
@@ -3463,7 +3465,7 @@ function nastenkaDochazka() {
     .sort(attCmp).forEach(a => last[a.userDocId] = a);
   const inWork = Object.values(last).filter(a => a.akce === 'Příchod' && a.date === isoToday());
   const susp = S.attendance.filter(gpsPodezrela);
-  const teren = S.users.filter(u => u.typ && u.typ.teren && !u.typ.kanc && u.active !== false);
+  const teren = S.users.filter(u => delaNaHodiny(u) && u.active !== false);
   /* "Nepritomni" se drive pocitali odectenim dvou ruznych mnozin: pocet
      terennich minus pocet VSECH, kdo maji otevreny prichod (tedy i lidi,
      kteri v seznamu terennich vubec nejsou). Ted je to poctivy vycet:
@@ -6273,7 +6275,7 @@ function pgOrganizace() {
     <div class="card">
       <h3>➕ Přidat pracovní den (ručně — když pracovník zapomene)</h3>
       <div class="frow">
-        <div><label>Terénní pracovník</label><select id="at-u">${S.users.filter(u => u.typ && u.typ.teren && u.active !== false).map(u => `<option value="${u.id}">${esc(fullName(u))}</option>`).join('')}</select></div>
+        <div><label>Terénní pracovník</label><select id="at-u">${S.users.filter(u => ((u.typ && u.typ.teren) || delaNaHodiny(u)) && u.active !== false).map(u => `<option value="${u.id}">${esc(fullName(u))}</option>`).join('')}</select></div>
         <div><label>Stavba</label><select id="at-p">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
       </div>
       <div class="frow">
@@ -7010,8 +7012,15 @@ function hoursFromAttendance(from, to) {
 /* Koho report nabizi. Neaktivni clovek tu MUSI byt taky — jinak se mu neda
    spocitat posledni vyplata, a aplikace pritom u mazani sama radi „prepni ho
    na neaktivniho". Odlisi se sedou, nevynecha se. Aktivni jdou napred. */
+/* Kdo dela NA HODINY (picha dochazku, ma sazbu, je v reportu a vyplatach):
+   parta — a od 3. 11. 2026 i clovek z vedeni s prepinacem naHodiny
+   (Katka: fakturace jako vedeni, ale placena hodinove; zadal Marco). */
+function delaNaHodiny(u) {
+  const t = (u && u.typ) || {};
+  return !!((t.teren && !t.kanc) || (t.kanc && u.naHodiny));
+}
 function repTerenni() {
-  return S.users.filter(u => u.typ && u.typ.teren && !u.typ.kanc)
+  return S.users.filter(delaNaHodiny)
     .sort((a, b) => (a.active === false ? 1 : 0) - (b.active === false ? 1 : 0));
 }
 /* Prazdne policko „Od" drive propustilo do reportu vsechno, co bylo v pameti
@@ -7740,7 +7749,7 @@ function pgUzivatele() {
   const JMENOVCI = jmenovciMapa();
   const jsouJmenovci = Object.keys(JMENOVCI).some(k => JMENOVCI[k] > 1);
   return `
-  <div class="strip"><h1>Uživatelé</h1><span class="sp"></span><button class="btn amber" onclick="S.newUserType=null;S.editUserId=null;S.newUserActive=null;goPage('newuser')">➕ PŘIDAT</button></div>
+  <div class="strip"><h1>Uživatelé</h1><span class="sp"></span><button class="btn amber" onclick="S.newUserType=null;S.editUserId=null;S.newUserActive=null;S.newUserHod=null;goPage('newuser')">➕ PŘIDAT</button></div>
   <main>
     <div class="card">
       <h3>🔑 Jak fungují práva — jednoduše</h3>
@@ -7770,7 +7779,7 @@ function pgUzivatele() {
             ? `<br><span class="badge b-red" style="margin-top:3px">⚠ ${JMENOVCI[jmenoKlic(u)] === 2 ? 'Dva účty' : JMENOVCI[jmenoKlic(u)] + (JMENOVCI[jmenoKlic(u)] < 5 ? ' účty' : ' účtů')} se stejným jménem</span>` : ''}</td>
           <td class="muted">${esc(kontaktOsoby(u.id).email || '—')}</td>
           <td style="white-space:nowrap">${typUzivateleText(u)}</td>
-          <td>${s && s.h ? `<b>${s.h} Kč/h</b>${s.c ? ` / <span style="color:var(--ok);font-weight:700">${s.c} Kč/h</span>` : ''}${sazbaHist(s).length > 1 ? `<br><span class="muted" style="font-size:11px">od ${fmtISO(sazbaHist(s)[sazbaHist(s).length - 1].od)} · ${sazbaHist(s).length}× měněno</span>` : ''}` : (t.teren && !t.kanc ? '<b style="color:var(--red)">⚠ chybí</b>' : '<span class="muted">—</span>')}</td>
+          <td>${s && s.h ? `<b>${s.h} Kč/h</b>${s.c ? ` / <span style="color:var(--ok);font-weight:700">${s.c} Kč/h</span>` : ''}${sazbaHist(s).length > 1 ? `<br><span class="muted" style="font-size:11px">od ${fmtISO(sazbaHist(s)[sazbaHist(s).length - 1].od)} · ${sazbaHist(s).length}× měněno</span>` : ''}` : (delaNaHodiny(u) ? '<b style="color:var(--red)">⚠ chybí</b>' : '<span class="muted">—</span>')}</td>
           <td>${esc(u.role || '—')}</td>
           <td style="white-space:nowrap">${u.uid
             ? `<span class="badge b-ok">✓ má účet</span>${t.kanc && u.authEmail ? `<br><span class="muted" style="font-size:10.5px;user-select:all" title="Přihlašovací adresa — tuhle zadá v záložce Vedení / kancelář">${esc(u.authEmail)}</span>` : ''}<br><button class="btn ghost sm" style="margin-top:4px" onclick="pinForm('${u.id}')">🔑 nový PIN</button>
@@ -8194,7 +8203,7 @@ function typeKeyOfUser(u) {
 /* newUserActive = prepinac „Aktivni uzivatel" v pameti. Nuluje se pri kazdem
    otevreni formulare, jinak by se stav prenesl na dalsiho cloveka. */
 const POLE_UZIVATELE = ['nu-j', 'nu-p', 'nu-tel', 'nu-e', 'nu-sh', 'nu-sc', 'nu-sod', 'nu-r'];
-function editUser(udi) { zapomen(...POLE_UZIVATELE); S.editUserId = udi; S.newUserType = null; S.newUserActive = null; goPage('newuser'); }
+function editUser(udi) { zapomen(...POLE_UZIVATELE); S.editUserId = udi; S.newUserType = null; S.newUserActive = null; S.newUserHod = null; goPage('newuser'); }
 /* Smazani omylem zadane sazby. Dokument se prepisuje CELY (set bez merge),
    protoze se meni pole i aktualni h/c — merge by stare h/c nechal viset. */
 async function smazSazbuOd(udi, od) {
@@ -8214,6 +8223,7 @@ function pgNewUser() {
   const edit = S.editUserId ? userById(S.editUserId) : null;
   const t = S.newUserType || (edit ? ((edit.typ || {}).kanc ? 'kanc' : (edit.typ || {}).inv ? 'inv' : (edit.typ || {}).sub ? 'sub' : 'teren') : null);  /* stary zaznam bez pole typ shazoval cely render na bilou obrazovku */
   const s = edit ? S.sazby[edit.id] : null;
+  const hod = S.newUserHod != null ? S.newUserHod : !!(edit && edit.naHodiny);
   const TYPES = [{ k: 'kanc', t: 'Kancelářský (Vedení)', ic: '🖥' }, { k: 'teren', t: 'Terénní pracovník', ic: '📱' }, { k: 'inv', t: 'Investor', ic: '💰' }, { k: 'sub', t: 'Subdodavatel', ic: '👥' }];
   return `
   <div class="strip"><span class="back" onclick="goPage('uzivatele')">←</span><h1>${edit ? 'Upravit uživatele' : 'Uživatelé — nový'}</h1><span class="sp"></span><button class="btn amber" onclick="saveUser()">💾 ULOŽIT</button></div>
@@ -8233,7 +8243,13 @@ function pgNewUser() {
           <div><label>Email</label><input type="text" id="nu-e" value="${esc(edit ? kontaktOsoby(edit.id).email || '' : '')}"></div>
         </div>
       </div>
-      ${t === 'teren' ? `
+      ${t === 'kanc' ? `
+      <div class="formsec">
+        <h4>⏱ Hodiny</h4>
+        <label style="display:flex;gap:10px;align-items:flex-start;text-transform:none;font-weight:400;cursor:pointer"><input type="checkbox" style="margin-top:3px" ${hod ? 'checked' : ''} onchange="S.newUserHod=this.checked;render()"><span><b>Dělá na hodiny</b> — píchá docházku, má sazbu a je v reportu hodin a výplat. V menu dostane <b>⏱ Moje směna</b>.</span></label>
+        <div class="note">Pro vedení, které je placené hodinově (fakturace, kancelář, stavbyvedoucí). Ostatní vedení nechat vypnuté.</div>
+      </div>` : ''}
+      ${(t === 'teren' || (t === 'kanc' && hod)) ? `
       <div class="formsec">
         <h4>⏱ Sazby — vidí jen Vedení</h4>
         <div class="note" style="margin-top:0">Subdodavatel sazbu nemá — hodiny nevykazuje, fakturuje práci.</div>
@@ -8299,8 +8315,10 @@ async function saveUser() {
      vcetne externiho suba. Bydli v admin-only /kontakty (S4). Precist je
      nutne HNED, ze stejneho duvodu jako sazby nize (render maze formular). */
   const kEmail = $('#nu-e').value.trim(), kTel = $('#nu-tel') ? $('#nu-tel').value.trim() : '';
+  /* prepinac „dela na hodiny" (jen vedeni) — cist PRED prvnim await, pak uz formular neni */
+  const hod = typKey === 'kanc' && (S.newUserHod != null ? S.newUserHod : !!(edit && edit.naHodiny));
   const data = {
-    jmeno: j, prijmeni: p,
+    jmeno: j, prijmeni: p, naHodiny: hod,
     /* Typ je presne to, co vedeni zaskrtlo. Driv se subovi tise pridavalo
        i 'teren', aby prosel filtrem "komu jde zadat ukol" — obezlicka, ktera
        delala ze suba pracovnika i tam, kam nepatri (rucni doplneni dochazky,
@@ -8338,7 +8356,7 @@ async function saveUser() {
      Misto smazani se pripoji zaznam s h == 0 = „tady sazba skoncila":
      minulost zustava ocenena, budoucnost uz sazbu nema. */
   const staraS = S.sazby[docId] || null;
-  if (typKey === 'sub' || typKey === 'inv' || typKey === 'kanc') {
+  if (typKey === 'sub' || typKey === 'inv' || (typKey === 'kanc' && !hod)) {
     if (staraS && (staraS.h || sazbaHist(staraS).length)) {
       const konec = sazbySloz(staraS, isoToday(), 0, 0);
       if (konec) await db.collection('sazby').doc(docId).set(konec).catch(() => {});
@@ -8441,8 +8459,10 @@ function jeSchvaleno(a) { return !a || a.schvaleno !== false; }
    (kolekce zadosti) a teprve vedeni ji promeni v zaznam dochazky. Do hodin se
    tak nikdy nedostane nic, co vedeni nevidelo. */
 function cekajiciZadosti() { return S.zadosti.filter(z => z.stav === 'ceka'); }
-function mojeZadostOdchod() { return S.zadosti.find(z => z.typ === 'odchod' && z.stav === 'ceka') || null; }
-function mojeZamitnuteZadosti() { return S.zadosti.filter(z => z.stav === 'zamitnuto' && !z.videno); }
+/* Vedeni na hodiny ma v S.zadosti celou firmu — vzdy jen svoje. */
+function mojeZadosti() { return S.zadosti.filter(z => !S.me || !z.userDocId || z.userDocId === S.me.id); }
+function mojeZadostOdchod() { return mojeZadosti().find(z => z.typ === 'odchod' && z.stav === 'ceka') || null; }
+function mojeZamitnuteZadosti() { return mojeZadosti().filter(z => z.stav === 'zamitnuto' && !z.videno); }
 
 /* POZOR: pauza ma vlastni zaznamy v dochazce, ale o stavu smeny nerozhoduje.
    Bez tohohle filtru by clovek zapnutim pauzy "prestal byt v praci". */
@@ -9501,7 +9521,7 @@ function kartaMojeHodiny() {
   const klice = Object.keys(dny).sort();
   let celkem = 0, neuplnych = 0;
   klice.forEach(k => { celkem += dny[k].h; if (dny[k].nedokonceno) neuplnych++; });
-  const cekaZadost = S.zadosti.filter(z => z.stav === 'ceka').length;
+  const cekaZadost = mojeZadosti().filter(z => z.stav === 'ceka').length;
   return `
   <div class="card">
     <div class="aprv" style="align-items:center;justify-content:space-between">
@@ -9586,12 +9606,13 @@ function viewWorker() {
   }
   const p = proj(S.workerProject);
   const myEntries = p ? entriesOf(p.id).slice(0, 8) : [];
-  const myAtt = S.attendance.filter(a => a.date === isoToday());
+  /* vedeni ma v S.attendance celou firmu — tady jen svoje pichnuti */
+  const myAtt = S.attendance.filter(a => a.date === isoToday() && (!S.me || a.userDocId === S.me.id));
   const lastAct = myAtt[0];
   const tab = S.mobTab || 'dnes';
   const pv = prohlizenaStavba(p);
   return topbar() + `<div class="shell"><div class="content">
-  <div class="strip"><h1>Můj den na stavbě</h1><span class="sp"></span><span class="muted">${fmtISOFull(isoToday())}</span></div>
+  <div class="strip">${jsemVedeni() ? `<span class="back" title="Zpět do kanceláře" onclick="S.view='nastenka';S.mobTab='dnes';render()">←</span>` : ''}<h1>Můj den na stavbě</h1><span class="sp"></span><span class="muted">${fmtISOFull(isoToday())}</span></div>
   <main class="mobilewrap stabs-main">
     ${tab === 'dnes' ? `
     ${typeof navodHtml === "function" ? navodHtml('worker') : ""}
