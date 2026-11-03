@@ -108,15 +108,17 @@ function upozorneniUkoly() {
 
   /* Šablony samy o sobě nejsou úkol — je to jen předloha. */
   vsechny = vsechny.filter(function (t) { return t.stav !== 'sablona'; });
-  /* Kdo si úkol zadal sám sobě, ať si o něm neposílá zprávu. */
-  vsechny = vsechny.filter(function (t) { return t.respId && t.respId !== t.zadalId; });
-
   /* Seskupit na člověka. Ze šablony vznikne klidně dvacet úkolů naráz —
      dvacet cinknutí po sobě je nejrychlejší cesta k tomu, aby si to člověk
-     vypnul. Dostane jedno. */
+     vypnul. Dostane jedno. Úkol může mít víc odpovědných (respIds, od
+     3. 11. 2026) — dá se vědět každému z nich. Kdo si úkol zadal sám sobě,
+     ať si o něm neposílá zprávu. */
   var podleLidi = {};
   vsechny.forEach(function (t) {
-    (podleLidi[t.respId] = podleLidi[t.respId] || []).push(t);
+    odpovedni_(t).forEach(function (kdo) {
+      if (kdo === t.zadalId) return;
+      (podleLidi[kdo] = podleLidi[kdo] || []).push(t);
+    });
   });
 
   Object.keys(podleLidi).forEach(function (kdo) {
@@ -125,7 +127,7 @@ function upozorneniUkoly() {
     if (ukoly.length === 1) {
       titul = 'Nový úkol' + nazevStavby_(ukoly[0].pid);
       telo = ukoly[0].title || '';
-      if (ukoly[0].term) telo += '  ·  do ' + datumCesky_(ukoly[0].term);
+      if (ukoly[0].term) telo += '  ·  do ' + datumCesky_(ukoly[0].term) + (ukoly[0].termCas ? ' ' + ukoly[0].termCas : '');
       url = './#ukol=' + ukoly[0].__id;
     } else {
       titul = 'Máš ' + pocetUkolu_(ukoly.length) + nazevStavby_(spolecnaStavba_(ukoly));
@@ -156,7 +158,7 @@ function upozorneniDeniUUkolu_(od) {
   var podleLidi = {};
   zmenene.forEach(function (t) {
     var komu = {};
-    [t.zadalId, t.respId].forEach(function (k) { if (k && k !== t.zmenaKdoId) komu[k] = true; });
+    [t.zadalId].concat(odpovedni_(t)).forEach(function (k) { if (k && k !== t.zmenaKdoId) komu[k] = true; });
     Object.keys(komu).forEach(function (k) { (podleLidi[k] = podleLidi[k] || []).push(t); });
   });
 
@@ -183,6 +185,12 @@ function upozorneniDeniUUkolu_(od) {
     }
     posliCloveku_(kdo, titul, telo, url, znacka);
   });
+}
+
+/* Všichni odpovědní: respIds, a když chybí (starý úkol), jen respId. */
+function odpovedni_(t) {
+  if (t.respIds && t.respIds.length) return t.respIds;
+  return t.respId ? [t.respId] : [];
 }
 
 function popisStavu_(stav) {
@@ -340,6 +348,8 @@ function rozbal_(fields) {
     else if ('booleanValue' in v) o[k] = v.booleanValue;
     else if ('timestampValue' in v) o[k] = v.timestampValue;
     else if ('nullValue' in v) o[k] = null;
+    /* pole textů (respIds) — jiné typy uvnitř polí nás nezajímají */
+    else if ('arrayValue' in v) o[k] = ((v.arrayValue && v.arrayValue.values) || []).map(function (x) { return x.stringValue; }).filter(Boolean);
   });
   return o;
 }

@@ -3,11 +3,16 @@
 //  ZÁLOŽNÍ KOPIE pravidel přístupu k databázi (Firestore)
 //
 //  Toto je věrný opis toho, co je nasazené v ostrém provozu.
-//  Ověřeno proti Firebase konzoli 27. 10. 2026 (publikováno z této kopie, otisk dc2d96b2aa1efe32).
+//  Ověřeno proti Firebase konzoli 27. 10. 2026 (publikováno z této kopie, otisk 00be29efadba7e40).
 //  Živá verze: Firebase konzole → Firestore → Rules
 //  Když se změní tam, změň i tady, ať kopie nezastará.
 //
-//  Poslední změna 29. 10. 2026 (soubory u závozu):
+//  Poslední změna 3. 11. 2026 (víc odpovědných u úkolu, čas termínu):
+//  29) /tasks: pole respIds [id…] (respId zůstává jako první z nich) a termCas.
+//      Číst smí i ten, kdo je v respIds (dotaz array-contains); větev (a)
+//      update pro něj platí taky; zadavatel smí měnit respIds a termCas.
+//
+//  Změna 29. 10. 2026 (soubory u závozu):
 //  28) /zavozy: pole soubory [{name, driveId, mime}] — odkazy na soubory ve
 //      složce 09_Denik_staveb/Zavozy na Disku (objednávka v PDF apod.).
 //      Zapsat je smí autor při založení, měnit vedení nebo autor položky.
@@ -375,7 +380,9 @@ service cloud.firestore {
     match /tasks/{id} {
       allow read: if isAdmin()
         || (hasRole() && (resource.data.respId == mujDocId()
-                          || resource.data.zadalId == mujDocId()));
+                          || resource.data.zadalId == mujDocId()))
+        // vic odpovednych (29): jsem jeden z respIds — dotaz array-contains
+        || (hasRole() && mujDocId() in resource.data.respIds);
       // zadat ukol smi kdokoli komukoli, ale musi se pod nej podepsat
       allow create: if isAdmin()
         || (hasRole() && request.resource.data.zadalId == mujDocId());
@@ -402,13 +409,14 @@ service cloud.firestore {
       //     samotného překlepu v nadpisu.
       allow update: if isAdmin()
         || (hasRole() && (resource.data.respId == mujDocId()
-                          || resource.data.zadalId == mujDocId())
+                          || resource.data.zadalId == mujDocId()
+                          || mujDocId() in resource.data.get('respIds', []))
             && request.resource.data.diff(resource.data).affectedKeys()
                  .hasOnly(['stav', 'hotovoDne', 'odpovedi', 'odpPocet', 'soubory',
                            'zmenaTs', 'zmenaTyp', 'zmenaKdoId', 'zmenaKdo', 'zmenaText']))
         || (hasRole() && resource.data.zadalId == mujDocId()
             && request.resource.data.diff(resource.data).affectedKeys()
-                 .hasOnly(['title', 'popis', 'pid', 'respId', 'resp', 'res', 'term', 'respOd']));
+                 .hasOnly(['title', 'popis', 'pid', 'respId', 'respIds', 'resp', 'res', 'term', 'termCas', 'respOd']));
       // zrusit ukol smi vedeni a ten, kdo ho zadal — ne ten, kdo ho dostal
       allow delete: if isAdmin()
         || (hasRole() && resource.data.zadalId == mujDocId());
@@ -418,7 +426,7 @@ service cloud.firestore {
       match /odpovedi/{oid} {
         function ucastnik() {
           let t = get(/databases/$(database)/documents/tasks/$(id)).data;
-          return t.respId == mujDocId() || t.zadalId == mujDocId();
+          return t.respId == mujDocId() || t.zadalId == mujDocId() || mujDocId() in t.get('respIds', []);
         }
         function textOk() {
           return request.resource.data.text is string

@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '29. 10. 2026 b';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '3. 11. 2026';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -423,10 +423,10 @@ function listenMojeUkoly() {
      takze tady jeste nemusi byt. users_auth (S.meAuth) uz nacteny je
      a userDocId nese — jinak ukoly mlcky zustaly prazdne do restartu. */
   const mid = (S.meAuth && S.meAuth.userDocId) || (S.me && S.me.id) || '__nikdo__';
-  const casti = { prideleno: [], zadal: [] };
+  const casti = { prideleno: [], zadal: [], spolu: [] };
   const slozit = () => {
     const mapa = new Map();
-    casti.prideleno.concat(casti.zadal).forEach(t => mapa.set(t.id, t));
+    casti.prideleno.concat(casti.zadal, casti.spolu).forEach(t => mapa.set(t.id, t));
     S.tasks = [...mapa.values()].sort(taskSort);
     render();
   };
@@ -436,6 +436,12 @@ function listenMojeUkoly() {
       slozit();
     }, err => console.warn('ukoly/' + pole, err)));
   });
+  /* Ukoly, kde jsem jeden z vice odpovednych (respIds). Treti dotaz, protoze
+     Firestore neumi „respId == ja NEBO ja v respIds" v jednom. */
+  S.unsub.push(db.collection('tasks').where('respIds', 'array-contains', mid).onSnapshot(snap => {
+    casti.spolu = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    slozit();
+  }, err => console.warn('ukoly/respIds', err)));
 }
 
 /* ---------- kolik dat drzime naživo ----------
@@ -733,9 +739,38 @@ function kontaktStavby(pid) { return (S.kontakty || {})[kontaktKlicStavby(pid)] 
 /* Ukol si drzi ID osoby (respId). Drive se ukladalo jen jmeno jako text, takze
    po oprave preklepu v prijmeni ukol osirel a cloveku zmizel z mobilu.
    Jmeno se dal uklada taky — kvuli starym ukolum a kvuli exportu. */
+/* Vic odpovednych osob (Marco 3. 11. 2026): ukol nese respIds [id, id…];
+   respId zustava jako PRVNI z nich (hlavni), aby stare dotazy, pravidla
+   i most dal fungovaly. res = jmena, resp = jmena spojena carkou. */
+function respIdsOf(t) {
+  if (!t) return [];
+  if (Array.isArray(t.respIds) && t.respIds.length) return t.respIds;
+  return t.respId ? [t.respId] : [];
+}
+function jeOdpovedny(t, id) { return !!id && respIdsOf(t).includes(id); }
 function respName(t) {
-  const u = t && t.respId ? S.users.find(x => x.id === t.respId) : null;
-  return u ? fullName(u) : ((t && t.resp) || '');
+  const ids = respIdsOf(t);
+  const jmena = ids.map(id => { const u = userById(id); return u ? fullName(u) : ''; }).filter(Boolean);
+  if (jmena.length) return jmena.join(', ');
+  return (t && t.resp) || '';
+}
+/* Vyber osob do formulare: hlavni select (id X-r) + rozbalovaci seznam
+   zaskrtavacich policek „další osoby" (name X-dalsi). */
+function dalsiOsobyHtml(prefix, lide, vybrane) {
+  const v = vybrane || [];
+  return `<details style="margin-top:4px" ${v.length ? 'open' : ''}><summary class="lnk muted" style="font-size:12.5px;cursor:pointer">➕ další odpovědné osoby${v.length ? ' (' + v.length + ')' : ''}</summary>
+    <div style="display:flex;flex-wrap:wrap;gap:4px 14px;padding:6px 2px;max-height:150px;overflow:auto">
+      ${lide.map(u => `<label style="display:inline-flex;align-items:center;gap:5px;font-size:13px;text-transform:none;font-weight:400;margin:0"><input type="checkbox" name="${prefix}-dalsi" value="${u.id}" ${v.includes(u.id) ? 'checked' : ''}>${esc(fullName(u))}</label>`).join('')}
+    </div></details>`;
+}
+/* Precte hlavni osobu + zaskrtnute dalsi; vraci {respId, respIds, res, resp} nebo null. */
+function prectiOdpovedne(prefix) {
+  const sel = $('#' + prefix + '-r'); const respId = sel ? sel.value : '';
+  const ru = userById(respId); if (!respId || !ru) return null;
+  const dalsi = [...document.querySelectorAll('input[name="' + prefix + '-dalsi"]:checked')].map(x => x.value).filter(id => id !== respId && userById(id));
+  const respIds = [respId, ...dalsi];
+  const res = respIds.map(id => fullName(userById(id)));
+  return { respId, respIds, res, resp: res.join(', ') };
 }
 /* Naléhavost úkolu se pozná barevným prouzkem, ne cudnou poznamkou —
    na stavbe se na telefon kouka vterinu, ne minutu. */
@@ -1367,17 +1402,21 @@ function ukolNaleh(t) {
   if (!t.term) return '';
   return t.term < d ? 'po' : t.term === d ? 'dnes' : '';
 }
+/* Cas u terminu (Marco 3. 11. 2026): nepovinne termCas 'HH:MM'. Po terminu
+   je ukol i dnes, kdyz uz cas prosel. */
+function casTerminu(t) { return t && t.termCas ? ' ' + t.termCas : ''; }
+function casProsel(t) { return !!(t && t.term === isoToday() && t.termCas && t.termCas < nowTime()); }
 function terminChip(t) {
   const d = isoToday();
   if (!t.term) return '';
-  if (t.term < d) return '<span class="badge b-red">❗ po termínu</span>';
-  if (t.term === d) return '<span class="badge b-wait">📅 dnes</span>';
-  return '<span class="badge b-int">📅 do ' + fmtISO(t.term) + '</span>';
+  if (t.term < d || casProsel(t)) return '<span class="badge b-red">❗ po termínu' + (t.term === d ? ' (' + t.termCas + ')' : '') + '</span>';
+  if (t.term === d) return '<span class="badge b-wait">📅 dnes' + casTerminu(t) + '</span>';
+  return '<span class="badge b-int">📅 do ' + fmtISO(t.term) + casTerminu(t) + '</span>';
 }
 
 function jeMuj(t) {
   if (!S.me) return false;
-  if (t.respId) return t.respId === S.me.id;
+  if (respIdsOf(t).length) return jeOdpovedny(t, S.me.id);
   return t.resp === fullName(S.me) || (t.res || []).includes(fullName(S.me));
 }
 const userById = id => S.users.find(u => u.id === id) || (S.usersVse || []).find(u => u.id === id);
@@ -1390,7 +1429,7 @@ function lideProUkoly() {
 }
 function entriesOf(pid) { return S.entries.filter(e => e.pid === pid); }
 function pendingEntries() { return S.entries.filter(e => e.status === 'pending'); }
-function isOverdue(t) { return jeOtevreny(t) && t.term && t.term < isoToday(); }
+function isOverdue(t) { return jeOtevreny(t) && !!t.term && (t.term < isoToday() || casProsel(t)); }
 /* Tri stavy (Marco 26. 10. 2026, varianta 2): K udelani -> (parta odskrtne)
    Ke kontrole -> (vedeni potvrdi) Hotovo. Kdyz odskrtne vedeni, je hotovo
    rovnou. 'probiha' je starsi stav — vedeni ho pri prihlaseni prevede na
@@ -4568,12 +4607,13 @@ function etapaPanel(pid, i) {
   const m = nova ? { t: '', p: 0 } : ((p.milestones || [])[i] || null);
   if (!m) return;
   const vybrani = etapaLide(m);
-  /* Nabizi se parta i subdodavatele — obojí na stavbe fyzicky je. Vedeni
-     a investori ne. Neaktivni clovek se nabidne jen tehdy, kdyz uz na
-     etape je, at ho z ni jde odebrat. */
+  /* Nabizi se parta, subdodavatele i vedeni — vedeni na stavbe taky dela
+     (David Falát je vedeni a chybel tu; Marco 3. 11. 2026). Investori ne.
+     Neaktivni clovek se nabidne jen tehdy, kdyz uz na etape je, at ho
+     z ni jde odebrat. */
   const lide = S.users.filter(u => {
     const ty = u.typ || {};
-    if (!ty.teren && !ty.sub) return false;
+    if (!ty.teren && !ty.sub && !ty.kanc) return false;
     return u.active !== false || vybrani.indexOf(u.id) >= 0;
   }).sort((a, b) => fullName(a).localeCompare(fullName(b), 'cs'));
   const pct = nova ? 0 : milePct(m);
@@ -6426,9 +6466,12 @@ function novyUkolModalHtml() {
       <label>Popis (nepovinný) <span class="muted" style="text-transform:none;font-weight:400">— enter dělá odrážku</span></label><textarea id="tk-popis" placeholder="- podrobnost&#10;- další bod" style="min-height:54px">${esc((S.ukolPredloha || {}).popis || '')}</textarea>
       <div class="frow">
         <div><label>Stavba</label><select id="tk-p">${S.projects.filter(p => p.active || p.id === (S.ukolPredloha || {}).pid).map(p => `<option value="${p.id}" ${p.id === (S.ukolPredloha || {}).pid ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
-        <div><label>Odpovědná osoba</label><select id="tk-r">${lideProUkoly().map(u => `<option value="${u.id}">${esc(fullName(u))}</option>`).join('')}</select></div>
+        <div><label>Odpovědná osoba</label><select id="tk-r">${lideProUkoly().map(u => `<option value="${u.id}">${esc(fullName(u))}</option>`).join('')}</select>${dalsiOsobyHtml('tk', lideProUkoly(), [])}</div>
       </div>
-      <label>Termín</label><input type="date" id="tk-d" value="${shiftISO(isoToday(), 3)}">
+      <div class="frow">
+        <div><label>Termín</label><input type="date" id="tk-d" value="${shiftISO(isoToday(), 3)}"></div>
+        <div><label>Čas <span class="muted" style="text-transform:none;font-weight:400">— nepovinné</span></label><input type="time" id="tk-cas"></div>
+      </div>
       ${ukolSouboryHtml(null, '#tk-p')}
       <div class="aprv"><button class="btn amber" onclick="addTask()">💾 ULOŽIT ÚKOL</button><button class="btn ghost" onclick="closeModal()">Zrušit</button></div>`;
 }
@@ -6437,7 +6480,7 @@ function novyUkolModalHtml() {
 function ukolyNastrojeHtml() {
   const ukoly = S.tasks.filter(t => t.stav !== 'sablona');
   const stavby = S.projects.filter(p => p.active || ukoly.some(t => t.pid === p.id));
-  const lideIds = new Set(ukoly.map(t => t.respId).filter(Boolean));
+  const lideIds = new Set(ukoly.flatMap(t => respIdsOf(t)));
   const lide = S.users.filter(u => lideIds.has(u.id)).sort((a, b) => (a.prijmeni || '').localeCompare(b.prijmeni || '', 'cs'));
   const aktivni = !!(S.ukolFiltrPid || S.ukolFiltrResp || (S.ukolHledat || '').trim());
   const vyb = ukolyFiltrovane();
@@ -6466,7 +6509,7 @@ function ukolyRazeni(a, b) {
   const hotA = a.stav === 'hotovo' ? 1 : 0, hotB = b.stav === 'hotovo' ? 1 : 0;
   if (hotA !== hotB) return hotA - hotB;
   const ja = mojeId();
-  const mujA = a.respId === ja ? 0 : 1, mujB = b.respId === ja ? 0 : 1;
+  const mujA = jeOdpovedny(a, ja) ? 0 : 1, mujB = jeOdpovedny(b, ja) ? 0 : 1;
   if (mujA !== mujB) return mujA - mujB;
   if (hotA) return (b.hotovoDne || b.term || '').localeCompare(a.hotovoDne || a.term || '');
   return (a.term || '').localeCompare(b.term || '');
@@ -6475,7 +6518,7 @@ function ukolyFiltrovane() {
   const q = (S.ukolHledat || '').trim().toLowerCase();
   return S.tasks.filter(t => t.stav !== 'sablona'
     && (!S.ukolFiltrPid || t.pid === S.ukolFiltrPid)
-    && (!S.ukolFiltrResp || t.respId === S.ukolFiltrResp)
+    && (!S.ukolFiltrResp || jeOdpovedny(t, S.ukolFiltrResp))
     && (!q || [t.title, t.popis, respName(t), (proj(t.pid) || {}).name, t.zadal].some(x => String(x || '').toLowerCase().includes(q))));
 }
 /* Barva clovek -> stale stejna, at se da v seznamu poznat podle kolecka. */
@@ -6494,9 +6537,9 @@ function ukolTerminText(t) {
   if (t.stav === 'hotovo') return t.hotovoDne ? 'hotovo ' + fmtISO(t.hotovoDne) : 'hotovo';
   if (!t.term) return 'bez termínu';
   const d = isoToday();
-  if (t.term < d) { const n = daysBetween(t.term, d); return fmtISO(t.term) + ' · ' + (n === 1 ? 'včera' : n + ' dní po termínu'); }
-  if (t.term === d) return 'dnes';
-  return fmtISO(t.term);
+  if (t.term < d) { const n = daysBetween(t.term, d); return fmtISO(t.term) + casTerminu(t) + ' · ' + (n === 1 ? 'včera' : n + ' dní po termínu'); }
+  if (t.term === d) return casProsel(t) ? 'dnes ' + t.termCas + ' · po termínu' : 'dnes' + casTerminu(t);
+  return fmtISO(t.term) + casTerminu(t);
 }
 
 async function nastavStavUkolu(id, stav) {
@@ -6515,11 +6558,12 @@ function ukolStavOvladac(t) {
 }
 function ukolKartaHtml(t) {
   const u = t.respId ? userById(t.respId) : null;
-  const moje = t.respId === mojeId();
+  const moje = jeOdpovedny(t, mojeId());
   const hot = t.stav === 'hotovo';
+  const dalsich = respIdsOf(t).length - 1;
   return `<div class="uk-karta ${hot ? 'hot' : ''}" onclick="ukolModal('${t.id}')">
     <div class="pruh" style="background:${ukolPruh(t)}"></div>
-    <span class="uav" style="background:${barvaOsoby(t.respId)};color:#fff" title="${esc(respName(t))}">${u ? ini(u) : '?'}</span>
+    <span class="uav" style="background:${barvaOsoby(t.respId)};color:#fff;position:relative" title="${esc(respName(t))}">${u ? ini(u) : '?'}${dalsich > 0 ? `<span style="position:absolute;right:-6px;bottom:-4px;background:#fff;color:#1a3c5e;border:1px solid #cbd4dd;border-radius:9px;font-size:9.5px;line-height:1;padding:2px 3px;font-weight:700">+${dalsich}</span>` : ''}</span>
     <div class="telo">
       <div class="uk-nazev">${esc(t.title)}${t.src ? ` <span class="badge b-int" style="font-weight:600">${esc(t.src)}</span>` : ''}</div>
       <div class="uk-info">
@@ -6546,11 +6590,11 @@ function ukolySeznam() {
   const ja = mojeId();
   /* Poradi skupin (Marco 26. 10. 2026): nejdriv MOJE (i ty po terminu —
      uvnitr skupiny jdou nahoru), pak PO TERMINU ostatnich, pak OSTATNI. */
-  const moje = vse.filter(t => jeOtevreny(t) && t.respId === ja)
+  const moje = vse.filter(t => jeOtevreny(t) && jeOdpovedny(t, ja))
     .sort((x, y) => (isOverdue(y) ? 1 : 0) - (isOverdue(x) ? 1 : 0) || ukolyRazeni(x, y));
   const keKontrole = vse.filter(t => t.stav === 'kontrola');
-  const poTerminu = vse.filter(t => jeOtevreny(t) && t.respId !== ja && isOverdue(t));
-  const ostatni = vse.filter(t => jeOtevreny(t) && t.respId !== ja && !isOverdue(t));
+  const poTerminu = vse.filter(t => jeOtevreny(t) && !jeOdpovedny(t, ja) && isOverdue(t));
+  const ostatni = vse.filter(t => jeOtevreny(t) && !jeOdpovedny(t, ja) && !isOverdue(t));
   const hotove = vse.filter(t => t.stav === 'hotovo');
   const LIMIT_HOTOVYCH = 3;
   const hotoveUkaz = S.ukolHotoveVse ? hotove : hotove.slice(0, LIMIT_HOTOVYCH);
@@ -6572,7 +6616,7 @@ function ukolyKanban() {
       ${ukolyFiltrovane().filter(t => t.stav === c).sort(ukolyRazeni).map(t => `
         <div class="card" style="padding:10px 12px;margin-bottom:8px;${isOverdue(t) ? 'border-left:3px solid var(--red)' : ''}">
           <b style="font-size:13px;cursor:pointer" onclick="ukolModal('${t.id}')">${esc(t.title)}</b>${pocetOdpovedi(t) ? ` <span class="muted" style="font-size:11.5px">💬${pocetOdpovedi(t)}</span>` : ''}
-          <div class="muted" style="font-size:11.5px;margin:4px 0">${esc((proj(t.pid) || {}).name || '')} · ${t.respId === mojeId() ? '<b>🙋 já</b>' : esc(respName(t))}</div>
+          <div class="muted" style="font-size:11.5px;margin:4px 0">${esc((proj(t.pid) || {}).name || '')} · ${jeOdpovedny(t, mojeId()) ? '<b>🙋 já</b>' + (respIdsOf(t).length > 1 ? ' +' + (respIdsOf(t).length - 1) : '') : esc(respName(t))}</div>
           <div style="font-size:11.5px">${isOverdue(t) ? `<b style="color:var(--red)">❗ ${fmtISO(t.term)}</b>` : `📅 ${fmtISO(t.term)}`}</div>
           <div style="display:flex;gap:4px;margin-top:8px">
             ${c !== 'nove' ? `<button class="btn ghost sm" style="padding:3px 8px" onclick="taskMove('${t.id}',-1)">←</button>` : ''}
@@ -6607,7 +6651,7 @@ async function tplApply() {
   const resp = fullName(ru);
   try {
     for (const it of (tpl.items || [])) {
-      await db.collection('tasks').add({ title: it.title, zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}), pid, respId, resp, created: isoToday(), term: shiftISO(start, it.off || 0), stav: 'nove', res: [resp], src: 'ze šablony ' + tpl.title, createdAt: FV() });
+      await db.collection('tasks').add({ title: it.title, zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}), pid, respId, respIds: [respId], resp, created: isoToday(), term: shiftISO(start, it.off || 0), stav: 'nove', res: [resp], src: 'ze šablony ' + tpl.title, createdAt: FV() });
     }
   } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); render(); return; }
   if (ukolModalOtevren('sablony')) closeModal();
@@ -6681,10 +6725,13 @@ function ukolUpravit(id) {
       <option value="">— vyber, komu —</option>
       ${lide.map(u => `<option value="${u.id}" ${u.id === t.respId ? 'selected' : ''}>${esc(fullName(u))}</option>`).join('')}
     </select>
+    ${dalsiOsobyHtml('ue', lide, respIdsOf(t).slice(1))}
     <label>Stavba</label>
     <select id="ue-p">${stavby.map(x => `<option value="${x.id}" ${x.id === t.pid ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
-    <label>Termín</label>
-    <input type="date" id="ue-d" value="${esc(t.term || '')}">
+    <div class="frow">
+      <div><label>Termín</label><input type="date" id="ue-d" value="${esc(t.term || '')}"></div>
+      <div><label>Čas <span class="muted" style="text-transform:none;font-weight:400">— nepovinné</span></label><input type="time" id="ue-cas" value="${esc(t.termCas || '')}"></div>
+    </div>
     <div class="aprv"><button class="btn amber" onclick="ulozUkol('${t.id}')">💾 Uložit změny</button>
       <button class="btn ghost" onclick="closeModal()">Zrušit</button></div>
     <div class="note">Odpovědi i fotky u úkolu zůstanou. Když úkol přehodíš na někoho jiného, původnímu z aplikace zmizí.</div>`);
@@ -6694,8 +6741,8 @@ async function ulozUkol(id) {
   const t = S.tasks.find(x => x.id === id); if (!t) return;
   const title = ($('#ue-t').value || '').trim();
   if (!title) { toast('Nadpis nesmí být prázdný'); return; }
-  const respId = $('#ue-r').value, ru = userById(respId);
-  if (!respId || !ru) { toast('Vyber, komu úkol patří'); return; }
+  const odp = prectiOdpovedne('ue');
+  if (!odp) { toast('Vyber, komu úkol patří'); return; }
   try {
     /* Stav ukolu se tady schvalne nemeni — ten resi odskrtnuti (taskDone)
        a sipky na kanbanu. zadalId zustava, kdo ukol zadal se neprepisuje. */
@@ -6703,14 +6750,15 @@ async function ulozUkol(id) {
       title, popis: ($('#ue-popis') ? ($('#ue-popis').value || '').trim() : ''),
       /* Kdyby stavba v nabidce nebyla (uz neexistuje), zapsalo by se prazdno
          a ukol by se odpojil od zakazky. Radeji nechame puvodni. */
-      pid: $('#ue-p').value || t.pid || '', respId, resp: fullName(ru), res: [fullName(ru)],
-      term: $('#ue-d').value || t.term || ''
+      pid: $('#ue-p').value || t.pid || '', ...odp,
+      term: $('#ue-d').value || t.term || '', termCas: ($('#ue-cas') && $('#ue-cas').value) || ''
     };
     /* Prehozeni ukolu na nekoho jineho je pro nej stejna novinka jako ukol
        novy — jenze createdAt se nemeni, takze by o tom most nevedel a v
        seznamu se to taky neobjevi nahore. Razitko respOd je jediny zaznam
        o tom, ze se odpovedny prave zmenil. */
-    if (respId !== t.respId) zmena.respOd = FV();
+    const bylo = respIdsOf(t);
+    if (odp.respIds.some(id => !bylo.includes(id))) zmena.respOd = FV();
     await db.collection('tasks').doc(id).update(zmena);
     closeModal(); toast('Úkol upraven ✓'); render();
   } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
@@ -6725,15 +6773,15 @@ async function smazSablonu(id) {
 async function addTask() {
   const title = $('#tk-t').value.trim();
   if (!title) { toast('Vyplň název úkolu'); return; }
-  const respId = $('#tk-r').value, ru = userById(respId);
+  const odp = prectiOdpovedne('tk');
   /* Stejna pojistka jako ve verzi pro teren: bez vybrane osoby by ukol
      nikomu nepatril a nikde by se neukazal. */
-  if (!respId || !ru) { toast('Vyber, komu úkol patří'); return; }
+  if (!odp) { toast('Vyber, komu úkol patří'); return; }
   try {
     await db.collection('tasks').add({
       title, popis: ($('#tk-popis') ? $('#tk-popis').value.trim() : ''),
-      zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}), pid: $('#tk-p').value, respId, resp: fullName(ru), created: isoToday(),
-      term: $('#tk-d').value || shiftISO(isoToday(), 3), stav: 'nove', res: [fullName(ru)], soubory: S.ukolSoubory, createdAt: FV()
+      zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}), pid: $('#tk-p').value, ...odp, created: isoToday(),
+      term: $('#tk-d').value || shiftISO(isoToday(), 3), termCas: ($('#tk-cas') && $('#tk-cas').value) || '', stav: 'nove', soubory: S.ukolSoubory, createdAt: FV()
     });
   } catch (e) { toast('Nepovedlo se uložit: ' + dbErrText(e)); return; }
   S.ukolPredloha = null; S.ukolSoubory = [];
@@ -9185,7 +9233,7 @@ function kartaUkoly(p) {
   const hotoveDnes = S.tasks.filter(t => jeMuj(t) && (t.stav === 'kontrola' || (t.stav === 'hotovo' && t.hotovoDne === isoToday())));
   /* Co jsem zadal nekomu jinemu — vlastni ukoly uz jsou o kus vys. */
   const zadaneMnou = S.tasks.filter(t => t.stav !== 'hotovo' && t.stav !== 'sablona'
-    && S.me && t.zadalId === S.me.id && t.respId !== S.me.id);
+    && S.me && t.zadalId === S.me.id && !jeOdpovedny(t, S.me.id));
   return `    <div class="card">
       <div class="ukhead">
         <h3 style="margin:0;flex:1">📌 Úkoly</h3>
@@ -9203,8 +9251,9 @@ function kartaUkoly(p) {
               <option value="">— vyber, komu —</option>
               ${S.me ? `<option value="${S.me.id}">🙋 Já sám (${esc(fullName(S.me))})</option>` : ''}
               ${lideProUkoly().filter(u => !S.me || u.id !== S.me.id).map(u => `<option value="${u.id}">${esc(fullName(u))}</option>`).join('')}
-            </select></div>
-          <div><label>Termín</label><input type="date" id="wtk-d" value="${shiftISO(isoToday(), 3)}"></div>
+            </select>${dalsiOsobyHtml('wtk', lideProUkoly(), [])}</div>
+          <div><label>Termín</label><input type="date" id="wtk-d" value="${shiftISO(isoToday(), 3)}">
+            <label style="margin-top:6px">Čas <span class="muted" style="text-transform:none;font-weight:400">— nepovinné</span></label><input type="time" id="wtk-cas"></div>
         </div>
         <label>Stavba</label>
         <select id="wtk-p">${S.projects.filter(x => x.active !== false).map(x => `<option value="${x.id}" ${((S.ukolPredloha && S.ukolPredloha.pid) || (p && p.id)) === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
@@ -9825,7 +9874,7 @@ async function ukolFotoPridat(files) {
 async function workerAddTask() {
   const title = $('#wtk-t').value.trim();
   if (!title) { toast('Napiš, co je potřeba udělat'); return; }
-  const respId = $('#wtk-r').value, ru = userById(respId);
+  const odp = prectiOdpovedne('wtk'); const respId = odp ? odp.respId : ''; const ru = odp ? userById(respId) : null;
   /* Drive bylo policko predvyplnene na sebe, takze kdo ho preskocil, zadal
      ukol tise sam sobe a pak ho hledal v "Zadal jsem". Ted se musi vybrat. */
   if (!respId) { toast('Vyber, komu úkol patří'); return; }
@@ -9843,10 +9892,10 @@ async function workerAddTask() {
     }
     await db.collection('tasks').add({
       title, zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}),
-      pid: $('#wtk-p').value, respId, resp: ru ? fullName(ru) : '',
-      created: isoToday(), term: $('#wtk-d').value || shiftISO(isoToday(), 3),
+      pid: $('#wtk-p').value, ...odp,
+      created: isoToday(), term: $('#wtk-d').value || shiftISO(isoToday(), 3), termCas: ($('#wtk-cas') && $('#wtk-cas').value) || '',
       popis: ($('#wtk-popis') ? $('#wtk-popis').value.trim() : ''),
-      stav: 'nove', res: ru ? [fullName(ru)] : [], photos: fotky, soubory: S.ukolSoubory, createdAt: FV()
+      stav: 'nove', photos: fotky, soubory: S.ukolSoubory, createdAt: FV()
     });
     S.taskFoto = []; S.ukolSoubory = [];
     /* Skocit na zalozku, kde ukol doopravdy skoncil — at ho clovek nehleda. */
