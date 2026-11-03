@@ -94,7 +94,8 @@ function navodWorker() {
         'Záložka <b>📌 Úkoly</b> dole. Hotový úkol odškrtni čtverečkem vlevo — dostane „čeká na potvrzení vedení" '
       + 'a zmizí, až ho vedení potvrdí. Omyl vrátíš dalším ťuknutím. '
       + 'Číslo na záložce říká, kolik jich ještě čeká. Úkol může patřit víc lidem najednou '
-      + '(při zadávání <b>➕ další odpovědné osoby</b>) a k termínu jde přidat i čas.')}
+      + '(při zadávání <b>➕ další odpovědné osoby</b>) a k termínu jde přidat i čas. '
+      + 'Otevřený úkol se ťuknutím vedle okna nezavře, aby ses nepřišel o rozepsaný text — zavírá se tlačítkem <b>Zavřít</b>.')}
 
     ${navodKrok('🏗', 'Všechno o stavbě',
         'Záložka <b>🏗 Stavba</b> dole. Nahoře si <b>vybereš stavbu</b> — můžeš se podívat '

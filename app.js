@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '3. 11. 2026 b';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '3. 11. 2026 c';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -5301,8 +5301,16 @@ function zeptejSe(nadpis, popis, vychozi, viceradkove) {
   });
 }
 
+/* Klik mimo okno ho zavre jen tam, kde se nic nevyplnuje. Okno s formularem
+   (ukol, komentar, zavoz, stavba…) zustava otevrene — jinak klik vedle
+   zahodil rozepsany text a clovek to psal znovu. Zavira se tlacitkem. */
+function modalKlikMimo(ev, el) {
+  if (ev.target !== el) return;
+  if (el.querySelector('.mbox input, .mbox textarea, .mbox select')) return;
+  closeModal();
+}
 function modal(html) {
-  $('#modal').innerHTML = `<div class="modal" onclick="if(event.target===this)closeModal()"><div class="mbox">${html}</div></div>`;
+  $('#modal').innerHTML = `<div class="modal" onclick="modalKlikMimo(event,this)"><div class="mbox">${html}</div></div>`;
   setTimeout(mountMaps, 0);
 }
 function closeModal() { $('#modal').innerHTML = ''; if (S.ukolModalId === 'novy') { S.taskFormOpen = false; S.ukolSoubory = []; S.ukolPredloha = null; } if (S.ukolModalId === 'sablony') S.tplOpen = false; S.ukolModalId = null; }
