@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '4. 11. 2026 g';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '4. 11. 2026 h';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -3493,7 +3493,11 @@ function dashSync() {
   const f = document.getElementById('dashframe');
   if (!chci) { if (f) f.style.display = 'none'; return; }
   const ram = dashRam();
-  if (!ram.src) ram.src = DASH_URL;
+  /* GitHub Pages dovoli prohlizeci drzet stranku 10 minut v mezipameti a
+     u vlozene stranky ji prohlizec rad drzi i dele — po vydani nove verze
+     reportu se v Deniku porad ukazovala stara. Casove razitko v adrese
+     mezipamet obejde; report si z adresy nic necte, takze mu to nevadi. */
+  if (!ram.src) ram.src = DASH_URL + '?t=' + Date.now();
   ram.style.display = 'block';
   dashUsadit();
 }
