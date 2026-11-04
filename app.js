@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '4. 11. 2026 b';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '4. 11. 2026 c';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -3488,10 +3488,15 @@ function sidebar() {
     ...(S.me && S.me.naHodiny ? [{ k: 'mojesmena', ic: '⏱', t: 'Moje směna', bdg: mojeSmena().vPraci ? '●' : '' }] : []),
     { k: 'poznamky', ic: '📝', t: 'Poznámky' },
     { k: 'reporty', ic: '📈', t: 'Reporty' },
+    /* Denni report firmy — samostatna aplikace, otevira se v nove zalozce */
+    { k: 'dashboard', ic: '🧭', t: 'Denní report', url: 'https://rekovrana.github.io/vrana-dashboard/' },
   ];
   const map = { projdetail: 'projekty', newuser: 'uzivatele', novy: 'denik' };
   const active = S.detail ? 'denik' : (map[S.view] || S.view);
-  return `<div class="side">${items.map(i => `
+  return `<div class="side">${items.map(i => i.url ? `
+    <a class="it" href="${i.url}" target="_blank" rel="noopener" title="Otevře se v nové záložce" style="text-decoration:none">
+      <span class="ic">${i.ic}</span>${i.t} ↗
+    </a>` : `
     <div class="it ${active === i.k ? 'active' : ''}" onclick="goPage('${i.k}')">
       <span class="ic">${i.ic}</span>${i.t}${i.bdg ? `<span class="bdg">${i.bdg}</span>` : ''}
     </div>`).join('')}</div>`;
