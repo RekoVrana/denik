@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '3. 11. 2026 e';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '4. 11. 2026 a';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -2930,6 +2930,11 @@ function initAuth() {
           S.meAuth = d.data();
           const me = await ctiSPokusem(() => db.collection('users').doc(S.meAuth.userDocId).get());
           S.me = me.exists ? { id: me.id, ...me.data() } : null;
+          /* Vedeni si prepnulo prihlasovaci e-mail (zmenitPrihlasovaciEmail): Firebase
+             uz ho zna, karta v /users jeste ne — dorovnat, at tabulka a obnova hesla sedi. */
+          if (S.me && S.meAuth.role === 'admin' && u.email && S.me.authEmail !== u.email && !/@denik\.rekovrana\.cz$/.test(u.email)) {
+            db.collection('users').doc(S.me.id).update({ authEmail: u.email }).then(() => { S.me.authEmail = u.email; }).catch(() => {});
+          }
           S.authState = 'in'; prectiOdkazUkolu(); obnovMisto(); startData(); render();
           /* Adresa zarizeni se casem sama meni. Bez tichého obnoveni pri
              kazdem spusteni by upozorneni jednoho dne prestala chodit
@@ -7909,6 +7914,43 @@ function pinForm(udi) {
       <button class="btn ghost" onclick="closeModal()">Zrušit</button></div>`);
     return;
   }
+  /* Vedeni s VYGENEROVANOU adresou (ucet zalozeny jeste postupem jako u party):
+     vlastni ucet si muze prepnout na skutecny e-mail. Firebase to dovoli jen
+     prihlasenemu majiteli, proto to jde jen u sebe, ne u kolegy. */
+  const mujUcet = !!(auth.currentUser && u.uid && auth.currentUser.uid === u.uid);
+  if (roleOfTypeKey(typeKeyOfUser(u)) === 'admin' && mujUcet && /@denik\.rekovrana\.cz$/.test(u.authEmail || '')) {
+    const navrh = (kontaktOsoby(u.id).email || '').trim();
+    modal(`<h3>✉️ Přihlašovací e-mail</h3>
+      <div class="note" style="margin-top:0">Teď se přihlašuješ adresou <b>${esc(u.authEmail)}</b>, kterou si Deník vymyslel —
+        nic na ni nechodí, takže ti nefunguje „Zapomenuté heslo". Zadej skutečný e-mail: přijde ti na něj potvrzovací odkaz,
+        a jakmile ho klikneš, přihlašuješ se novou adresou. <b>Heslo zůstává stejné.</b></div>
+      <label>Nový přihlašovací e-mail</label><input type="email" id="pe-email" value="${esc(navrh)}" autocomplete="off">
+      <div class="aprv"><button class="btn amber" onclick="zmenitPrihlasovaciEmail('${udi}')">📧 Poslat potvrzovací odkaz</button>
+      <button class="btn ghost" onclick="pinFormPin('${udi}')">🔑 Radši nový PIN</button>
+      <button class="btn ghost" onclick="closeModal()">Zrušit</button></div>`);
+    return;
+  }
+  pinFormPin(udi);
+}
+async function zmenitPrihlasovaciEmail(udi) {
+  const email = (($('#pe-email') || {}).value || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast('Zadej platný e-mail'); return; }
+  if (/@denik\.rekovrana\.cz$/.test(email)) { toast('To je zase vymyšlená adresa — zadej schránku, kam se dostaneš'); return; }
+  const me = auth.currentUser; if (!me) return;
+  try {
+    await me.verifyBeforeUpdateEmail(email);
+    closeModal();
+    await oznam('Odkaz odeslán na ' + email + ' ✓\n\nAž ho klikneš, Firebase přihlašovací adresu přepne a nejspíš tě odhlásí. '
+      + 'Přihlas se znovu už adresou ' + email + ' a stejným heslem — Deník si novou adresu zapíše sám.');
+  } catch (e) {
+    const c = (e && e.code) || '';
+    if (c === 'auth/requires-recent-login') toast('Kvůli bezpečnosti to chce čerstvé přihlášení — odhlas se, přihlas znovu a zkus to hned.');
+    else if (c === 'auth/email-already-in-use') toast('Tenhle e-mail už má jiný účet v Deníku.');
+    else toast('Nepodařilo se: ' + authErrText(e));
+  }
+}
+function pinFormPin(udi) {
+  const u = userById(udi); if (!u) return;
   modal(`<h3>🔑 Nový PIN pro: ${esc(fullName(u))}</h3>
     <div class="note" style="margin-top:0">Starý PIN okamžitě přestane platit. Nový mu předej osobně —
       nikde se nedá zpětně zobrazit.</div>
