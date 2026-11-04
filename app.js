@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '4. 11. 2026 c';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '4. 11. 2026 d';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -2925,6 +2925,7 @@ function render() {
   else root.innerHTML = (S.meAuth.role === 'admin') ? ((S.view === 'mojesmena' && !S.detail) ? viewWorker() : viewAdmin()) : (S.meAuth.role === 'sub' ? viewSub() : viewWorker());
   root.classList.toggle('root-nahled', !!(S.nahled && S.authUser && S.meAuth));
   if (S.nahled && S.authUser && S.meAuth) root.insertAdjacentHTML('afterbegin', nahledPruhHtml());
+  dashSync();
   vratitFormulare();
   if (S.ukolModalId) ukolModalObnov();   /* otevrene okno ukolu zije z tehoz stavu */
   otevriUkolZOdkazu();
@@ -3489,14 +3490,11 @@ function sidebar() {
     { k: 'poznamky', ic: '📝', t: 'Poznámky' },
     { k: 'reporty', ic: '📈', t: 'Reporty' },
     /* Denni report firmy — samostatna aplikace, otevira se v nove zalozce */
-    { k: 'dashboard', ic: '🧭', t: 'Denní report', url: 'https://rekovrana.github.io/vrana-dashboard/' },
+    { k: 'dashboard', ic: '🧭', t: 'Denní report' },
   ];
   const map = { projdetail: 'projekty', newuser: 'uzivatele', novy: 'denik' };
   const active = S.detail ? 'denik' : (map[S.view] || S.view);
-  return `<div class="side">${items.map(i => i.url ? `
-    <a class="it" href="${i.url}" target="_blank" rel="noopener" title="Otevře se v nové záložce" style="text-decoration:none">
-      <span class="ic">${i.ic}</span>${i.t} ↗
-    </a>` : `
+  return `<div class="side">${items.map(i => `
     <div class="it ${active === i.k ? 'active' : ''}" onclick="goPage('${i.k}')">
       <span class="ic">${i.ic}</span>${i.t}${i.bdg ? `<span class="bdg">${i.bdg}</span>` : ''}
     </div>`).join('')}</div>`;
@@ -3521,9 +3519,56 @@ function viewAdmin() {
   else if (S.view === 'poznamky') body = pgPoznamky();
   else if (S.view === 'reporty') body = pgReporty();
   else if (S.view === 'zavozy') body = pgZavozy();
+  else if (S.view === 'dashboard') body = pgDashboard();
   else body = pgDenik();
   return topbar() + `<div class="shell">${sidebar()}<div class="content">${body}</div></div>`;
 }
+
+/* ============ DENNÍ REPORT (vrana-dashboard) UVNITŘ DENÍKU ============
+   Samostatna aplikace vlozena do stranky. Ram NESMI byt soucasti
+   prekreslovaneho #root: render() bezi pri kazde zmene dat a kazde
+   prekresleni by report nacetlo znovu (ram se pri presunu v DOMu vzdy
+   restartuje). Proto zije jeden ram trvale vedle #root, pevne na obrazovce,
+   a render() ho jen ukazuje/schovava a usazuje presne na misto, ktere mu
+   stranka vyhradi (#dash-misto). Nacte se jednou, pri prvnim otevreni. */
+const DASH_URL = 'https://rekovrana.github.io/vrana-dashboard/';
+function pgDashboard() {
+  return `<div class="strip"><h1>🧭 Denní report</h1><span class="sp"></span>
+      <a class="btn ghost sm" href="${DASH_URL}" target="_blank" rel="noopener" title="Kdyby se tu nezobrazil správně">↗ v nové záložce</a></div>
+    <div id="dash-misto" style="height:calc(100vh - 54px - var(--sat) - 46px)"></div>`;
+}
+function dashRam() {
+  let f = document.getElementById('dashframe');
+  if (!f) {
+    f = document.createElement('iframe'); f.id = 'dashframe'; f.title = 'Denní report';
+    f.style.cssText = 'position:fixed;border:0;background:#fff;z-index:40;display:none';
+    f.setAttribute('allow', 'clipboard-write');
+    document.body.appendChild(f);
+  }
+  return f;
+}
+function dashUsadit() {
+  const f = document.getElementById('dashframe'); if (!f || f.style.display === 'none') return;
+  const m = document.getElementById('dash-misto'); if (!m) { f.style.display = 'none'; return; }
+  const r = m.getBoundingClientRect();
+  const side = document.querySelector('.side');
+  /* na telefonu je menu pevne dole — ram nesmi lezt pod nej */
+  const dole = side && getComputedStyle(side).position === 'fixed' ? Math.max(0, window.innerHeight - side.getBoundingClientRect().top) : 0;
+  const top = Math.max(0, r.top);
+  f.style.left = r.left + 'px'; f.style.top = top + 'px'; f.style.width = r.width + 'px';
+  f.style.height = Math.max(120, window.innerHeight - top - dole) + 'px';
+}
+function dashSync() {
+  const chci = !!(S.authUser && S.meAuth && S.meAuth.role === 'admin' && S.view === 'dashboard' && !S.detail && !S.nahled);
+  const f = document.getElementById('dashframe');
+  if (!chci) { if (f) f.style.display = 'none'; return; }
+  const ram = dashRam();
+  if (!ram.src) ram.src = DASH_URL;
+  ram.style.display = 'block';
+  dashUsadit();
+}
+window.addEventListener('resize', dashUsadit);
+window.addEventListener('scroll', dashUsadit, { passive: true });
 
 /* ---- Nástěnka ---- */
 function pgNastenka() {
