@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '4. 11. 2026 a';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '4. 11. 2026 b';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -277,6 +277,37 @@ if (CONFIGURED) {
 }
 const FV = () => firebase.firestore.FieldValue.serverTimestamp();
 
+/* ============ PODÍVAT SE OČIMA — pojistka proti zápisu ============
+   Vedeni se muze divat na obrazovku kohokoli z lidi (nahledStart). Zustava
+   pritom prihlasene samo za sebe, jen appka kresli cizi obrazovku. Kazdy
+   zapis by tedy sel pod jmenem vedeni, ale s udaji toho druheho — to nesmi
+   nastat. Proto se v tomhle rezimu zablokuje zapis do databaze na jednom
+   miste, u knihovny samotne: at uz tlacitko vola set, update, delete, add,
+   davku nebo transakci, nic neprojde a clovek dostane hlasku. Je to
+   spolehlivejsi nez hlidat kazde tlacitko zvlast. */
+let _nahledToastKdy = 0;
+function nahledToast() {
+  const ted = Date.now(); if (ted - _nahledToastKdy < 1500) return; _nahledToastKdy = ted;
+  toast('👁 Jen se díváš — za ' + (S.nahled && S.nahled.cil ? fullName(S.nahled.cil) : 'něj') + ' se nic nezapisuje');
+}
+function nahledZablokovano() {
+  nahledToast();
+  const e = new Error('Režim „podívat se očima" — nic se nezapisuje'); e.code = 'nahled';
+  return Promise.reject(e);
+}
+if (CONFIGURED) {
+  const f = firebase.firestore;
+  const obal = (proto, nazev) => {
+    const puv = proto[nazev];
+    proto[nazev] = function () { return (typeof S !== 'undefined' && S.nahled) ? nahledZablokovano() : puv.apply(this, arguments); };
+  };
+  ['set', 'update', 'delete'].forEach(n => obal(f.DocumentReference.prototype, n));
+  obal(f.CollectionReference.prototype, 'add');
+  obal(f.WriteBatch.prototype, 'commit');
+  const puvTx = db.runTransaction.bind(db);
+  db.runTransaction = function () { return S.nahled ? nahledZablokovano() : puvTx.apply(db, arguments); };
+}
+
 /* ---------- state ---------- */
 const S = {
   portalToken: new URLSearchParams(location.search).get('p'),
@@ -291,6 +322,7 @@ const S = {
      poznamky bydli v samostatnych kolekcich, ktere cte jen vedeni */
   portaly: {}, kontakty: {}, entriesInterni: {},
   view: 'nastenka', nastenkaTab: 'prehled', tickety: [], adminFilter: null, detail: null,
+  nahled: null,   /* vedeni se diva ocima nekoho jineho: { puvodni: {...}, cil: user } */
   projDetailId: null, projDetailTab: 'info', newUserType: null, editUserId: null, newUserActive: null, newUserHod: null,
   ukolyView: 'seznam', orgFilter: 'vse', taskFormOpen: false, attFormOpen: false, vpFormOpen: false,
   /* odpovedi u ukolu (viz sekce ODPOVEDI U UKOLU): vedeni je ma vsechny
@@ -1557,6 +1589,7 @@ const DRIVE_OPAKOVATELNE = ['listPodklady', 'getFile', 'getPhoto', 'readProject'
    srovnani slozky pro investora ne — tam to clovek videl jako chybu.
    Dva tiche pokusy navic to schovaji. */
 async function driveCall(payload, pokus) {
+  if (S.nahled) return nahledZablokovano();   /* ani na Drive se v rezimu ocima nic neposila */
   if (!CFG.scriptUrl) throw new Error('Drive most není nastaven (config.js → scriptUrl)');
   const res = await fetch(CFG.scriptUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) });
   /* Kdyz Google zrovna nestiha nebo se prihlaseni presmeruje, most vrati
@@ -1640,6 +1673,7 @@ function frontaKlic() {
   return Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
 }
 async function frontaPridat(polozka) {
+  if (S.nahled) return nahledZablokovano();   /* fotka by se jinak odeslala pozdeji pod cizim jmenem */
   if (!polozka.klic) polozka.klic = frontaKlic();
   await frontaTx('readwrite', st => st.add(polozka));
   await frontaSpocitat();
@@ -2889,6 +2923,8 @@ function render() {
   else if (S.portalToken) root.innerHTML = viewPortal();
   else if (!S.authUser || !S.meAuth) root.innerHTML = viewLogin();
   else root.innerHTML = (S.meAuth.role === 'admin') ? ((S.view === 'mojesmena' && !S.detail) ? viewWorker() : viewAdmin()) : (S.meAuth.role === 'sub' ? viewSub() : viewWorker());
+  root.classList.toggle('root-nahled', !!(S.nahled && S.authUser && S.meAuth));
+  if (S.nahled && S.authUser && S.meAuth) root.insertAdjacentHTML('afterbegin', nahledPruhHtml());
   vratitFormulare();
   if (S.ukolModalId) ukolModalObnov();   /* otevrene okno ukolu zije z tehoz stavu */
   otevriUkolZOdkazu();
@@ -3076,6 +3112,7 @@ function authErrText(e) {
    opravdu stalo. Vzor: authErrText o kus vys. */
 function dbErrText(e) {
   const c = (e && (e.code || e.name)) || '';
+  if (c === 'nahled') return 'jen se díváš očima někoho jiného, nic se nezapisuje.';
   const k = ' (' + (c || 'neznámá chyba') + ')';
   if (c === 'permission-denied') return 'K tomuhle nemáš oprávnění. Odhlas se a přihlas znovu — když to nepomůže, ozvi se vedení.' + k;
   if (c === 'unauthenticated') return 'Jsi odhlášený. Přihlas se znovu.' + k;
@@ -3148,7 +3185,86 @@ async function doSetup() {
   }
 }
 async function odhlasitDotaz() {
+  if (S.nahled) { nahledMenu(); return; }
+  if (jsemVedeni()) { avatarMenu(); return; }
   if (await potvrd('Odhlásit se?', 'Odhlásit')) doLogout();
+}
+/* Kolecko s inicialy u vedeni: krome odhlaseni i „podivat se ocima". */
+function avatarMenu() {
+  modal(`<h3>${ini(S.me || {})} ${esc(fullName(S.me || {}))}</h3>
+    <div class="aprv" style="flex-direction:column;align-items:stretch">
+      <button class="btn dark" onclick="closeModal();nahledVyber()">👁 Podívat se očima někoho jiného</button>
+      <button class="btn ghost" onclick="closeModal();doLogout()">Odhlásit se</button>
+      <button class="btn ghost" onclick="closeModal()">Zavřít</button>
+    </div>`);
+}
+
+/* ============ PODÍVAT SE OČIMA ============
+   Vedeni si vybere cloveka a appka mu ukaze presne jeho obrazovku — jeho
+   ukoly, hodiny, stavby, zalozky jako na jeho telefonu. Prihlaseni se
+   NEMENI: vedeni zustava samo sebou, jen se vymeni, za koho se kresli
+   (S.me, S.meAuth, S.authUser) a znovu se pusti posluchace dat pro jeho
+   roli. Pravidla databaze vedeni cist vsechno dovoli, takze cizi dotazy
+   projdou. Zapisy blokuje pojistka u knihovny (nahore u firebase init).
+   K cemu to je: „nevidim ukol", „mam cerveny den" — misto hadani se vedeni
+   podiva, co clovek opravdu vidi. */
+function nahledVyber() {
+  const ja = mojeId();
+  const lide = S.users.filter(u => u.active !== false && u.id !== ja && typeKeyOfUser(u) !== 'inv');
+  const skupiny = [['teren', '👷 Parta'], ['sub', '🔧 Subdodavatelé'], ['kanc', '🗂 Vedení']];
+  const html = skupiny.map(([k, nadpis]) => {
+    const l = lide.filter(u => typeKeyOfUser(u) === k).sort((a, b) => fullName(a).localeCompare(fullName(b), 'cs'));
+    if (!l.length) return '';
+    return `<div class="muted" style="margin:10px 0 4px;font-size:12px;font-weight:700">${nadpis}</div>
+      ${l.map(u => `<div class="urow lnk" style="cursor:pointer" onclick="nahledStart('${u.id}')">
+        <span class="avatar" style="width:28px;height:28px;font-size:11px;flex:none">${ini(u)}</span>
+        <b>${esc(fullName(u))}</b>${u.uid ? '' : '<span class="muted" style="margin-left:auto;font-size:11px">bez účtu</span>'}</div>`).join('')}`;
+  }).join('');
+  modal(`<h3>👁 Podívat se očima…</h3>
+    <div class="note" style="margin-top:0">Uvidíš obrazovku přesně tak, jak ji má ten člověk v telefonu. Zůstáváš přihlášený jako ty —
+      <b>nic se za něj nezapisuje</b>, tlačítka jen ukážou hlášku. Zpátky k sobě se vrátíš pruhem nahoře.</div>
+    ${html || '<div class="empty">Nikdo další tu není.</div>'}
+    <div class="aprv"><button class="btn ghost" onclick="closeModal()">Zavřít</button></div>`);
+}
+function nahledStart(udi) {
+  const u = userById(udi); if (!u) return;
+  if (!S.nahled && !jsemVedeni()) return;
+  if (!S.nahled) S.nahled = { puvodni: { me: S.me, meAuth: S.meAuth, authUser: S.authUser, view: S.view, detail: S.detail, mobTab: S.mobTab, nastenkaTab: S.nastenkaTab } };
+  S.nahled.cil = u;
+  const role = roleOfTypeKey(typeKeyOfUser(u));
+  closeModal(); clearSubs(); zapomenVse();
+  S.me = { ...u };
+  S.meAuth = { role, userDocId: u.id, nahled: true };
+  /* posluchace party a subu filtruji podle authUid — bez uctu se nic nenajde, ale ani nespadne */
+  S.authUser = { uid: u.uid || ('nahled-' + u.id), email: u.authEmail || '', nahled: true };
+  S.view = 'nastenka'; S.detail = null; S.mobTab = 'dnes'; S.subProject = null;
+  startData(); render();
+  window.scrollTo(0, 0);
+}
+function nahledKonec() {
+  const p = S.nahled && S.nahled.puvodni; if (!p) return;
+  S.nahled = null; closeModal(); clearSubs(); zapomenVse();
+  S.me = p.me; S.meAuth = p.meAuth; S.authUser = p.authUser;
+  S.view = p.view; S.detail = p.detail; S.mobTab = p.mobTab; S.nastenkaTab = p.nastenkaTab;
+  startData(); render();
+  toast('Zpátky u sebe ✓');
+}
+function nahledMenu() {
+  const c = S.nahled.cil;
+  modal(`<h3>👁 Díváš se očima: ${esc(fullName(c))}</h3>
+    <div class="note" style="margin-top:0">Přihlášený jsi pořád ty (${esc(fullName(S.nahled.puvodni.me || {}))}). Nic se za ${esc(fullName(c))} nezapisuje.</div>
+    <div class="aprv" style="flex-direction:column;align-items:stretch">
+      <button class="btn amber" onclick="nahledKonec()">← Zpátky k sobě</button>
+      <button class="btn ghost" onclick="closeModal();nahledVyber()">👁 Jiný člověk</button>
+      <button class="btn ghost" onclick="closeModal()">Zavřít</button>
+    </div>`);
+}
+function nahledPruhHtml() {
+  const c = S.nahled.cil;
+  return `<div class="nahledpruh" onclick="nahledMenu()">
+    <span>👁 Díváš se očima <b>${esc(fullName(c))}</b> (${typUzivateleText(c)}) · jen na koukání, nic se nezapisuje</span>
+    <button class="btn sm" onclick="event.stopPropagation();nahledKonec()">← Zpátky k sobě</button>
+  </div>`;
 }
 async function smazVicepraci(id) {
   const v = S.viceprace.find(x => x.id === id); if (!v) return;
@@ -3193,6 +3309,7 @@ async function vpZpetKPreceneni(id) {
    pravo a doklad by v databazi zustal viset. Na sdilenem telefonu by pak
    upozorneni pro predchoziho chodila tomu dalsimu. */
 async function doLogout() {
+  if (S.nahled) { nahledKonec(); return; }   /* v rezimu ocima „odhlasit" znamena vratit se k sobe */
   try { await pushZrus(); } catch (e) {}
   auth.signOut();
 }
@@ -3349,7 +3466,7 @@ function topbar() {
     <button class="btn ghost sm" style="padding:6px 10px" title="Nahlásit chybu nebo navrhnout zlepšení" onclick="ticketDialog()">💬</button>
     <span class="muted" style="font-size:10.5px;white-space:nowrap" title="Verze aplikace">${VERZE}</span>
     <button class="btn ghost sm" title="Zkontrolovat a stáhnout novou verzi" onclick="aktualizovatApp()" style="padding:6px 10px">${S.updating ? '<span class="updspin"></span>' : '⟳'}</button>
-    <div class="avatar" title="Odhlásit" onclick="odhlasitDotaz()">${S.me ? ini(S.me) : '?'}</div>
+    <div class="avatar" title="${S.nahled ? 'Díváš se očima někoho jiného' : (jsemVedeni() ? 'Účet · podívat se očima · odhlásit' : 'Odhlásit')}" onclick="odhlasitDotaz()">${S.me ? ini(S.me) : '?'}</div>
   </div>`;
 }
 function sidebar() {
