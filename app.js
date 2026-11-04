@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '4. 11. 2026 f';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '4. 11. 2026 g';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -120,13 +120,22 @@ function obnovMisto() {
    ukol uz zna (render). Do 27. 10. 2026 tuhle cast nikdo nenapsal — tuknuti
    na upozorneni proto konci na domovske strance (nahlasil Marco). */
 function prectiOdkazUkolu() {
-  const m = /#ukol=([A-Za-z0-9_-]+)/.exec(location.hash || '');
+  const h = location.hash || '';
+  /* z Denniho reportu otevreneho samostatne: #ukol-novy=<json> (hash na server nejde) */
+  const n = /#ukol-novy=([^&]+)/.exec(h);
+  if (n) {
+    try { S.ukolZReportuCeka = JSON.parse(decodeURIComponent(n[1])); } catch (e) { S.ukolZReportuCeka = null; }
+    try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+    return;
+  }
+  const m = /#ukol=([A-Za-z0-9_-]+)/.exec(h);
   if (!m) return;
   S.otevritUkol = m[1];
   try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
 }
 window.addEventListener('hashchange', () => { prectiOdkazUkolu(); render(); });
 function otevriUkolZOdkazu() {
+  if (S.ukolZReportuCeka && S.authState === 'in' && S.me) { const d = S.ukolZReportuCeka; S.ukolZReportuCeka = null; ukolZReportu(d); return; }
   if (!S.otevritUkol || S.authState !== 'in') return;
   const t = S.tasks.find(x => x.id === S.otevritUkol); if (!t) return;
   const id = S.otevritUkol; S.otevritUkol = null;
@@ -3490,6 +3499,37 @@ function dashSync() {
 }
 window.addEventListener('resize', dashUsadit);
 window.addEventListener('scroll', dashUsadit, { passive: true });
+
+/* ---- Úkol z Denního reportu ----
+   Report u kazde karty (e-mailu) a priority nabizi „📌 Udelat ukol". Kdyz
+   bezi uvnitr Deniku, posle zpravu (postMessage) a Denik otevre SVUJ bezny
+   formular noveho ukolu, predvyplneny nadpisem a popisem — stavbu, lidi
+   a termin vybere vedeni jako u kazdeho ukolu. Logika ukolu tak zustava
+   na jednom miste. Ukol si nese reportKlic, podle ktereho report ukaze
+   „ukol zalozen" a umi ho otevrit (zprava otevriUkol, nebo #ukol=ID). */
+const DASH_ORIGIN = new URL(DASH_URL).origin;
+window.addEventListener('message', ev => {
+  const f = document.getElementById('dashframe');
+  if (!f || ev.source !== f.contentWindow || ev.origin !== DASH_ORIGIN) return;
+  const d = ev.data || {};
+  if (d.typ === 'novyUkol') ukolZReportu(d);
+  else if (d.typ === 'otevriUkol' && d.id) {
+    if (S.tasks.find(t => t.id === d.id)) ukolModal(String(d.id)); else toast('Tenhle úkol už v Deníku není');
+  }
+});
+function ukolZReportu(d) {
+  if (!jsemVedeni() || S.nahled) { toast('Úkoly z reportu zakládá vedení'); return; }
+  S.ukolPredloha = {
+    title: String(d.title || '').slice(0, 200),
+    popis: String(d.popis || '').slice(0, 2000),
+    reportKlic: String(d.klic || '').slice(0, 120)
+  };
+  ukolModal('novy');
+}
+function dashOznam(zprava) {
+  const f = document.getElementById('dashframe');
+  if (f && f.contentWindow && f.src) { try { f.contentWindow.postMessage(zprava, DASH_ORIGIN); } catch (e) {} }
+}
 
 /* ---- Nástěnka ---- */
 function pgNastenka() {
@@ -6888,19 +6928,25 @@ async function addTask() {
   /* Stejna pojistka jako ve verzi pro teren: bez vybrane osoby by ukol
      nikomu nepatril a nikde by se neukazal. */
   if (!odp) { toast('Vyber, komu úkol patří'); return; }
+  const reportKlic = (S.ukolPredloha && S.ukolPredloha.reportKlic) || '';
+  let novy;
   try {
-    await db.collection('tasks').add({
+    novy = await db.collection('tasks').add({
       title, popis: ($('#tk-popis') ? $('#tk-popis').value.trim() : ''),
       zadalId: S.me ? S.me.id : '', zadal: fullName(S.me || {}), pid: $('#tk-p').value, ...odp, created: isoToday(),
-      term: $('#tk-d').value || shiftISO(isoToday(), 3), termCas: ($('#tk-cas') && $('#tk-cas').value) || '', stav: 'nove', soubory: S.ukolSoubory, createdAt: FV()
+      term: $('#tk-d').value || shiftISO(isoToday(), 3), termCas: ($('#tk-cas') && $('#tk-cas').value) || '', stav: 'nove', soubory: S.ukolSoubory, createdAt: FV(),
+      ...(reportKlic ? { reportKlic } : {})
     });
   } catch (e) { toast('Nepovedlo se uložit: ' + dbErrText(e)); return; }
+  if (reportKlic) dashOznam({ typ: 'ukolZalozen', klic: reportKlic, id: novy.id, title });
   S.ukolPredloha = null; S.ukolSoubory = [];
   if (ukolModalOtevren('novy')) closeModal();
   /* Zapomenout se musi i popis — drive se cistil jen nadpis, takze popis
      predchoziho ukolu se pri dalsim otevreni formulare vratil zpatky
      a odpovedny dostal cizi zadani. */
-  $('#tk-t').value = '';
+  /* formular muze byt uz zavreny (okno) nebo vubec neexistovat (ukol zalozeny
+     ze stranky Denniho reportu) — pak neni co cistit */
+  if ($('#tk-t')) $('#tk-t').value = '';
   if ($('#tk-popis')) $('#tk-popis').value = '';
   zapomen('tk-t', 'tk-popis');
   S.taskFormOpen = false; toast('Úkol přidán ✓'); render();
