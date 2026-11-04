@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '4. 11. 2026 e';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '4. 11. 2026 f';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -3399,6 +3399,7 @@ function sidebar() {
   const gpsBad = S.attendance.filter(gpsPodezrela).length;
   const items = [
     { k: 'nastenka', ic: '📊', t: 'Nástěnka' },
+    { k: 'dashboard', ic: '🧭', t: 'Denní report' },   /* samostatna appka vlozena do stranky (pgDashboard) */
     { k: 'projekty', ic: '🛠️', t: 'Stavby' },
     { k: 'harmonogram', ic: '📅', t: 'Harmonogram', bdg: etapyVeSkluzu().length || '' },
     { k: 'denik', ic: '📓', t: 'Stavební deník' },
@@ -3412,8 +3413,6 @@ function sidebar() {
     ...(S.me && S.me.naHodiny ? [{ k: 'mojesmena', ic: '⏱', t: 'Moje směna', bdg: mojeSmena().vPraci ? '●' : '' }] : []),
     { k: 'poznamky', ic: '📝', t: 'Poznámky' },
     { k: 'reporty', ic: '📈', t: 'Reporty' },
-    /* Denni report firmy — samostatna aplikace, otevira se v nove zalozce */
-    { k: 'dashboard', ic: '🧭', t: 'Denní report' },
   ];
   const map = { projdetail: 'projekty', newuser: 'uzivatele', novy: 'denik' };
   const active = S.detail ? 'denik' : (map[S.view] || S.view);
