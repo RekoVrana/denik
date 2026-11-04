@@ -6,7 +6,7 @@
 /* Cislo verze: zvednout pri KAZDEM nasazeni. Ukazuje se v hlavicce
    a na prihlasovaci obrazovce, aby slo na telefonu poznat, jestli uz
    dorazila nova verze — bez toho se to nedalo zjistit vubec. */
-const VERZE = '4. 11. 2026 d';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
+const VERZE = '4. 11. 2026 e';   /* MUSI SEDET s obsahem verze.txt — jinak si appka donekonecna hlasi vlastni aktualizaci */
 
 'use strict';
 const CFG = window.VRANA_CONFIG;
@@ -312,8 +312,8 @@ if (CONFIGURED) {
 const S = {
   portalToken: new URLSearchParams(location.search).get('p'),
   authUser: null, meAuth: null, me: null, roster: [], appCfg: null,
-  users: [], projects: [], entries: [], tasks: [], attendance: [], viceprace: [], sazby: {}, zadosti: [],
-  portal: null, portalFeed: [], portalVp: [], portalDocs: [],
+  users: [], projects: [], entries: [], tasks: [], attendance: [], sazby: {}, zadosti: [],
+  portal: null, portalFeed: [], portalDocs: [],
   /* Kolik zapisu portal ukazuje. Na pulrocni stavbe jich je pres sto a
      investor otevira portal skoro vzdy v telefonu — nekonecny sloupec
      fotek by zabil i to, kvuli cemu prisel: co je noveho. */
@@ -324,7 +324,7 @@ const S = {
   view: 'nastenka', nastenkaTab: 'prehled', tickety: [], adminFilter: null, detail: null,
   nahled: null,   /* vedeni se diva ocima nekoho jineho: { puvodni: {...}, cil: user } */
   projDetailId: null, projDetailTab: 'info', newUserType: null, editUserId: null, newUserActive: null, newUserHod: null,
-  ukolyView: 'seznam', orgFilter: 'vse', taskFormOpen: false, attFormOpen: false, vpFormOpen: false,
+  ukolyView: 'seznam', orgFilter: 'vse', taskFormOpen: false, attFormOpen: false,
   /* odpovedi u ukolu (viz sekce ODPOVEDI U UKOLU): vedeni je ma vsechny
      naraz, parta jen pro prave rozbaleny ukol */
   odpovedi: {}, odpSleduji: null, odpUnsub: null, odpEdit: null, odpReagujNa: null, odpHistorie: {},
@@ -719,7 +719,6 @@ function startData() {
       render();
     }, err => console.warn('pending entries', err)));
     setTimeout(uklidFotekUkolu, 8000);
-    listen('viceprace', 'viceprace', {});
     listen('zadosti', 'zadosti', { sort: (a, b) => (b.date || '').localeCompare(a.date || '') });
     S.unsub.push(db.collection('sazby').onSnapshot(s => { S.sazby = {}; s.docs.forEach(d => S.sazby[d.id] = d.data()); render(); }, () => {}));
     /* admin-only tajnosti (S2/S4/S5): presunuta pole z /projects, /users
@@ -727,10 +726,6 @@ function startData() {
     S.unsub.push(db.collection('portaly').onSnapshot(s => { S.portaly = {}; s.docs.forEach(d => S.portaly[d.id] = d.data()); render(); }, () => {}));
     S.unsub.push(db.collection('kontakty').onSnapshot(s => { S.kontakty = {}; s.docs.forEach(d => S.kontakty[d.id] = d.data()); render(); }, () => {}));
     S.unsub.push(db.collection('entries_interni').onSnapshot(s => { S.entriesInterni = {}; s.docs.forEach(d => S.entriesInterni[d.id] = d.data()); render(); }, () => {}));
-    // akce investorů ze všech portálů
-    S.unsub.push(db.collectionGroup('actions').where('handled', '==', false).onSnapshot(s => {
-      s.docs.forEach(d => handlePortalAction(d));
-    }, err => console.warn('actions', err)));
   } else {
     listen('attendance', 'attendance', { where: [['authUid', '==', S.authUser.uid]], sort: (a, b) => attCmp(b, a) });
     listen('zadosti', 'zadosti', { where: [['authUid', '==', S.authUser.uid]], sort: (a, b) => (b.date || '').localeCompare(a.date || '') });
@@ -740,7 +735,6 @@ function startPortal() {
   const t = S.portalToken;
   S.unsub.push(db.collection('portals').doc(t).onSnapshot(d => { S.portal = d.exists ? { id: d.id, ...d.data() } : false; render(); }, () => { S.portal = false; render(); }));
   S.unsub.push(db.collection('portals').doc(t).collection('feed').onSnapshot(s => { S.portalFeed = s.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (b.date || '').localeCompare(a.date || '')); render(); }, () => {}));
-  S.unsub.push(db.collection('portals').doc(t).collection('vp').onSnapshot(s => { S.portalVp = s.docs.map(d => ({ id: d.id, ...d.data() })); render(); }, () => {}));
   S.unsub.push(db.collection('portals').doc(t).collection('docs').onSnapshot(s => { S.portalDocs = s.docs.map(d => ({ id: d.id, ...d.data() })); render(); }, () => {}));
 }
 
@@ -1470,7 +1464,6 @@ const STAVY = { nove: 'K udělání', probiha: 'K udělání', kontrola: 'Ke kon
 const STAVCOLOR = { nove: 'b-int', probiha: 'b-int', kontrola: 'b-wait', hotovo: 'b-ok' };
 /* otevreny = jeste je co delat (ne hotovo, ne ke kontrole, ne sablona) */
 function jeOtevreny(t) { return t.stav !== 'hotovo' && t.stav !== 'kontrola' && t.stav !== 'sablona'; }
-const VPSTAV = { navrh: ['b-int', '✏️ čeká na nacenění'], u_investora: ['b-wait', '⏳ u investora'], schvaleno: ['b-ok', '✓ schváleno'], zamitnuto: ['b-red', '✕ zamítnuto'], papir: ['b-ok', '✓ schváleno papírově'] };
 function sBadge(s) { return s === 'approved' ? '<span class="badge b-ok">✓ schváleno</span>' : s === 'pending' ? '<span class="badge b-wait">⏳ čeká</span>' : '<span class="badge b-int">🔒 interní</span>'; }
 
 /* ---------- mapy (Leaflet + OpenStreetMap, bez klíče a zdarma) ---------- */
@@ -2883,36 +2876,6 @@ function notifyMail(kind, pid, text) {
 }
 
 /* ---------- portal akce (schválení vícepráce investorem) ---------- */
-async function handlePortalAction(docSnap) {
-  const a = docSnap.data();
-  try {
-    if (a.type === 'vp' && a.vpid) {
-      const ref = db.collection('viceprace').doc(a.vpid);
-      /* Zavod snapshotu: akce z portalu muze dorazit driv nez seznam
-         vicepraci. Kdyby se akce oznacila za vyrizenou hned, schvaleni
-         investora by se tise ztratilo — proto se vp pripadne docte primo
-         z databaze a handled se zapisuje AZ po skutecnem zpracovani.
-         Nenalezena vp se necha nevyrizena na dalsi snapshot. */
-      let vp = S.viceprace.find(x => x.id === a.vpid);
-      if (!vp) {
-        const doc = await ref.get().catch(() => null);
-        if (doc && doc.exists) vp = { id: doc.id, ...doc.data() };
-      }
-      if (!vp) return;
-      if (vp.stav === 'u_investora') {
-        const stav = a.action === 'approve' ? 'schvaleno' : 'zamitnuto';
-        const podpis = (vp.clientName || '') + (a.action === 'approve' ? ' — schváleno jedním klikem na portálu, ' : ' — zamítnuto na portálu, ') + fmtISO(isoToday());
-        await ref.update({ stav, podpis, resolvedAt: FV() });
-        /* token je v admin-only /portaly (S2); async docteni kryje zavod se snapshotem */
-        const tok = await tokenPortaluAsync(vp.pid);
-        if (tok) await db.collection('portals').doc(tok).collection('vp').doc(a.vpid).set({ title: vp.title, popis: vp.popis, cena: vp.cena, stav, podpis }, { merge: true });
-        toast(a.action === 'approve' ? '📬 Investor schválil vícepráci: ' + vp.title : '📬 Investor zamítl vícepráci: ' + vp.title);
-      }
-    }
-    await docSnap.ref.update({ handled: true });
-  } catch (e) { console.warn('action', e); }
-}
-
 /* ============ RENDER ROOT ============ */
 function render() {
   const root = $('#root');
@@ -3267,45 +3230,6 @@ function nahledPruhHtml() {
     <button class="btn sm" onclick="event.stopPropagation();nahledKonec()">← Zpátky k sobě</button>
   </div>`;
 }
-async function smazVicepraci(id) {
-  const v = S.viceprace.find(x => x.id === id); if (!v) return;
-  const uInvestora = v.stav === 'u_investora';
-  if (!await potvrd('Smazat vícepráci „' + v.title + '"?' +
-    (uInvestora ? '\n\nPrávě čeká u investora — z jeho portálu zmizí a schválit ji už nepůjde.'
-                : '\n\nZmizí i z portálu investora.') +
-    '\n\nSmazání nejde vrátit zpět.', 'Smazat')) return;
-  try {
-    /* Kopie pro investora bydli v portals/{token}/vp/{id} — bez uklidu by mu
-       na portale strasila navzdy vcetne tlacitka Schvalit. Vzor je v delEntry. */
-    const tok = await tokenPortaluAsync(v.pid);
-    if (tok) await db.collection('portals').doc(tok).collection('vp').doc(id).delete().catch(() => {});
-    await db.collection('viceprace').doc(id).delete();
-    toast('Vícepráce smazána ✓');
-  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
-}
-/* Cesta zpet u vicepraci: co je u investora, jde stahnout (treba spatna cena);
-   co investor zamitl, jde precenit a poslat znovu. Obojim se vraci stav na
-   'navrh' a kopie MUSI zmizet z portalu — jinak by tam investorovi visela
-   nabidka, ktera uz neplati, a mohl by ji porad odklikat. */
-async function vpZpetKPreceneni(id) {
-  const v = S.viceprace.find(x => x.id === id); if (!v) return;
-  const uInvestora = v.stav === 'u_investora';
-  if (!await potvrd(uInvestora
-    ? 'Stáhnout „' + v.title + '" zpět k přecenění?\n\nInvestorovi zmizí z portálu a schválit ji už nepůjde. Až ji naceníš znovu, pošle se mu nová.'
-    : 'Přecenit „' + v.title + '" a poslat znovu?\n\nVícepráce se vrátí mezi nenaceněné. Zapíšeš novou cenu a odešleš ji investorovi znovu.',
-    uInvestora ? 'Stáhnout zpět' : 'Přecenit')) return;
-  try {
-    const tok = await tokenPortaluAsync(v.pid);
-    if (tok) await db.collection('portals').doc(tok).collection('vp').doc(id).delete().catch(() => {});
-    await db.collection('viceprace').doc(id).update({
-      stav: 'navrh',
-      podpis: firebase.firestore.FieldValue.delete(),
-      resolvedAt: firebase.firestore.FieldValue.delete()
-    });
-    toast(uInvestora ? 'Staženo zpět — můžeš nacenit znovu ✓' : 'Vráceno k přecenění ✓');
-    render();
-  } catch (e) { toast('Neuložilo se — ' + dbErrText(e)); }
-}
 /* Adresu zarizeni smazat JESTE PRED odhlasenim — potom uz na to clovek nema
    pravo a doklad by v databazi zustal viset. Na sdilenem telefonu by pak
    upozorneni pro predchoziho chodila tomu dalsimu. */
@@ -3483,7 +3407,6 @@ function sidebar() {
     { k: 'uzivatele', ic: '👥', t: 'Uživatelé' },
     { k: 'organizace', ic: '🏢', t: 'Organizace', bdg: gpsBad || '' },
     { k: 'ukoly', ic: '📌', t: 'Úkoly', bdg: S.tasks.filter(isOverdue).length || '' },
-    { k: 'viceprace', ic: '🧾', t: 'Vícepráce', bdg: S.viceprace.filter(v => v.stav === 'navrh' || v.stav === 'u_investora').length || '' },
     { k: 'zavozy', ic: '🚚', t: 'Závozy', bdg: S.zavozy.filter(z => z.stav === 'chybi').length || '' },
     /* vedeni na hodiny (Katka): vlastni pichacka = obrazovka party */
     ...(S.me && S.me.naHodiny ? [{ k: 'mojesmena', ic: '⏱', t: 'Moje směna', bdg: mojeSmena().vPraci ? '●' : '' }] : []),
@@ -3515,7 +3438,6 @@ function viewAdmin() {
   else if (S.view === 'newuser') body = pgNewUser();
   else if (S.view === 'organizace') body = pgOrganizace();
   else if (S.view === 'ukoly') body = pgUkoly();
-  else if (S.view === 'viceprace') body = pgViceprace();
   else if (S.view === 'poznamky') body = pgPoznamky();
   else if (S.view === 'reporty') body = pgReporty();
   else if (S.view === 'zavozy') body = pgZavozy();
@@ -3584,7 +3506,6 @@ function pgNastenka() {
     <div class="t ${nt === 'dochazka' ? 'active' : ''}" onclick="S.nastenkaTab='dochazka';render()">⏱ Docházka</div>
     <div class="t ${nt === 'ukoly' ? 'active' : ''}" onclick="S.nastenkaTab='ukoly';render()">📌 Úkoly ${S.tasks.filter(isOverdue).length ? `<span class="badge b-red">${S.tasks.filter(isOverdue).length}</span>` : ''}</div>
     <div class="t ${nt === 'tickety' ? 'active' : ''}" onclick="S.nastenkaTab='tickety';render()">💬 Tickety ${S.tickety.filter(t => t.stav !== 'vyrizeno').length ? `<span class="badge b-red">${S.tickety.filter(t => t.stav !== 'vyrizeno').length}</span>` : ''}</div>
-    <div class="t" onclick="goPage('viceprace')">🧾 Vícepráce ${S.viceprace.filter(v => v.stav === 'u_investora' || v.stav === 'navrh').length ? `<span class="badge b-wait">${S.viceprace.filter(v => v.stav === 'u_investora' || v.stav === 'navrh').length}</span>` : ''}</div>
   </div>${body}`;
 }
 function nastenkaPrehled() {
@@ -6986,78 +6907,6 @@ async function addTask() {
   S.taskFormOpen = false; toast('Úkol přidán ✓'); render();
 }
 
-/* ---- Vícepráce ---- */
-function pgViceprace() {
-  const order = { navrh: 0, u_investora: 1, schvaleno: 2, papir: 2, zamitnuto: 3 };
-  const items = S.viceprace.slice().sort((a, b) => order[a.stav] - order[b.stav]);
-  return `
-  <div class="strip"><h1>Vícepráce</h1><span class="sp"></span>
-    <button class="btn amber" onclick="S.vpFormOpen=!S.vpFormOpen;render()">➕ NOVÁ VÍCEPRÁCE</button></div>
-  <main>
-    ${S.vpFormOpen ? `
-    <div class="card">
-      <h3>➕ Nová vícepráce</h3>
-      <label>Název *</label><input type="text" id="vp-t" placeholder="Výměna hliníkového vedení v ložnici">
-      <div class="frow">
-        <div><label>Stavba</label><select id="vp-p">${S.projects.filter(p => p.active).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
-        <div><label>Zdroj</label><select id="vp-z"><option value="stavba">🏗 ze stavby / deníku</option><option value="drive">📁 PDF na Drive</option></select></div>
-      </div>
-      <label>Popis</label><textarea id="vp-pop" style="min-height:60px"></textarea>
-      <label>Drive ID / odkaz na PDF (jen u zdroje Drive)</label><input type="text" id="vp-f" placeholder="https://drive.google.com/file/d/…">
-      <div class="aprv"><button class="btn amber" onclick="addVp()">💾 Uložit (→ čeká na nacenění)</button></div>
-    </div>` : ''}
-    ${items.map(v => { const p = proj(v.pid) || {}; const [cls, txt] = VPSTAV[v.stav] || VPSTAV.navrh; return `
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline">
-        <h3>${esc(v.title)}</h3><span class="badge ${cls}">${txt}</span>
-      </div>
-      <div class="muted">${esc(p.name || '')} · ${esc(p.cn || '')} · zdroj: ${v.zdroj === 'drive' ? `📁 z Drive${v.driveId ? ` — <span class="lnk" onclick="openDriveDoc('${v.driveId}','${jsAttr(v.title)}')">otevřít PDF</span>` : ''}` : '🏗 ze stavby / deníku'}</div>
-      <div style="margin:8px 0">${esc(v.popis || '')}</div>
-      ${v.cena ? `<div style="font-size:16px;font-weight:800;color:var(--navy)">${kc(v.cena)} Kč <span class="muted" style="font-weight:400;font-size:12px">bez DPH · DPH 12 % jako součást díla</span></div>` : ''}
-      ${v.podpis ? `<div class="note" style="margin-top:8px">✍️ ${esc(v.podpis)} · nezapomeň propsat do listu Vícepráce v CN</div>` : ''}
-      <div class="aprv">
-        ${v.stav === 'navrh' ? `<input type="number" id="vpc-${v.id}" placeholder="Cena v Kč" style="max-width:140px" value="${v.cena || ''}"><button class="btn amber sm" onclick="vpNacenit('${v.id}')">💰 Nacenit a poslat investorovi</button>` : ''}
-        ${v.stav === 'u_investora' ? `<button class="btn dark sm" onclick="vpPapir('${v.id}')">🖨 Klient bez PC — podpis na stavbě</button>
-          <span class="muted" style="align-self:center;font-size:11.5px">investor vidí na portálu tlačítko Schválit</span>` : ''}
-        ${v.stav === 'u_investora' ? `<button class="btn ghost sm" onclick="vpZpetKPreceneni('${v.id}')">↩ Stáhnout zpět k přecenění</button>` : ''}
-        ${v.stav === 'zamitnuto' ? `<button class="btn amber sm" onclick="vpZpetKPreceneni('${v.id}')">💰 Přecenit a poslat znovu</button>` : ''}
-        <button class="btn ghost sm" title="Smazat vícepráci" onclick="smazVicepraci('${v.id}')">🗑</button>
-      </div>
-    </div>`; }).join('') || '<div class="card"><div class="empty">Zatím žádné vícepráce.</div></div>'}
-    <div class="note">Tok: zápis → nacenění → schválení investorem (klik na portálu, nebo papír u klienta bez PC) → propis do listu Vícepráce v CN + PDF do složky zakázky na Drive.</div>
-  </main>`;
-}
-async function addVp() {
-  const title = $('#vp-t').value.trim();
-  if (!title) { toast('Vyplň název'); return; }
-  const raw = $('#vp-f').value.trim(); const m = raw.match(/[-\w]{25,}/);
-  await db.collection('viceprace').add({ pid: $('#vp-p').value, title, popis: $('#vp-pop').value.trim(), cena: 0, stav: 'navrh', zdroj: $('#vp-z').value, driveId: m ? m[0] : null, createdAt: FV(), createdBy: fullName(S.me || {}) });
-  zapomen('vp-t', 'vp-pop', 'vp-f');
-  S.vpFormOpen = false; toast('Vícepráce založena — čeká na nacenění'); render();
-}
-async function vpNacenit(id) {
-  const c = parseFloat($('#vpc-' + id).value);
-  if (!c) { toast('Zadej cenu'); return; }
-  const v = S.viceprace.find(x => x.id === id);
-  const p = proj(v.pid);
-  zapomen('vpc-' + id);
-  await db.collection('viceprace').doc(id).update({ cena: c, stav: 'u_investora', clientName: (p || {}).client || '' });
-  const tok = await tokenPortaluAsync(v.pid); // token je v admin-only /portaly (S2)
-  if (tok) {
-    await db.collection('portals').doc(tok).collection('vp').doc(id).set({ title: v.title, popis: v.popis || '', cena: c, stav: 'u_investora' });
-    notifyMail('vp', v.pid, v.title + ' — ' + kc(c) + ' Kč');
-    toast('Posláno investorovi ke schválení — uvidí to na portálu (e-mail se neposílá)');
-  } else toast('Naceněno ✓ — stavba nemá portál, schválení vyřiď papírově');
-  render();
-}
-async function vpPapir(id) {
-  const v = S.viceprace.find(x => x.id === id);
-  await db.collection('viceprace').doc(id).update({ stav: 'papir', podpis: 'podepsáno papírově na stavbě ' + fmtISO(isoToday()) + ' (sken na Drive)' });
-  const tok = await tokenPortaluAsync(v.pid); // token je v admin-only /portaly (S2)
-  if (tok) await db.collection('portals').doc(tok).collection('vp').doc(id).set({ title: v.title, popis: v.popis || '', cena: v.cena, stav: 'schvaleno', podpis: 'schváleno papírově na stavbě' }, { merge: true });
-  toast('Označeno jako schválené papírově ✓');
-}
-
 /* ---- Hodinova sazba a jeji historie ----
    Sazba zije v /sazby/{userId} jako { h, c, hist }. Pole h a c jsou POSLEDNI
    (aktualni) sazba — kvuli seznamu uzivatelu a starym datum. hist je pole
@@ -10391,8 +10240,6 @@ function viewPortal() {
   if (S.portal === false) return `<div class="login"><div class="lbox"><div class="lg">🏗 REKONSTRUKCE <em>VRÁNA</em></div><div class="ls">Portál nenalezen — zkontroluj odkaz, nebo se ozvi: ${CFG.firmContact}</div></div></div>`;
   const P = S.portal;
   // živá data projektu na portálu drží mirror v portals/{token} — základ (progress, milníky) se syncuje při schvalování; fallback: co je v portal docu
-  const vps = S.portalVp.filter(v => v.stav === 'u_investora');
-  const done = S.portalVp.filter(v => v.stav === 'schvaleno' || v.stav === 'papir');
   return `
   <div class="topbar"><span class="logo">🏗 REKONSTRUKCE <em>VRÁNA</em> <span style="color:#8b98a5;font-weight:500">· Portál investora</span></span><span class="sp"></span></div>
   <div class="content"><main style="max-width:760px;margin:0 auto">
@@ -10406,21 +10253,6 @@ function viewPortal() {
         ? `<div class="prog"><i style="width:${pr}%"></i></div><div class="hm">Hotovo ${pr} % ${fz ? '· fáze: ' + esc(fz) : ''} ${P.handover ? '· ' + esc(P.handover) : ''}</div>`
         : ((fz || P.handover) ? `<div class="hm">${fz ? 'fáze: ' + esc(fz) : ''}${fz && P.handover ? ' · ' : ''}${esc(P.handover || '')}</div>` : ''); })()}
     </div>
-    ${(vps.length || done.length) ? `
-    <div class="card" ${vps.length ? 'style="border:2px solid var(--amber)"' : ''}>
-      <h3>🧾 Vícepráce ${vps.length ? `<span class="badge b-wait">⏳ ${vps.length} ke schválení</span>` : ''}</h3>
-      ${vps.map(v => `
-        <div style="border:1px solid var(--line);border-radius:9px;padding:11px 13px;margin-bottom:9px">
-          <b>${esc(v.title)}</b>
-          <div class="muted" style="margin:4px 0">${esc(v.popis || '')}</div>
-          <div style="font-size:16px;font-weight:800;color:var(--navy)">${kc(v.cena)} Kč <span class="muted" style="font-size:11px;font-weight:400">bez DPH · DPH 12 % jako součást díla</span></div>
-          <div class="aprv">
-            <button class="btn ok" onclick="portalVpAction('${v.id}','approve')">✓ Schválit (podpis jedním klikem)</button>
-            <button class="btn ghost sm" onclick="portalVpAction('${v.id}','reject')">✕ Zamítnout</button>
-          </div>
-        </div>`).join('')}
-      ${done.map(v => `<div class="urow"><span>✅</span><div>${esc(v.title)} — <b>${kc(v.cena)} Kč</b><br><span class="muted" style="font-size:11.5px">${esc(v.podpis || '')}</span></div></div>`).join('')}
-    </div>` : ''}
     ${(P.milestones || []).length ? `<div class="card">
       <h3>📅 Harmonogram</h3>
       ${/* Stav milniku na portalu se bere z postupu (milePct) — funguje i pro stara data bez „p". */''}
@@ -10461,15 +10293,6 @@ function viewPortal() {
    na stavbe pekne dlouhe ticho. */
 function portalStarsi() {
   S.portalZobrazeno += 20;
-  render();
-}
-async function portalVpAction(vpid, action) {
-  if (action === 'approve' && !await potvrd('Schválit vícepráci? Kliknutí platí jako odsouhlasení ceny.')) return;
-  await db.collection('portals').doc(S.portalToken).collection('actions').add({ type: 'vp', vpid, action, ts: FV(), handled: false });
-  // optimisticky schovej tlačítka
-  const v = S.portalVp.find(x => x.id === vpid);
-  if (v) v.stav = action === 'approve' ? 'schvaleno' : 'zamitnuto';
-  toast(action === 'approve' ? 'Děkujeme — vícepráce schválena ✓' : 'Zamítnuto — ozveme se Vám.');
   render();
 }
 
@@ -10571,7 +10394,6 @@ async function seedData() {
   await batchAdd('tasks', { title: 'Krytka tlačítka WC — dovézt a domontovat', pid: pecka, resp: 'Marek Valečko', created: isoToday(), term: shiftISO(isoToday(), 1), stav: 'nove', res: ['Marek Valečko'], src: 'z deníku', createdAt: FV() });
   await batchAdd('tasks', { title: 'Fotodokumentace pro předání (Pecka)', pid: pecka, resp: 'David Falat', created: isoToday(), term: shiftISO(isoToday(), 4), stav: 'nove', res: ['David Falat'], createdAt: FV() });
   await batchAdd('tasks', { title: 'Konzultace: hliníkové vedení v ložnici → nacenit vícepráci', pid: saarova, resp: 'Zdeno Balúch', created: isoToday(), term: shiftISO(isoToday(), 2), stav: 'nove', res: ['Zdeno Balúch', 'Lukáš Poštolka'], src: 'z deníku', createdAt: FV() });
-  await batchAdd('viceprace', { pid: saarova, title: 'Výměna hliníkového vedení v ložnici', popis: 'Nález z deníku — původní Al vedení pod omítkou, nutná výměna: drážky, kabeláž CYKY, zapravení.', cena: 0, stav: 'navrh', zdroj: 'stavba', createdAt: FV() });
   toast('Výchozí data nahrána ✓ (2 projekty, ' + U.length + ' uživatelů)');
 }
 /* tlačítko seed na nástěnce, když je systém opravdu prázdný.
